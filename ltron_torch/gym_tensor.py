@@ -42,23 +42,6 @@ def gym_space_to_tensors(
                 'num_instances':torch.LongTensor(
                     data['num_instances']).to(device)
             }
-            '''
-            num_instances = data['num_instances']
-            labels = data['label']
-            if len(labels.shape) == 2:
-                #labels = labels[:num_instances]
-                tensor = torch.LongTensor(labels).to(device)
-                # TODO: SCORE
-                return BrickList(instance_label = tensor)
-            elif len(data['label'].shape) == 3:
-                brick_lists = []
-                for n, l in zip(num_instances, labels):
-                    #l = l[:n]
-                    tensor = torch.LongTensor(l).to(device)
-                    # TODO: SCORE
-                    brick_lists.append(BrickList(instance_label = tensor))
-                return BrickListBatch(brick_lists)
-            '''
         
         elif isinstance(space, EdgeSpace):
             # TODO: SCORE
