@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 setuptools.setup(
     name="ltron-torch",
     version="0.0.0",
-    install_requires = ['ltron', 'tqdm', 'numpy', 'pyquaternion'],
+    install_requires = ['ltron', 'tqdm', 'numpy', 'pyquaternion', 'tensorboard'],
     author="Aaron Walsman",
     author_email="aaronwalsman@gmail.com",
     description='LTRON Torch Experiments"',
