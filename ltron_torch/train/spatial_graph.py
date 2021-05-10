@@ -16,8 +16,9 @@ import renderpy.masks as masks
 
 from ltron.geometry.align import best_first_total_alignment
 from ltron.bricks.brick_scene import BrickScene
+from ltron.bricks.brick_type import BrickType
 
-import ltron_torch.evaluation as evaluation
+from ltron_torch.evaluation import spatial_metrics
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.ltron_env import async_ltron
 
@@ -52,6 +53,8 @@ def train_label_confidence(
         num_processes = 8,
         train_split = 'train',
         train_subset = None,
+        test_split = 'test',
+        test_subset = None,
         augment_dataset = None,
         image_resolution = (256,256),
         randomize_viewpoint = True,
@@ -115,30 +118,10 @@ def train_label_confidence(
     step_model = single_step_model(
         model_backbone,
         num_classes=num_classes,
+        decoder_channels=decoder_channels,
         pose_head=True,
-        viewpoint_head=True
+        viewpoint_head=controlled_viewpoint,
     ).cuda()
-    '''
-    step_model = named_models.named_graph_step_model(
-        step_model_name,
-        backbone_name = step_model_backbone,
-        decoder_channels = decoder_channels,
-        num_classes = num_classes,
-        input_resolution = image_resolution,
-        pose_head = True,
-        viewpoint_head = controlled_viewpoint,
-    ).cuda()
-    # SWITCH GOES HERE
-    step_model = VITTransformerModel(heads={
-        'x' : torch.nn.Identity(),
-        'class_label' : Conv2dStack(3, 256, 256, num_classes),
-        'confidence' : Conv2dStack(3, 256, 256, 1),
-        'pose' : torch.nn.Sequential(
-            Conv2dStack(3, 256, 256, 9),
-            SE3Layer(dim=1),
-        ),
-    }).cuda()
-    '''
     
     if step_checkpoint is not None:
         print('Loading step model checkpoint from:')
@@ -183,6 +166,24 @@ def train_label_confidence(
         segmentation_height=segmentation_height,
         controlled_viewpoint=controlled_viewpoint,
     )
+    
+    if test_frequency:
+        print('-'*80)
+        print('Building the test environment')
+        print('subset', test_subset)
+        test_env = async_ltron(
+            num_processes,
+            pose_estimation_env,
+            dataset=dataset,
+            split=test_split,
+            subset=test_subset,
+            width=image_resolution[0],
+            height=image_resolution[1],
+            segmentation_width=segmentation_width,
+            segmentation_height=segmentation_height,
+            controlled_viewpoint=controlled_viewpoint,
+            train=False,
+        )
     
     for epoch in range(1, num_epochs+1):
         epoch_start = time.time()
@@ -234,6 +235,9 @@ def train_label_confidence(
             print('Saving optimizer to: %s'%optimizer_path)
             torch.save(optimizer.state_dict(), optimizer_path)
         
+        if test_frequency and (epoch % test_frequency == 0):
+            test_model(step_model, test_env, dataset_info, None)
+        
         print('-'*80)
         print('Elapsed: %.04f'%(time.time() - epoch_start))
 
@@ -275,7 +279,6 @@ def train_label_confidence_epoch(
     
     seq_terminal = []
     seq_observations = []
-    #seq_graph_state = []
     seq_rewards = []
     seq_viewpoint_actions = []
     seq_action_probs = []
@@ -287,7 +290,6 @@ def train_label_confidence_epoch(
     step_observations = train_env.reset()
     step_terminal = torch.ones(train_env.num_envs, dtype=torch.bool)
     step_rewards = numpy.zeros(train_env.num_envs)
-    graph_states = [None] * train_env.num_envs
     for step in tqdm.tqdm(range(steps)):
         with torch.no_grad():
             
@@ -339,7 +341,7 @@ def train_label_confidence_epoch(
                     unrolled_confidence, dim=-1)
                 y = (max_confidence_indices // segmentation_height).cpu()
                 x = (max_confidence_indices % segmentation_height).cpu()
-                #select_actions[range(train_env.num_envs), y, x] = True
+                select_actions[range(train_env.num_envs), y, x] = True
                 
                 selected_yx.append((y,x))
                 
@@ -364,7 +366,7 @@ def train_label_confidence_epoch(
             
             transform_labels = step_tensors['dense_pose_labels']
             rotation_labels = transform_labels[
-                range(train_env.num_envs), top_y, top_x, :, :3]
+                range(train_env.num_envs), top_y, top_x, :3, :3]
             
             rotation_offset = torch.matmul(
                 rotation_labels, rotation_prediction)
@@ -374,7 +376,7 @@ def train_label_confidence_epoch(
             translation_prediction = head_features['pose']['translation'][
                 range(train_env.num_envs), :, top_y, top_x]
             translation_labels = transform_labels[
-                range(train_env.num_envs), top_y, top_x, :, 3]
+                range(train_env.num_envs), top_y, top_x, :3, 3]
             translation_offset = (
                 (translation_labels - translation_prediction) *
                 translation_scale_factor)
@@ -560,7 +562,7 @@ def train_label_confidence_epoch(
                     
                     transform_labels = seq_tensors['dense_pose_labels']
                     transform_labels = transform_labels[step_indices].cuda()
-                    rotation_labels = transform_labels[:,:,:,:,:3]
+                    rotation_labels = transform_labels[:,:,:,:3,:3]
                     
                     rotation_offset = torch.matmul(
                         rotation_labels, rotation_prediction)
@@ -584,7 +586,7 @@ def train_label_confidence_epoch(
                         translation_prediction * translation_scale_factor)
                     
                     translation_labels = (
-                        transform_labels[:,:,:,:,3] * translation_scale_factor)
+                        transform_labels[:,:,:,:3,3] * translation_scale_factor)
                     offset = translation_prediction - translation_labels
                     dense_translation_loss = torch.sum(offset**2, dim=-1)
                     dense_translation_loss = dense_translation_loss * foreground
@@ -666,8 +668,9 @@ def test_checkpoint(
     step_model = single_step_model(
         model_backbone,
         num_classes = num_classes,
+        decoder_channels = decoder_channels,
         pose_head=True,
-        viewpoint_head=True,
+        viewpoint_head=False,
     ).cuda()
     step_model.load_state_dict(torch.load(step_checkpoint))
     
@@ -688,7 +691,7 @@ def test_checkpoint(
         height=image_resolution[1],
         segmentation_width=segmentation_width,
         segmentation_height=segmentation_height,
-        controlled_viewpoint=True,
+        controlled_viewpoint=False,
         train=False,
     )
     
@@ -708,8 +711,12 @@ def test_model(
     step_terminal = numpy.ones(env.num_envs, dtype=numpy.bool)
     all_finished = False
     scene_index = [0 for _ in range(env.num_envs)]
-    reconstructed_scenes = {}
+    #reconstructed_scenes = {}
     active_scenes = [
+        BrickScene(renderable=False, track_snaps=True)
+        for _ in range(env.num_envs)
+    ]
+    target_scenes = [
         BrickScene(renderable=False, track_snaps=True)
         for _ in range(env.num_envs)
     ]
@@ -718,6 +725,19 @@ def test_model(
         brick_type : class_id
         for class_id, brick_type in dataset_info['class_ids'].items()
     }
+    
+    class_boxes = {
+        class_id : BrickType(brick_type).bbox
+        for class_id, brick_type in inverse_class_ids.items()
+    }
+    
+    all_distances = []
+    all_pair_distances = []
+    all_snapped_distances = []
+    all_snapped_pair_distances = []
+    all_true_positives = 0
+    all_false_positives = 0
+    all_false_negatives = 0
     
     step_model.eval()
     
@@ -769,6 +789,9 @@ def test_model(
                         transform = numpy.eye(4)
                         transform[:3,:3] = numpy.array(max_rotation[i])
                         transform[:3,3] = numpy.array(max_translation[i])
+                        camera_matrix = (
+                            step_tensors['viewpoint']['camera_matrix'][i]).cpu()
+                        camera_pose = numpy.linalg.inv(camera_matrix)
                         active_scenes[i].add_instance(
                             brick_type = inverse_class_ids[class_label],
                             brick_color = 4,
@@ -782,14 +805,16 @@ def test_model(
                 dtype=numpy.bool)
             y = (max_confidence_indices // segmentation_height).cpu()
             x = (max_confidence_indices % segmentation_height).cpu()
-            #select_actions[range(env.num_envs), y, x] = True
+            select_actions[range(env.num_envs), y, x] = True
             
-            viewpoint_actions = torch.argmax(
-                head_features['viewpoint'], dim=-1).cpu()
+            if 'viewpoint' in head_features:
+                viewpoint_actions = torch.argmax(
+                    head_features['viewpoint'], dim=-1).cpu()
             
             for i in range(env.num_envs):
                 actions[i]['visibility'] = select_actions[i]
-                actions[i]['viewpoint'] = int(viewpoint_actions[i])
+                if 'viewpoint' in head_features:
+                    actions[i]['viewpoint'] = int(viewpoint_actions[i])
             
             # step -------------------------------------------------------------
             (step_observations,
@@ -802,10 +827,60 @@ def test_model(
             for i, terminal in enumerate(step_terminal):
                 if terminal:
                     
+                    # compare reconstructed scene and target scene -------------
+                    target_class_ids = (
+                        step_tensors['class_labels']['label'][i].cpu())
+                    target_poses = step_tensors['pose_labels'][i].cpu()
+                    target_instances = [
+                        (int(target_id), numpy.array(target_pose))
+                        for target_id, target_pose
+                        in zip(target_class_ids, target_poses)
+                        if target_id != 0
+                    ]
+                    scene = active_scenes[i]
+                    predicted_instances = []
+                    for instance_id, instance in scene.instances.items():
+                        class_id = dataset_info['class_ids'][
+                            str(instance.brick_type)]
+                        predicted_instances.append(
+                            (class_id, instance.transform))
+                    
+                    if len(target_instances) or len(predicted_instances):
+                        distances, pair_distances, tp, fp, fn = spatial_metrics(
+                            target_instances,
+                            predicted_instances,
+                            class_boxes,
+                        )
+                        all_distances.extend(distances)
+                        all_pair_distances.extend(pair_distances)
+                        all_true_positives += tp
+                        all_false_positives += fp
+                        all_false_negatives += fn
+                    
+                    # snap all the parts togther
+                    best_first_total_alignment(scene)
+                    
+                    # now get a new predicted instance list
+                    predicted_instances = []
+                    for instance_id, instance in scene.instances.items():
+                        class_id = dataset_info['class_ids'][
+                            str(instance.brick_type)]
+                        predicted_instances.append(
+                            (class_id, instance.transform))
+                    
+                    if len(target_instances) or len(predicted_instances):
+                        distances, pair_distances, tp, fp, fn = spatial_metrics(
+                            target_instances,
+                            predicted_instances,
+                            class_boxes,
+                        )
+                        all_snapped_distances.extend(distances)
+                        all_snapped_pair_distances.extend(pair_distances)
+                    
                     # make new empty scene -------------------------------------
                     if len(active_scenes[i].instances):
-                        reconstructed_scenes[i, scene_index[i]] = (
-                            active_scenes[i])
+                        #reconstructed_scenes[i, scene_index[i]] = (
+                        #    active_scenes[i])
                         active_scenes[i] = BrickScene(
                             renderable=False, track_snaps=True)
                         scene_index[i] += 1
@@ -819,9 +894,28 @@ def test_model(
             all_finished = torch.all(
                 step_tensors['scene']['valid_scene_loaded'] == 0)
     
-    # dump reconstructions =====================================================
-    if output_path is not None:
-        for pid_sid, scene in tqdm.tqdm(reconstructed_scenes.items()):
+    print('Average Distance:', sum(all_distances)/len(all_distances))
+    print('Average Pairwise Distance:',
+        sum(all_pair_distances)/len(all_pair_distances))
+    print('Average Snapped Distance:',
+        sum(all_snapped_distances)/len(all_snapped_distances))
+    print('Average Snapped Pairwise Ditance:',
+        sum(all_snapped_pair_distances)/len(all_snapped_pair_distances))
+    print('Precision:',
+        (all_true_positives / (all_true_positives + all_false_positives)))
+    print('Recall:',
+        (all_true_positives / (all_true_positives + all_false_negatives)))
+    
+    
+    '''
+    # compute scene statistics =================================================
+    for pid_sid, scene in tqdm.tqdm(reconstructed_scenes.items()):
+        #instances = []
+        #for instance_id, instance in scene.items:
+        #    class_name = str(instance.brick_type)
+        #    class_id = dataset_info['class_ids'][class_name]
+        #    transform = 
+        if output_path is not None:
             mpd_path = os.path.join(
                 output_path, 'reconstruction_%i_%i.mpd'%pid_sid)
             scene.export_ldraw(mpd_path)
@@ -830,3 +924,4 @@ def test_model(
             mpd_path_snapped = os.path.join(
                 output_path, 'reconstruction_snapped_%i_%i.mpd'%pid_sid)
             scene.export_ldraw(mpd_path_snapped)
+    '''

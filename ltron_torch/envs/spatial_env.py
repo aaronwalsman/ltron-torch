@@ -93,14 +93,17 @@ def pose_estimation_env(
             elevation_steps=7,
             distance_range=(200,350),
             distance_steps=4,
-            start_position = 'uniform',
+            start_position='uniform',
+            observe_camera_parameters=True,
+            observe_camera_matrix=True,
         )
     else:
         components['viewpoint'] = RandomizedAzimuthalViewpointComponent(
             components['scene'],
             distance=(0.8, 1.2),
             aspect_ratio=(width/height),
-            randomize_frequency='reset'
+            randomize_frequency='reset',
+            observe_camera_matrix=True,
         )
     
     # color render

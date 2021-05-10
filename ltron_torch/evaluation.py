@@ -6,6 +6,8 @@ import tqdm
 
 import ltron.utils as utils
 
+from ltron_torch.geometry import bbox_avg_distance
+
 def tp_fp_fn(prediction, ground_truth, axis = -1):
     count_difference = ground_truth - prediction
     false_negative_locations = count_difference > 0
@@ -98,6 +100,99 @@ def instance_map(
     
     return sum(class_ap.values())/len(class_ap), class_ap
 
+def compute_class_pairings(
+    target_instances,
+    predicted_instances,
+    class_bounding_boxes,
+):
+    class_pairwise_distances = {}
+    for i, (target_class, target_pose) in enumerate(target_instances):
+        if target_class not in class_pairwise_distances:
+            class_pairwise_distances[target_class] = {}
+        for j, (predicted_class, predicted_pose) in (
+            enumerate(predicted_instances)
+        ):
+            if target_class != predicted_class:
+                continue
+            
+            distance = bbox_avg_distance(
+                target_pose, predicted_pose, class_bounding_boxes[target_class])
+            class_pairwise_distances[target_class][i,j] = distance
+    
+    class_pairings = {}
+    for class_id in class_pairwise_distances:
+        class_pairings[class_id] = set()
+        while class_pairwise_distances[class_id]:
+            best_distance = float('inf')
+            best_pair = None
+            for i,j in class_pairwise_distances[class_id]:
+                distance = class_pairwise_distances[class_id][i,j]
+                if distance < best_distance:
+                    best_distance = distance
+                    best_pair = i,j
+            
+            class_pairings[class_id].add((best_pair, best_distance))
+            for i,j in list(class_pairwise_distances[class_id].keys()):
+                if i == best_pair[0] or j == best_pair[1]:
+                    del(class_pairwise_distances[class_id][i,j])
+    
+    matched_targets = set()
+    matched_predictions = set()
+    for class_id in class_pairings:
+        for (i,j),distance in class_pairings[class_id]:
+            matched_targets.add(i)
+            matched_predictions.add(j)
+    
+    unmatched_targets = set(range(len(target_instances))) - matched_targets
+    unmatched_predictions = (
+        set(range(len(predicted_instances))) - matched_predictions)
+    
+    return class_pairings, unmatched_targets, unmatched_predictions
+
+def spatial_metrics(
+    target_instances,
+    predicted_instances,
+    class_bounding_boxes,
+):
+    class_pairings, false_negatives, false_positives = compute_class_pairings(
+        target_instances, predicted_instances, class_bounding_boxes)
+    
+    distances = []
+    for class_id in class_pairings:
+        distances.extend([d for (i,j), d in class_pairings[class_id]])
+    #avg_distance = sum(distances) / len(distances)
+    #avg_distance = sum(distance for (i,j), distance in class_pairings.items())
+    #avg_distance /= len(class_pairings)
+    
+    tp = len(class_pairings)
+    fn = len(false_negatives)
+    fp = len(false_positives)
+    #precision = tp / (tp+fp)
+    #recall = tp / (tp+fn)
+    
+    matching_poses = []
+    for class_id in class_pairings:
+        for (i,j), distance in class_pairings[class_id]:
+            matching_poses.append(
+                (target_instances[i][1], predicted_instances[j][1]))
+    
+    pairwise_translation_distances = []
+    pairwise_rotation_distances = []
+    for i, (target_pose_i, predicted_pose_i) in enumerate(matching_poses):
+        for j, (target_pose_j, predicted_pose_j) in enumerate(matching_poses):
+            if j <= i:
+                continue
+            target_offset = (
+                target_pose_i @ numpy.linalg.inv(target_pose_j))
+            predicted_offset = (
+                predicted_pose_i @ numpy.linalg.inv(predicted_pose_j))
+            target_translation = target_offset[:3,3]
+            predicted_translation = predicted_offset[:3,3]
+            pairwise_translation_distances.append(numpy.linalg.norm(
+                target_translation - predicted_translation))
+    
+    #return avg_distance, precision, recall
+    return distances, pairwise_translation_distances, tp, fp, fn
 '''
 def dataset_node_and_edge_ap(model, multi_env, dump_images=False):
     

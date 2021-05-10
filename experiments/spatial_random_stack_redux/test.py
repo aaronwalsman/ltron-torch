@@ -7,8 +7,8 @@ import ltron_torch.train.spatial_graph as spatial_graph
 #run = 'Feb10_11-50-54_gpu3'
 #run = 'Feb23_00-57-59_mechagodzilla' #'Feb17_22-57-19_gpu3'
 #run = 'Mar05_21-48-25_mechagodzilla'
-run = 'May01_13-39-04_mechagodzilla'
-epoch = 500
+run = 'May04_12-43-04_mechagodzilla'
+epoch = 145
 
 if __name__ == '__main__':
     spatial_graph.test_checkpoint(
@@ -22,8 +22,7 @@ if __name__ == '__main__':
         subset = 128,
         
         # model settings
-        step_model_name='nth_try',
-        step_model_backbone='simple',
+        model_backbone='simple_fcn',
         decoder_channels=512,
         
         # output settings
