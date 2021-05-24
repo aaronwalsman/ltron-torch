@@ -12,44 +12,33 @@ import PIL.Image as Image
 
 import tqdm
 
-import renderpy.masks as masks
-
 from ltron.geometry.align import best_first_total_alignment
 from ltron.bricks.brick_scene import BrickScene
 from ltron.bricks.brick_type import BrickType
 
-from ltron_torch.evaluation import spatial_metrics
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.ltron_env import async_ltron
+from ltron.gym.rollout_storage import RolloutStorage, parallel_deepmap
 
-from ltron_torch.envs.spatial_env import pose_estimation_env
+from ltron_torch.envs.camera_test_env import camera_test_env
 from ltron_torch.gym_tensor import (
     gym_space_to_tensors, gym_space_list_to_tensors)
-'''
-import ltron_torch.models.named_models as named_models
-from ltron_torch.models.spatial import SE3Layer
-from ltron_torch.models.mlp import Conv2dStack
-from ltron_torch.models.vit_transformer import VITTransformerModel
-'''
-from ltron_torch.models.standard_models import single_step_model
-from ltron_torch.train.loss import (
-        dense_class_label_loss, dense_score_loss, cross_product_loss)
-import ltron_torch.geometry as geometry
 
-def train_label_confidence(
+from ltron_torch.models.standard_models import camera_test_step_model
+from ltron_torch.train.loss import (
+        dense_class_label_loss, dense_score_loss)
+
+def train_camera_test(
         # load checkpoints
         step_checkpoint = None,
-        edge_checkpoint = None,
         optimizer_checkpoint = None,
         
         # general settings
         num_epochs = 9999,
         mini_epochs_per_epoch = 1,
-        mini_epoch_sequences = 2048,
-        mini_epoch_sequence_length = 2,
         
         # dasaset settings
-        dataset = 'random_stack',
+        dataset = 'camera_test',
         num_processes = 8,
         train_split = 'train',
         train_subset = None,
@@ -57,37 +46,20 @@ def train_label_confidence(
         test_subset = None,
         augment_dataset = None,
         image_resolution = (256,256),
-        randomize_viewpoint = True,
-        randomize_colors = True,
-        random_floating_bricks = False,
-        random_floating_pairs = False,
-        random_bricks_per_scene = (10,20),
-        random_bricks_subset = None,
-        random_bricks_rotation_mode = None,
-        controlled_viewpoint=False,
         
         # train settings
         train_steps_per_epoch = 4096,
-        batch_size = 6,
+        batch_size = 32,
         learning_rate = 3e-4,
         weight_decay = 1e-5,
         class_label_loss_weight = 0.8,
-        class_label_background_weight = 0.05,
         score_loss_weight = 0.2,
-        rotation_loss_weight = 1.0,
-        translation_loss_weight = 1.0,
-        translation_scale_factor = 0.01,
-        viewpoint_loss_weight = 0.0,
-        entropy_loss_weight = 0.0,
-        max_instances_per_step = 8,
+        viewpoint_loss_weight = 1.0,
+        entropy_loss_weight = 0.1,
         
         # model settings
         model_backbone = 'simple_fcn',
-        decoder_channels = 512,
-        
-        # test settings
-        test_frequency = 1,
-        test_steps_per_epoch = 1024,
+        decoder_channels = 256,
         
         # checkpoint settings
         checkpoint_frequency = 1,
@@ -106,21 +78,13 @@ def train_label_confidence(
     
     dataset_info = get_dataset_info(dataset)
     num_classes = max(dataset_info['class_ids'].values()) + 1
-    max_instances_per_scene = dataset_info['max_instances_per_scene']
-    
-    if random_floating_bricks:
-        max_instances_per_scene += 20
-    if random_floating_pairs:
-        max_instances_per_scene += 40
     
     print('-'*80)
     print('Building the step model')
-    step_model = single_step_model(
+    step_model = camera_test_step_model(
         model_backbone,
         num_classes=num_classes,
         decoder_channels=decoder_channels,
-        pose_head=True,
-        viewpoint_head=controlled_viewpoint,
     ).cuda()
     
     if step_checkpoint is not None:
@@ -140,82 +104,39 @@ def train_label_confidence(
         optimizer.load_state_dict(torch.load(optimizer_checkpoint))
     
     print('-'*80)
-    print('Building the background class weight')
-    class_label_class_weight = torch.ones(num_classes)
-    class_label_class_weight[0] = class_label_background_weight
-    class_label_class_weight = class_label_class_weight.cuda()
-    
-    print('-'*80)
     print('Building the train environment')
-    if model_backbone == 'simple_fcn':
-        segmentation_width, segmentation_height = (
-                image_resolution[0] // 4, image_resolution[1] // 4)
-    elif model_backbone == 'vit':
-        segmentation_width, segmentation_height = (
-                image_resolution[0] // 16, image_resolution[1] // 16)
-    
     train_env = async_ltron(
         num_processes,
-        pose_estimation_env,
+        camera_test_env,
         dataset=dataset,
         split=train_split,
         subset=train_subset,
         width=image_resolution[0],
         height=image_resolution[1],
-        segmentation_width=segmentation_width,
-        segmentation_height=segmentation_height,
-        controlled_viewpoint=controlled_viewpoint,
     )
-    
-    if test_frequency:
-        print('-'*80)
-        print('Building the test environment')
-        print('subset', test_subset)
-        test_env = async_ltron(
-            num_processes,
-            pose_estimation_env,
-            dataset=dataset,
-            split=test_split,
-            subset=test_subset,
-            width=image_resolution[0],
-            height=image_resolution[1],
-            segmentation_width=segmentation_width,
-            segmentation_height=segmentation_height,
-            controlled_viewpoint=controlled_viewpoint,
-            train=False,
-        )
     
     for epoch in range(1, num_epochs+1):
         epoch_start = time.time()
         print('='*80)
         print('Epoch: %i'%epoch)
         
-        train_label_confidence_epoch(
-                epoch,
-                step_clock,
-                log,
-                math.ceil(train_steps_per_epoch / num_processes),
-                mini_epochs_per_epoch,
-                mini_epoch_sequences,
-                mini_epoch_sequence_length,
-                batch_size,
-                step_model,
-                optimizer,
-                train_env,
-                class_label_loss_weight,
-                class_label_class_weight,
-                score_loss_weight,
-                rotation_loss_weight,
-                translation_loss_weight,
-                translation_scale_factor,
-                viewpoint_loss_weight,
-                entropy_loss_weight,
-                segmentation_width,
-                segmentation_height,
-                max_instances_per_step,
-                max_instances_per_scene,
-                dataset_info,
-                log_train)
+        train_epoch(
+            epoch,
+            step_clock,
+            log,
+            math.ceil(train_steps_per_epoch / num_processes),
+            mini_epochs_per_epoch,
+            batch_size,
+            step_model,
+            optimizer,
+            train_env,
+            class_label_loss_weight,
+            score_loss_weight,
+            viewpoint_loss_weight,
+            entropy_loss_weight,
+            dataset_info,
+            log_train,
+        )
         
         if (checkpoint_frequency is not None and
                 epoch % checkpoint_frequency) == 0:
@@ -235,39 +156,27 @@ def train_label_confidence(
             print('Saving optimizer to: %s'%optimizer_path)
             torch.save(optimizer.state_dict(), optimizer_path)
         
-        if test_frequency and (epoch % test_frequency == 0):
-            test_model(step_model, test_env, dataset_info, None)
-        
         print('-'*80)
         print('Elapsed: %.04f'%(time.time() - epoch_start))
 
 
-def train_label_confidence_epoch(
-        epoch,
-        step_clock,
-        log,
-        steps,
-        mini_epochs,
-        mini_epoch_sequences,
-        mini_epoch_sequence_length,
-        batch_size,
-        step_model,
-        optimizer,
-        train_env,
-        class_label_loss_weight,
-        class_label_class_weight,
-        score_loss_weight,
-        rotation_loss_weight,
-        translation_loss_weight,
-        translation_scale_factor,
-        viewpoint_loss_weight,
-        entropy_loss_weight,
-        segmentation_width,
-        segmentation_height,
-        max_instances_per_step,
-        max_instances_per_scene,
-        dataset_info,
-        log_train):
+def train_epoch(
+    epoch,
+    step_clock,
+    log,
+    steps,
+    mini_epochs,
+    batch_size,
+    step_model,
+    optimizer,
+    train_env,
+    class_label_loss_weight,
+    score_loss_weight,
+    viewpoint_loss_weight,
+    entropy_loss_weight,
+    dataset_info,
+    log_train
+):
     
     print('-'*80)
     print('Train')
@@ -277,11 +186,8 @@ def train_label_confidence_epoch(
     print('- '*40)
     print('Rolling out episodes to generate data')
     
-    seq_terminal = []
-    seq_observations = []
-    seq_rewards = []
-    seq_viewpoint_actions = []
-    seq_action_probs = []
+    observation_storage = RolloutStorage(train_env.num_envs)
+    action_reward_storage = RolloutStorage(train_env.num_envs)
     
     device = torch.device('cuda:0')
     
@@ -296,8 +202,9 @@ def train_label_confidence_epoch(
             # data storage and conversion --------------------------------------
             
             # store observation
-            seq_terminal.append(step_terminal)
-            seq_observations.append(step_observations)
+            action_reward_storage.start_new_sequences(step_terminal)
+            observation_storage.start_new_sequences(step_terminal)
+            observation_storage.append_batch(observation=step_observations)
             
             # convert gym observations to torch tensors
             step_tensors = gym_space_to_tensors(
@@ -310,109 +217,46 @@ def train_label_confidence_epoch(
             
             # act --------------------------------------------------------------
             actions = [{} for _ in range(train_env.num_envs)]
-            if 'viewpoint' in head_features:
-                viewpoint_logits = head_features['viewpoint']
-                viewpoint_distribution = Categorical(logits=viewpoint_logits)
-                viewpoint_actions = viewpoint_distribution.sample().cpu()
-                for action, viewpoint_action in zip(actions, viewpoint_actions):
-                    action['viewpoint'] = int(viewpoint_action)
-                do_hide = numpy.array((viewpoint_actions == 0).float().cpu())
-                seq_viewpoint_actions.append([
-                    action['viewpoint'] for action in actions])
-                step_action_probs = viewpoint_distribution.probs[
-                    range(train_env.num_envs), viewpoint_actions].cpu().detach()
-                seq_action_probs.append(step_action_probs)
-            else:
-                do_hide = numpy.ones(train_env.num_envs)
-                
-            unrolled_confidence_logits = head_features['confidence'].view(
-                train_env.num_envs, -1)
-            unrolled_confidence = torch.sigmoid(unrolled_confidence_logits)
-            unrolled_segmentation = step_tensors['segmentation_render'].view(
-                train_env.num_envs, -1)
-            unrolled_confidence = (
-                unrolled_confidence * (unrolled_segmentation != 0))
-            select_actions = numpy.zeros(
-                (train_env.num_envs, segmentation_height, segmentation_width),
-                dtype=numpy.bool)
-            selected_yx = []
-            for i in range(max_instances_per_step):
-                max_confidence_indices = torch.argmax(
-                    unrolled_confidence, dim=-1)
-                y = (max_confidence_indices // segmentation_height).cpu()
-                x = (max_confidence_indices % segmentation_height).cpu()
-                select_actions[range(train_env.num_envs), y, x] = True
-                
-                selected_yx.append((y,x))
-                
-                # turn off the selected brick instance
-                instance_ids = unrolled_segmentation[
-                    range(train_env.num_envs), max_confidence_indices]
-                unrolled_confidence = (
-                    unrolled_confidence *
-                    (unrolled_segmentation != instance_ids.unsqueeze(1)))
-            
-            select_actions = select_actions * do_hide.reshape((-1, 1, 1))
-            for i in range(train_env.num_envs):
-                actions[i]['visibility'] = select_actions[i]
+            viewpoint_logits = head_features['viewpoint']
+            viewpoint_distribution = Categorical(logits=viewpoint_logits)
+            viewpoint_actions = viewpoint_distribution.sample().cpu()
+            for action, viewpoint_action in zip(actions, viewpoint_actions):
+                action['viewpoint'] = int(viewpoint_action)
+            '''
+            seq_viewpoint_actions.append([
+                action['viewpoint'] for action in actions])
+            seq_action_probs.append(step_action_probs)
+            '''
+            step_action_probs = viewpoint_distribution.probs[
+                range(train_env.num_envs), viewpoint_actions].cpu().detach()
             
             # compute reward ---------------------------------------------------
-            top_y, top_x = selected_yx[0]
-            
-            # rotation
-            rotation_prediction = head_features['pose']['rotation'][
-                range(train_env.num_envs), :, :, top_y, top_x]
-            rotation_prediction_inv = rotation_prediction.permute((0, 2, 1))
-            
-            transform_labels = step_tensors['dense_pose_labels']
-            rotation_labels = transform_labels[
-                range(train_env.num_envs), top_y, top_x, :3, :3]
-            
-            rotation_offset = torch.matmul(
-                rotation_labels, rotation_prediction)
-            rotation_rewards = geometry.angle_surrogate(rotation_offset)
-            
-            # translation
-            translation_prediction = head_features['pose']['translation'][
-                range(train_env.num_envs), :, top_y, top_x]
-            translation_labels = transform_labels[
-                range(train_env.num_envs), top_y, top_x, :3, 3]
-            translation_offset = (
-                (translation_labels - translation_prediction) *
-                translation_scale_factor)
-            squared_distance = torch.sum(translation_offset**2, dim=-1)
-            translation_rewards = torch.exp(-squared_distance*5)
             
             # class
-            class_label = step_tensors['dense_class_labels'][
-                range(train_env.num_envs), top_y, top_x, 0]
-            class_rewards = head_features['class_label'][
-                range(train_env.num_envs), :, top_y, top_x]
-            class_rewards = torch.softmax(class_rewards, dim=1)
+            class_label = step_tensors['class_label'][:,1,0]
+            class_rewards = torch.softmax(head_features['class_label'], dim=1)
             class_rewards = class_rewards[
                 range(train_env.num_envs), class_label]
             
-            step_rewards = (
-                rotation_rewards * translation_rewards * class_rewards)
-            step_rewards = step_rewards.cpu() #* do_hide
+            step_rewards = class_rewards.cpu()
             #tmp_rewards = torch.softmax(head_features['viewpoint'], dim=-1)
             #tmp_rewards = tmp_rewards[:,1].cpu()
             #step_rewards = tmp_rewards
+            #seq_rewards.append(step_rewards)
             
-            seq_rewards.append(step_rewards)
+            # storage ----------------------------------------------------------
+            import pdb
+            pdb.set_trace()
+            packed_actions = {'viewpoint':numpy.array(
+                [action['viewpoint'] for action in actions],
+                dtype=numpy.long
+            )}
+            action_reward_storage.append_batch(
+                action=packed_actions,
+                reward=step_rewards,
+                action_probs=step_action_probs,
+            )
             
-            log.add_scalar(
-                    'train_rollout/class_reward',
-                    sum(class_rewards)/len(class_rewards),
-                    step_clock[0])
-            log.add_scalar(
-                    'train_rollout/rotation_reward',
-                    sum(rotation_rewards)/len(rotation_rewards),
-                    step_clock[0])
-            log.add_scalar(
-                    'train_rollout/translation_reward',
-                    sum(translation_rewards)/len(translation_rewards),
-                    step_clock[0])
             log.add_scalar(
                     'train_rollout/total_reward',
                     sum(step_rewards)/len(step_rewards),
@@ -430,9 +274,10 @@ def train_label_confidence_epoch(
     
     # data shaping =============================================================
     
-    print('- '*40)
-    print('Converting rollout data to tensors')
+    #print('- '*40)
+    #print('Converting rollout data to tensors')
     
+    '''
     # when joining these into one long list, make sure sequences are preserved
     seq_tensors = gym_space_list_to_tensors(
             seq_observations, train_env.single_observation_space)
@@ -461,6 +306,7 @@ def train_label_confidence_epoch(
                 for j in range(train_env.num_envs)
                 for i in range(steps)])
         seq_action_probs = torch.stack(seq_action_probs, axis=1).reshape(-1)
+    '''
     
     # supervision ==============================================================
     
@@ -829,7 +675,7 @@ def test_model(
                     
                     # compare reconstructed scene and target scene -------------
                     target_class_ids = (
-                        step_tensors['class_labels']['label'][i].cpu())
+                        step_tensors['class_labels'][i].cpu())
                     target_poses = step_tensors['pose_labels'][i].cpu()
                     target_instances = [
                         (int(target_id), numpy.array(target_pose))

@@ -16,6 +16,23 @@ def dense_class_label_loss(
     
     return class_label_loss
 
+'''
+def dense_seq_class_label_loss(
+        dense_label_logits,
+        dense_label_target,
+        #dense_scores,
+        class_weight,
+        padding_mask):
+    
+    class_label_loss = torch.nn.functional.cross_entropy(
+            dense_label_logits[padding_mask],
+            dense_label_target[padding_mask],
+            weight=class_weight,
+            reduction='mean')
+    
+    return class_label_loss
+'''
+
 def dense_score_loss(
         dense_score_logits,
         correct,
