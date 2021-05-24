@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import glob
+import torch
 
 
 path = 'data/'
@@ -34,8 +35,22 @@ for img, mask in zip(images, masks):
         sequences[key]["categories"] = np.concatenate((sequences[key]["categories"], category_data[difference_mask]))
         sequences[key]["image_positions"] = np.concatenate((sequences[key]["image_positions"], position_data[difference_mask]))
 
-for seq in sequences.values():
-    np.save(seq["file_name"], seq)
+max_len = max([seq["images"].shape[0] for seq in sequences.values()])
+
+with torch.no_grad():
+    for seq in sequences.values():
+        images = torch.zeros(max_len, *seq["images"].shape[1:], dtype=torch.float32)
+        images[:seq["images"].shape[0]] = torch.tensor(seq["images"], dtype=torch.float32)
+        categories = torch.zeros(max_len, *seq["categories"].shape[1:], dtype=torch.long)
+        categories[:seq["categories"].shape[0]] = torch.tensor(seq["categories"], dtype=torch.long)
+        image_positions = torch.zeros(max_len, *seq["image_positions"].shape[1:], dtype=torch.long)
+        image_positions[:seq["image_positions"].shape[0]] = torch.tensor(seq["image_positions"], dtype=torch.long)
+        torch_seq = {
+            "images": images,
+            "categories": categories,
+            "image_positions": image_positions,
+        }
+        torch.save(torch_seq, seq["file_name"].replace(".npy", ".torch"))
 
 
 
