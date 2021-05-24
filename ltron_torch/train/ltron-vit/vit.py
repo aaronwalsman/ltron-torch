@@ -25,7 +25,7 @@ class LTron_ViT(nn.Module):
 
         self.sequence_encoder = TransformerEncoder(embedding_dim=embedding_dim)
         self.patch_encoder = PatchEncoder(embedding_dim=embedding_dim, patch_size=patch_size)
-        self.category_decoder = PredictionDecoder(120, embedding_dim=embedding_dim)
+        self.category_decoder = PredictionDecoder(7, embedding_dim=embedding_dim)
 
         self.positional_encoding = PositionalEncoding(embedding_dim)
         if optimizer_type == "Adam":
@@ -39,7 +39,7 @@ class LTron_ViT(nn.Module):
             self.optim.zero_grad()
 
             ### TODO: Add Masking
-            img = batch["images"].to(self.device).float() ### TODO: Figure out why I have to set this to .float() here
+            img = batch["images"].to(self.device)
             img_positions = batch["image_positions"].to(self.device)
             category_label = batch["categories"].to(self.device)
 

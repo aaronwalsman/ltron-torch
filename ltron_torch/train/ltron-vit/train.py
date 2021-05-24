@@ -37,12 +37,11 @@ writer = SummaryWriter(log_dir="logs/%s/" % logname)
 ### TODO There is a bug that only lets me run with with num_workers=0 (proabbly in the dataset class)
 ### that needs to be fixed
 train_dataset = LTronPatchDataset(train=True, root='../../envs/fork/')
-print(len(train_dataset))
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
 test_dataset = LTronPatchDataset(train=False)
-test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1)
 
-model = LTron_ViT(lr=LR, weight_decay=WEIGHT_DECAY, optimizer_type=OPTIMIZER, device=DEVICE)
+model = LTron_ViT(lr=LR, weight_decay=WEIGHT_DECAY, optimizer_type=OPTIMIZER, device=DEVICE).to(DEVICE)
 if os.path.exists(WEIGHT_PATH):
     print("Loading Weights For %s" % WEIGHT_PATH)
     checkpoint = torch.load(WEIGHT_PATH, map_location=torch.device('cpu'))

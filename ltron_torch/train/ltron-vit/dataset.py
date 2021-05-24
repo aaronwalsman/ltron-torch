@@ -9,13 +9,14 @@ KEYS = ["images", "categories", "image_positions"]
 class LTronPatchDataset(Dataset):
 
     def __init__(self, train=True, root='data/'):
-        path = root + 'train/*.npy' if train else root + 'test/*.npy'
-        self.datapoints = [np.load(f, allow_pickle=True) for f in glob.glob(path)]
+        super().__init__()
+        path = root + 'train/*.torch' if train else root + 'test/*.torch'
+        self.datapoints = glob.glob(path)
     
     def __len__(self):
         return len(self.datapoints)
     
     def __getitem__(self, index: int):
-        a = self.datapoints[index]
-        return {name: a.item().get(name) for name in KEYS}
+        d = torch.load(self.datapoints[index])
+        return d
 
