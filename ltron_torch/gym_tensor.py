@@ -6,7 +6,7 @@ import numpy
 import gym.spaces as spaces
 
 from ltron.gym.spaces import (
-        ImageSpace, SegmentationSpace, StepSpace, InstanceListSpace,
+        ImageSpace, SegmentationSpace, StepSpace, ClassLabelSpace,
         EdgeSpace, InstanceGraphSpace)
 #from ltron.torch.brick_geometric import (
 #        BrickList, BrickGraph, BrickListBatch, BrickGraphBatch)
@@ -36,12 +36,12 @@ def gym_space_to_tensors(
         elif isinstance(space, StepSpace):
             return torch.LongTensor(data).to(device)
         
-        elif isinstance(space, InstanceListSpace):
-            return {
-                'label':torch.LongTensor(data['label']).to(device),
-                'num_instances':torch.LongTensor(
-                    data['num_instances']).to(device)
-            }
+        #elif isinstance(space, ClassLabelSpace):
+        #    return {
+        #        'label':torch.LongTensor(data['label']).to(device),
+        #        'num_instances':torch.LongTensor(
+        #            data['num_instances']).to(device)
+        #    }
         
         elif isinstance(space, EdgeSpace):
             # TODO: SCORE

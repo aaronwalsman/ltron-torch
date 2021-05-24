@@ -8,6 +8,7 @@ from ltron.gym.components.dataset import DatasetPathComponent
 from ltron.gym.components.labels import InstanceListComponent
 from ltron.gym.components.spatial_info import InstancePoseComponent
 from ltron.gym.components.viewpoint import (
+    FixedAzimuthalViewpointComponent,
     RandomizedAzimuthalViewpointComponent,
     ControlledAzimuthalViewpointComponent,
 )
@@ -105,6 +106,15 @@ def pose_estimation_env(
             randomize_frequency='reset',
             observe_camera_matrix=True,
         )
+        
+        '''
+        components['viewpoint'] = FixedAzimuthalViewpointComponent(
+            components['scene'],
+            azimuth = math.radians(30),
+            elevation = math.radians(-45),
+            observe_camera_matrix=True,
+        )
+        '''
     
     # color render
     components['color_render'] = ColorRenderComponent(
@@ -130,7 +140,7 @@ def pose_estimation_env(
     components['dense_class_labels'] = DenseMapComponent(
         components['class_labels'],
         components['segmentation_render'],
-        instance_data_key = ('label',),
+        #instance_data_key = ('label',),
     )
     
     # instance poses

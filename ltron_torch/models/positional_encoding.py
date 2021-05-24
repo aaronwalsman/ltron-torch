@@ -4,7 +4,7 @@ import torch
 
 class PositionalEncoding1D(torch.nn.Module):
     def __init__(self, dim, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
+        super(PositionalEncoding1D, self).__init__()
         self.dropout = torch.nn.Dropout(p=dropout)
         encoding = torch.zeros(max_len, dim)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
@@ -22,7 +22,7 @@ class PositionalEncoding1D(torch.nn.Module):
 
 class PositionalEncoding2D(torch.nn.Module):
     def __init__(self, dim, dropout=0.1, max_len1=5000, max_len2=64):
-        super(PositionalEncoding, self).__init__()
+        super(PositionalEncoding2D, self).__init__()
         self.dropout = torch.nn.Dropout(p=dropout)
         encoding = torch.zeros(max_len1, max_len2, dim)
         half_dim = dim//2

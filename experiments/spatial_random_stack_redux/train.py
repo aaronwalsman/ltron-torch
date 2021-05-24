@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 #import brick_gym.torch.train.graph_d as graph_d
-import ltron_torch.train.spatial_graph as train_spatial_graph
+import ltron_torch.train.spatial_step as train_spatial_step
 
 #run = 'Feb24_11-25-43_mechagodzilla'
 #epoch = 380
 #run = 'Feb24_19-26-26_mechagodzilla' #None #'Feb23_00-57-59_mechagodzilla'
 #epoch = 35
-run = None #'Mar07_23-27-29_mechagodzilla'
-epoch = 0 # 20
+run = None #'May16_00-44-51_mechagodzilla'
+epoch = 50
 
 if run is not None:
     step_checkpoint = './checkpoint/%s/step_model_%04i.pt'%(run, epoch)
@@ -19,7 +19,7 @@ else:
     optimizer_checkpoint = None
 
 if __name__ == '__main__':
-    train_spatial_graph.train_label_confidence(
+    train_spatial_step.train_label_confidence(
         # load checkpoints
         step_checkpoint = step_checkpoint,
         edge_checkpoint = edge_checkpoint,
@@ -68,5 +68,5 @@ if __name__ == '__main__':
         log_train=8,
         
         # checkpoint settings
-        checkpoint_frequency=5,
+        checkpoint_frequency=25,
     )
