@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 import glob
-import torch
 import tqdm
 import sys
 
@@ -41,20 +40,17 @@ for img, mask in tqdm.tqdm(zip(images, masks), total=len(images)):
 
 max_len = max([seq["images"].shape[0] for seq in sequences.values()])
 
-with torch.no_grad():
-    for seq in sequences.values():
-        images = torch.zeros(max_len, *seq["images"].shape[1:], dtype=torch.float32)
-        images[:seq["images"].shape[0]] = torch.tensor(seq["images"], dtype=torch.float32)
-        categories = torch.zeros(max_len, *seq["categories"].shape[1:], dtype=torch.long)
-        categories[:seq["categories"].shape[0]] = torch.tensor(seq["categories"], dtype=torch.long)
-        image_positions = torch.zeros(max_len, *seq["image_positions"].shape[1:], dtype=torch.long)
-        image_positions[:seq["image_positions"].shape[0]] = torch.tensor(seq["image_positions"], dtype=torch.long)
-        torch_seq = {
-            "images": images,
-            "categories": categories,
-            "image_positions": image_positions,
-        }
-        torch.save(torch_seq, seq["file_name"].replace(".npy", ".torch"))
+for seq in sequences.values():
+    images = np.zeros((max_len, *seq["images"].shape[1:]), dtype=np.float32)
+    images[:seq["images"].shape[0]] = np.array(seq["images"], dtype=np.float32)
+    categories = np.zeros((max_len, *seq["categories"].shape[1:]), dtype=np.long)
+    categories[:seq["categories"].shape[0]] = np.array(seq["categories"], dtype=np.long)
+    image_positions = np.zeros((max_len, *seq["image_positions"].shape[1:]), dtype=np.long)
+    image_positions[:seq["image_positions"].shape[0]] = np.array(seq["image_positions"], dtype=np.long)
+
+    np.save(seq["file_name"].replace("data_", "data-images_"), images)
+    np.save(seq["file_name"].replace("data_", "data-categories_"), categories)
+    np.save(seq["file_name"].replace("data_", "data-image-positions_"), image_positions)
 
 
 
