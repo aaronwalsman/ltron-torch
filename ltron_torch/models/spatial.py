@@ -101,3 +101,22 @@ class SE3Layer(torch.nn.Module):
         rotation = torch.cat(axes, dim=i)
         
         return {'rotation':rotation, 'translation':translation}
+
+class SelfAttentionPose(torch.nn.Module):
+    def __init__(self, in_features, stack_layers=3, translation_scale=1.):
+        super(SelfAttentionPose, self).__init__()
+        self.pose_stack = mlp.LinearStack(
+            stack_layers,
+            in_features = in_features*2,
+            hidden_features = in_features,
+            out_features = 9,
+        )
+        self.pose_layer = SE3Layer(translation_scale=translation_scale)
+    
+    def forward(self, x):
+        s, b, c = x.shape
+        x = mlp.cross_product_concat(x, x)
+        x = self.pose_stack(x)
+        x = self.pose_layer(x)
+        return x
+

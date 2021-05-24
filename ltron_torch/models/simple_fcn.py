@@ -1,6 +1,7 @@
 import torch
 import torchvision.models as tv_models
 
+from ltron_torch.models.simple_backbone import SimpleBackbone
 import ltron_torch.models.resnet as resnet
 
 class SimpleBlock(torch.nn.Module):
@@ -43,15 +44,31 @@ class SimpleFCN(torch.nn.Module):
         pretrained=True,
         decoder_channels=256,
         compute_single=True,
+        backbone='resnet50',
     ):
         super(SimpleFCN, self).__init__()
         self.compute_single = compute_single
-        backbone = tv_models.resnet50(pretrained=pretrained)
-        backbone = resnet.ResnetBackbone(backbone, fcn=True)
+        if backbone == 'simple':
+            backbone = SimpleBackbone()
+            encoder_channels = (512, 256, 128, 64)
+        elif backbone == 'resnet18':
+            backbone = tv_models.resnet18(pretrained=pretrained)
+            encoder_channels = (512, 256, 128, 64)
+            backbone = resnet.ResnetBackbone(backbone, fcn=True)
+        elif backbone == 'resnet34':
+            backbone = tv_models.resnet50(pretrained=pretrained)
+            #encoder_channels = (512, 256, 128, 64)
+            encoder_channels = (2048, 1024, 512, 256)
+            backbone = resnet.ResnetBackbone(backbone, fcn=True)
+        elif backbone == 'resnet50':
+            backbone = tv_models.resnet50(pretrained=pretrained)
+            encoder_channels = (2048, 1024, 512, 256)
+            backbone = resnet.ResnetBackbone(backbone, fcn=True)
         self.encoder = backbone
         self.decoder = SimpleDecoder(
-                encoder_channels=(2048, 1024, 512, 256),
-                decoder_channels=decoder_channels)
+            encoder_channels=encoder_channels,
+            decoder_channels=decoder_channels,
+        )
     
     def forward(self, x):
         xn = self.encoder(x)
