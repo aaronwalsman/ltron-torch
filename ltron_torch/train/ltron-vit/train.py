@@ -36,7 +36,8 @@ writer = SummaryWriter(log_dir="logs/%s/" % logname)
 # Initialize data loader
 ### TODO There is a bug that only lets me run with with num_workers=0 (proabbly in the dataset class)
 ### that needs to be fixed
-train_dataset = LTronPatchDataset(train=True)
+train_dataset = LTronPatchDataset(train=True, root='../../envs/fork/')
+print(len(train_dataset))
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
 test_dataset = LTronPatchDataset(train=False)
 test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
