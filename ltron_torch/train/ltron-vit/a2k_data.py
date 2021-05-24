@@ -2,17 +2,21 @@ import numpy as np
 import cv2
 import glob
 import torch
+import tqdm
+import sys
 
 
-path = 'data/'
+path = '../../envs/fork/' if len(sys.argv) == 1 else sys.argv[1]
 
 images = glob.glob(path+"*.png")
 images.sort()
 masks = [n.replace(".png", ".npy").replace("color", "label") for n in images]
 
+print(len(images), len(masks))
+
 sequences = {}
 
-for img, mask in zip(images, masks):
+for img, mask in tqdm.tqdm(zip(images, masks), total=len(images)):
     key = int(img.split("_")[1])
     seq_pos = int(img.split("_")[2].split(".")[0])
     img_data = np.moveaxis(cv2.imread(img), 2, 0) / 255.0
@@ -51,6 +55,7 @@ with torch.no_grad():
             "image_positions": image_positions,
         }
         torch.save(torch_seq, seq["file_name"].replace(".npy", ".torch"))
+
 
 
 
