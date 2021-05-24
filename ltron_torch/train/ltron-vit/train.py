@@ -43,7 +43,7 @@ test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False,
 
 model = LTron_ViT(lr=LR, weight_decay=WEIGHT_DECAY, optimizer_type=OPTIMIZER, device=DEVICE)
 if os.path.exists(WEIGHT_PATH):
-    print("Loading Weights For %" % WEIGHT_PATH)
+    print("Loading Weights For %s" % WEIGHT_PATH)
     checkpoint = torch.load(WEIGHT_PATH, map_location=torch.device('cpu'))
     model.load_state_dict(checkpoint["weights"])
     START_EPOCH = checkpoint["epoch"] +1
