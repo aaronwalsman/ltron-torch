@@ -1,17 +1,19 @@
 import numpy as np
 import cv2
 import glob
+import tqdm
 
-
-path = 'data/'
+path = '../../envs/fork/'
 
 images = glob.glob(path+"*.png")
 images.sort()
 masks = [n.replace(".png", ".npy").replace("color", "label") for n in images]
 
+print(len(images), len(masks))
+
 sequences = {}
 
-for img, mask in zip(images, masks):
+for img, mask in tqdm.tqdm(zip(images, masks), total=len(images)):
     key = int(img.split("_")[1])
     seq_pos = int(img.split("_")[2].split(".")[0])
     img_data = np.moveaxis(cv2.imread(img), 2, 0) / 255.0
@@ -34,7 +36,7 @@ for img, mask in zip(images, masks):
         sequences[key]["categories"] = np.concatenate((sequences[key]["categories"], category_data[difference_mask]))
         sequences[key]["image_positions"] = np.concatenate((sequences[key]["image_positions"], position_data[difference_mask]))
 
-for seq in sequences.values():
+for seq in tqdm.tqdm(sequences.values()):
     np.save(seq["file_name"], seq)
 
 
