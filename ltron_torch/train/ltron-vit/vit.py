@@ -33,7 +33,7 @@ class LTron_ViT(nn.Module):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if device is None else device
 
     def train_epoch(self, dataloader):
-        losses = {"classification": []}
+        losses = {"classification": [], "classification_error": []}
         self.train()
         for batch in dataloader:
             self.optim.zero_grad()
@@ -70,7 +70,7 @@ class LTron_ViT(nn.Module):
     def test_epoch(self, dataloader):
         self.eval()
         with torch.no_grad():
-            losses = {"classification": []}
+            losses = {"classification": [], "classification_error": []}
             for batch in dataloader:
                 img = batch["images"].to(self.device).float()
                 img_positions = batch["image_positions"].to(self.device)
