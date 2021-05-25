@@ -88,6 +88,7 @@ class LTron_ViT(nn.Module):
                 category_prediction = self.category_decoder(flat_image_encoding)
                 classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
                 losses["classification"].append(classification_loss.item())
+                # TODO: Add pose esptimation here
 
             return {k: np.mean(v) for k,v in losses.items()}
 
