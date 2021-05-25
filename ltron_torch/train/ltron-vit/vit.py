@@ -33,7 +33,7 @@ class LTron_ViT(nn.Module):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if device is None else device
 
     def train_epoch(self, dataloader):
-        losses = {"classification": []}
+        losses = {"classification": [], "classification_error": []}
         self.train()
         for batch in dataloader:
             self.optim.zero_grad()
@@ -41,7 +41,7 @@ class LTron_ViT(nn.Module):
             ### TODO: Add Masking
             img = batch["images"].to(self.device)
             img_positions = batch["image_positions"].to(self.device)
-            category_label = batch["categories"].to(self.device)
+            category_label = batch["categories"].to(self.device).view(-1)
 
             # Flatten batch and seq into just batch
             flat_img = img.view(img.shape[0]*img.shape[1], *img.shape[2:])
@@ -56,7 +56,9 @@ class LTron_ViT(nn.Module):
             # Predict brick classification
             category_prediction = self.category_decoder(flat_image_encoding)
             classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
+            classification_error = torch.count_nonzero(category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
             losses["classification"].append(classification_loss.item())
+            losses["classification_error"].append(classification_error.item())
 
             loss = classification_loss
             loss.backward()
@@ -68,11 +70,11 @@ class LTron_ViT(nn.Module):
     def test_epoch(self, dataloader):
         self.eval()
         with torch.no_grad():
-            losses = {"classification": []}
+            losses = {"classification": [], "classification_error": []}
             for batch in dataloader:
                 img = batch["images"].to(self.device).float()
                 img_positions = batch["image_positions"].to(self.device)
-                category_label = batch["categories"].to(self.device)
+                category_label = batch["categories"].to(self.device).view(-1)
 
                 # Flatten batch and seq into just batch
                 flat_img = img.view(img.shape[0]*img.shape[1], *img.shape[2:])
@@ -86,8 +88,11 @@ class LTron_ViT(nn.Module):
 
                 # Predict brick classification
                 category_prediction = self.category_decoder(flat_image_encoding)
-                classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
+                classification_loss = F.cross_entropy(category_prediction, category_label)
+                classification_error = torch.count_nonzero(category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
                 losses["classification"].append(classification_loss.item())
+                losses["classification_error"].append(classification_error.item())
+                # TODO: Add pose esptimation here
 
             return {k: np.mean(v) for k,v in losses.items()}
 
