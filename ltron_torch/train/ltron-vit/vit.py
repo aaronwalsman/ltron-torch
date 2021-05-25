@@ -41,7 +41,7 @@ class LTron_ViT(nn.Module):
             ### TODO: Add Masking
             img = batch["images"].to(self.device)
             img_positions = batch["image_positions"].to(self.device)
-            category_label = batch["categories"].to(self.device)
+            category_label = batch["categories"].to(self.device).view(-1)
 
             # Flatten batch and seq into just batch
             flat_img = img.view(img.shape[0]*img.shape[1], *img.shape[2:])
@@ -56,7 +56,9 @@ class LTron_ViT(nn.Module):
             # Predict brick classification
             category_prediction = self.category_decoder(flat_image_encoding)
             classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
+            classification_error = (category_prediction.argmax(dim=0) == category_label) / category_label.shape[0]
             losses["classification"].append(classification_loss.item())
+            losses["classification_error"].append(classification_error.item())
 
             loss = classification_loss
             loss.backward()
@@ -72,7 +74,7 @@ class LTron_ViT(nn.Module):
             for batch in dataloader:
                 img = batch["images"].to(self.device).float()
                 img_positions = batch["image_positions"].to(self.device)
-                category_label = batch["categories"].to(self.device)
+                category_label = batch["categories"].to(self.device).view(-1)
 
                 # Flatten batch and seq into just batch
                 flat_img = img.view(img.shape[0]*img.shape[1], *img.shape[2:])
@@ -86,8 +88,10 @@ class LTron_ViT(nn.Module):
 
                 # Predict brick classification
                 category_prediction = self.category_decoder(flat_image_encoding)
-                classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
+                classification_loss = F.cross_entropy(category_prediction, category_label)
+                classification_error = (category_prediction.argmax(dim=0) == category_label) / category_label.shape[0]
                 losses["classification"].append(classification_loss.item())
+                losses["classification_error"].append(classification_error.item())
                 # TODO: Add pose esptimation here
 
             return {k: np.mean(v) for k,v in losses.items()}

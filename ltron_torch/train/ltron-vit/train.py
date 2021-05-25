@@ -54,10 +54,12 @@ def train():
 
     for e in tqdm(range(NUM_EPOCHS)):
         train_losses = model.train_epoch(train_dataloader)
-        writer.add_scalar("Train Loss/Classification", train_losses["classification"], e)
+        writer.add_scalar("Train/Classification Loss", train_losses["classification"], e)
+        writer.add_scalar("Train/Classification Error", train_losses["classification_error"], e)
 
         test_losses = model.test_epoch(test_dataloader)
-        writer.add_scalar("Test Loss/Classification", test_losses["classification"], e)
+        writer.add_scalar("Test/Classification Loss", test_losses["classification"], e)
+        writer.add_scalar("Test/Classification Error", test_losses["classification_error"], e)
 
         torch.save({"weights": model.state_dict(), "epoch": e}, WEIGHT_PATH)
 
