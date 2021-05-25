@@ -56,7 +56,7 @@ class LTron_ViT(nn.Module):
             # Predict brick classification
             category_prediction = self.category_decoder(flat_image_encoding)
             classification_loss = F.cross_entropy(category_prediction, category_label.view(-1))
-            classification_error = (category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
+            classification_error = torch.count_nonzero(category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
             losses["classification"].append(classification_loss.item())
             losses["classification_error"].append(classification_error.item())
 
@@ -89,7 +89,7 @@ class LTron_ViT(nn.Module):
                 # Predict brick classification
                 category_prediction = self.category_decoder(flat_image_encoding)
                 classification_loss = F.cross_entropy(category_prediction, category_label)
-                classification_error = (category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
+                classification_error = torch.count_nonzero(category_prediction.argmax(dim=1) == category_label) / category_label.shape[0]
                 losses["classification"].append(classification_loss.item())
                 losses["classification_error"].append(classification_error.item())
                 # TODO: Add pose esptimation here
