@@ -18,7 +18,7 @@ if __name__ == '__main__':
         # dataset settings
         dataset = 'tiny_turbos3',
         num_processes = 8,
-        split = 'test',
+        split = 'train',
         subset = None,
         
         # model settings

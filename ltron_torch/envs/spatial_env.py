@@ -30,6 +30,8 @@ def pose_estimation_env(
     segmentation_height=64,
     controlled_viewpoint=False,
     train=True,
+    augment_dataset=None,
+    p_augment=0.75,
 ):
     
     components = collections.OrderedDict()
@@ -47,6 +49,8 @@ def pose_estimation_env(
         size=size,
         reset_mode=reset_mode,
         observe_episode_id=True,
+        augment_dataset=augment_dataset,
+        p_augment=p_augment,
     )
     dataset_info = components['dataset'].dataset_info
     

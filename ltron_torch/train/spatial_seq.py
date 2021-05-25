@@ -34,6 +34,7 @@ from ltron_torch.models.mlp import Conv2dStack
 from ltron_torch.models.vit_transformer import VITTransformerModel
 '''
 import ltron_torch.models.standard_models as standard_models
+from ltron_torch.models.seq_model import SeqCrossProductPoseModel
 from ltron_torch.train.loss import (
         dense_class_label_loss, dense_score_loss, cross_product_loss)
 import ltron_torch.geometry as geometry
@@ -87,6 +88,7 @@ def train_label_confidence(
         model_backbone = 'simple_fcn',
         transformer_channels=256,
         decoder_channels=256,
+        relative_poses=False,
         
         # test settings
         test_frequency = 1,
@@ -125,7 +127,13 @@ def train_label_confidence(
         decoder_channels=decoder_channels,
         pose_head=True,
         viewpoint_head=controlled_viewpoint,
-    ).cuda()
+    )
+    
+    if relative_poses:
+        seq_model = SeqCrossProductPoseModel(
+            seq_model, 'x', 'confidence', translation_scale_factor)
+    
+    seq_model = seq_model.cuda()
     
     if step_checkpoint is not None:
         print('Loading step model checkpoint from:')
@@ -195,31 +203,32 @@ def train_label_confidence(
         print('Epoch: %i'%epoch)
         
         train_label_confidence_epoch(
-                epoch,
-                step_clock,
-                log,
-                math.ceil(train_steps_per_epoch / num_processes),
-                mini_epochs_per_epoch,
-                mini_epoch_sequences,
-                mini_epoch_sequence_length,
-                batch_size,
-                seq_model,
-                optimizer,
-                train_env,
-                class_label_loss_weight,
-                class_label_class_weight,
-                score_loss_weight,
-                rotation_loss_weight,
-                translation_loss_weight,
-                translation_scale_factor,
-                viewpoint_loss_weight,
-                entropy_loss_weight,
-                segmentation_width,
-                segmentation_height,
-                max_instances_per_step,
-                max_instances_per_scene,
-                dataset_info,
-                log_train)
+            epoch,
+            step_clock,
+            log,
+            math.ceil(train_steps_per_epoch / num_processes),
+            mini_epochs_per_epoch,
+            mini_epoch_sequences,
+            mini_epoch_sequence_length,
+            batch_size,
+            seq_model,
+            optimizer,
+            train_env,
+            class_label_loss_weight,
+            class_label_class_weight,
+            score_loss_weight,
+            rotation_loss_weight,
+            translation_loss_weight,
+            translation_scale_factor,
+            viewpoint_loss_weight,
+            entropy_loss_weight,
+            segmentation_width,
+            segmentation_height,
+            max_instances_per_step,
+            max_instances_per_scene,
+            dataset_info,
+            log_train,
+        )
         
         if (checkpoint_frequency is not None and
                 epoch % checkpoint_frequency) == 0:
@@ -262,31 +271,32 @@ def seq_image_transform(x):
     return torch.stack(seq)
 
 def train_label_confidence_epoch(
-        epoch,
-        step_clock,
-        log,
-        steps,
-        mini_epochs,
-        mini_epoch_sequences,
-        mini_epoch_sequence_length,
-        batch_size,
-        seq_model,
-        optimizer,
-        train_env,
-        class_label_loss_weight,
-        class_label_class_weight,
-        score_loss_weight,
-        rotation_loss_weight,
-        translation_loss_weight,
-        translation_scale_factor,
-        viewpoint_loss_weight,
-        entropy_loss_weight,
-        segmentation_width,
-        segmentation_height,
-        max_instances_per_step,
-        max_instances_per_scene,
-        dataset_info,
-        log_train):
+    epoch,
+    step_clock,
+    log,
+    steps,
+    mini_epochs,
+    mini_epoch_sequences,
+    mini_epoch_sequence_length,
+    batch_size,
+    seq_model,
+    optimizer,
+    train_env,
+    class_label_loss_weight,
+    class_label_class_weight,
+    score_loss_weight,
+    rotation_loss_weight,
+    translation_loss_weight,
+    translation_scale_factor,
+    viewpoint_loss_weight,
+    entropy_loss_weight,
+    segmentation_width,
+    segmentation_height,
+    max_instances_per_step,
+    max_instances_per_scene,
+    dataset_info,
+    log_train,
+):
     
     print('-'*80)
     print('Train')
@@ -351,7 +361,7 @@ def train_label_confidence_epoch(
             
             local_features = {
                 key:value for key, value in head_features.items()
-                if 'global' not in key
+                if ('global' not in key) and ('relative' not in key)
             }
             def index_fn(a):
                 return a[final_seq_ids, list(range(train_env.num_envs))]
@@ -610,27 +620,32 @@ def train_label_confidence_epoch(
                 
                 # rotation supervision -----------------------------------------
                 rotation_prediction = head_features['pose']['rotation']
-                global_rotation = head_features['global_pose']['rotation']
-                b = global_rotation.shape[0]
-                global_rotation = global_rotation.view(1, b, 1, 1, 3, 3)
+                if 'global_pose' in head_features:
+                    global_rotation = head_features['global_pose']['rotation']
+                    b = global_rotation.shape[0]
+                    global_rotation = global_rotation.view(1, b, 1, 1, 3, 3)
+                    
+                    '''
+                    # this is both moving the matrix dimensions to the end
+                    # and also transposing (inverting) the rotation matrix
+                    rotation_prediction = rotation_prediction.permute(
+                        #(0, 3, 4, 2, 1))
+                        (0, 1, 4, 5, 3, 2))
+                    '''
+                    rotation_prediction = rotation_prediction.permute(
+                        (0, 1, 4, 5, 2, 3))
+                    rotation_prediction = torch.matmul(
+                        global_rotation,
+                        rotation_prediction,
+                    )
+                    
+                    # inverse
+                    inverse_rotation_prediction = rotation_prediction.permute(
+                        (0, 1 ,2, 3, 5, 4))
                 
-                '''
-                # this is both moving the matrix dimensions to the end
-                # and also transposing (inverting) the rotation matrix
-                rotation_prediction = rotation_prediction.permute(
-                    #(0, 3, 4, 2, 1))
-                    (0, 1, 4, 5, 3, 2))
-                '''
-                rotation_prediction = rotation_prediction.permute(
-                    (0, 1, 4, 5, 2, 3))
-                rotation_prediction = torch.matmul(
-                    global_rotation,
-                    rotation_prediction,
-                )
-                
-                # inverse
-                inverse_rotation_prediction = rotation_prediction.permute(
-                    (0, 1 ,2, 3, 5, 4))
+                else:
+                    inverse_rotation_prediction = rotation_prediction.permute(
+                        (0, 1, 4, 5, 3, 2))
                 
                 #transform_labels = seq_tensors['dense_pose_labels']
                 transform_labels = torch.FloatTensor(
@@ -649,6 +664,80 @@ def train_label_confidence_epoch(
                 seq_loss = seq_loss + rotation_loss * rotation_loss_weight
                 log.add_scalar(
                     'loss/rotation', float(rotation_loss), step_clock[0])
+                
+                # relative rotation supervision --------------------------------
+                if 'relative_indices' in head_features:
+                    selected_indices = head_features[
+                        'relative_indices'].view(-1)
+                    selected_pose_labels = torch.FloatTensor(
+                        batch_data['observation']['dense_pose_labels']).cuda()
+                    s, b, h, w, _, _ = selected_pose_labels.shape
+                    selected_pose_labels = selected_pose_labels.view(
+                        s*b, h*w, 4, 4)
+                    selected_pose_labels = selected_pose_labels[
+                        range(s*b), selected_indices]
+                    selected_pose_labels = selected_pose_labels.view(s, b, 4, 4)
+                    square_pose_labels = selected_pose_labels.view(
+                        s, 1, b, 4, 4)
+                    inverse_pose_labels = selected_pose_labels.view(s*b, 4, 4)
+                    inverse_pose_labels[batch_mask.T.reshape(-1)] = (
+                        torch.eye(4).cuda())
+                    inverse_pose_labels = torch.inverse(inverse_pose_labels)
+                    inverse_pose_labels = inverse_pose_labels.reshape(
+                        1, s, b, 4, 4)
+                    offsets = torch.matmul(
+                        square_pose_labels, inverse_pose_labels)
+                    
+                    relative_rotation_loss = torch.nn.functional.mse_loss(
+                        offsets[:,:,:,:3,:3],
+                        head_features['relative_poses']['rotation'],
+                        reduction='none',
+                    )
+                    relative_rotation_loss = torch.mean(
+                        relative_rotation_loss,
+                        dim=(-2,-1),
+                    )
+                    masked_instances = torch.BoolTensor(batch_mask.T)
+                    square_mask = ~(
+                        masked_instances.unsqueeze(0) |
+                        masked_instances.unsqueeze(1)
+                    ).cuda()
+                    total_instances = torch.sum(square_mask)
+                    relative_rotation_loss = torch.sum(
+                        relative_rotation_loss *
+                        square_mask
+                    ) / total_instances
+                    seq_loss = seq_loss + (
+                        relative_rotation_loss * rotation_loss_weight)
+                    log.add_scalar(
+                        'loss/relative-rotation',
+                        float(relative_rotation_loss),
+                        step_clock[0],
+                    )
+                    
+                    # translation ---------
+                    relative_translation = (
+                        head_features['relative_poses']['translation'])
+                    relative_tranlation = (
+                        relative_translation * translation_scale_factor)
+                    relative_translation_loss = torch.nn.functional.mse_loss(
+                        offsets[:,:,:,:3,3] * translation_scale_factor,
+                        relative_translation,
+                        reduction='none',
+                    )
+                    relative_translation_loss = torch.mean(
+                        relative_translation_loss, dim=-1)
+                    relative_translation_loss = torch.sum(
+                        relative_translation_loss *
+                        square_mask
+                    ) / total_instances
+                    seq_loss = seq_loss + (
+                        relative_translation_loss * translation_loss_weight)
+                    log.add_scalar(
+                        'loss/relative-translation',
+                        float(relative_translation_loss),
+                        step_clock[0],
+                    )
                 
                 # translation supervision --------------------------------------
                 translation_prediction = (
@@ -744,7 +833,6 @@ def test_checkpoint(
     num_classes = max(dataset_info['class_ids'].values()) + 1
     max_instances_per_scene = dataset_info['max_instances_per_scene']
     
-    print('fug?')
     seq_model = standard_models.seq_model(
         model_backbone,
         num_classes = num_classes,

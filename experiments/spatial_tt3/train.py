@@ -31,6 +31,7 @@ if __name__ == '__main__':
         
         # dataset settings
         dataset='tiny_turbos3',
+        augment_dataset='rando_tt3',
         train_split='train',
         train_subset=None,
         test_split='test',

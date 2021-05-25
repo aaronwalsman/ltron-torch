@@ -56,6 +56,7 @@ def train_label_confidence(
         test_split = 'test',
         test_subset = None,
         augment_dataset = None,
+        p_augment = 0.75,
         image_resolution = (256,256),
         randomize_viewpoint = True,
         randomize_colors = True,
@@ -165,6 +166,8 @@ def train_label_confidence(
         segmentation_width=segmentation_width,
         segmentation_height=segmentation_height,
         controlled_viewpoint=controlled_viewpoint,
+        augment_dataset=augment_dataset,
+        p_augment=p_augment,
     )
     
     if test_frequency:
@@ -770,6 +773,8 @@ def test_model(
                 device,
             )
             
+            head_features = step_model(step_tensors['color_render'])
+            
             if output_path is not None:
                 for i in range(env.num_envs):
                     if step_tensors['scene']['valid_scene_loaded'][i]:
@@ -780,11 +785,20 @@ def test_model(
                             step_observations['color_render'][i])
                         image_path = os.path.join(
                             output_path,
-                            'image_%i_%i.png'%(episode_id, frame_id)
+                            'image_%i_%i.png'%(episode_id, frame_id),
                         )
                         image.save(image_path)
-            
-            head_features = step_model(step_tensors['color_render'])
+                        
+                        confidence = torch.sigmoid(
+                            head_features['confidence'][i,0])
+                        confidence = (confidence * 255).byte()
+                        confidence_image = Image.fromarray(
+                            confidence.cpu().numpy())
+                        confidence_path = os.path.join(
+                            output_path,
+                            'confidence_%i_%i.png'%(episode_id, frame_id),
+                        )
+                        confidence_image.save(confidence_path)
             
             # add to scenes ----------------------------------------------------
             class_prediction = torch.argmax(
@@ -794,6 +808,25 @@ def test_model(
             confidence = confidence * (class_prediction != 0)
             confidence = confidence.view(confidence.shape[0], -1)
             max_confidence_indices = torch.argmax(confidence, dim=-1)
+            
+            if output_path is not None:
+                for i in range(env.num_envs):
+                    if step_tensors['scene']['valid_scene_loaded'][i]:
+                        episode_id = (
+                            step_observations['dataset']['episode_id'][i])
+                        frame_id = step_observations['episode_length'][i]
+                        draw_conf = confidence[i].cpu()
+                        draw_conf = draw_conf.view(-1,1).expand(-1,3).clone()
+                        draw_conf[max_confidence_indices[i]] = (
+                            torch.FloatTensor([1,0,0]))
+                        draw_conf = draw_conf.view(64,64,3)
+                        draw_conf = (draw_conf * 255).byte().numpy()
+                        draw_conf_image = Image.fromarray(draw_conf)
+                        draw_path = os.path.join(
+                            output_path,
+                            'selection_%i_%i.png'%(episode_id, frame_id),
+                        )
+                        draw_conf_image.save(draw_path)
             
             b = list(range(env.num_envs))
             max_class = class_prediction.view(

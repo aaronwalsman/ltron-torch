@@ -56,13 +56,13 @@ if __name__ == '__main__':
                 image = Image.fromarray(step_observations['color_render'][i])
                 color_path = os.path.join(
                     args.output,
-                    'color_%i_%i.png'%(ep, episode_step[i]),
+                    'color_%04i_%04i.png'%(ep, episode_step[i]),
                 )
                 image.save(color_path)
                 
                 label_path = os.path.join(
                     args.output,
-                    'label_%i_%i.npy'%(ep, episode_step[i]),
+                    'label_%04i_%04i.npy'%(ep, episode_step[i]),
                 )
                 numpy.save(
                     label_path,
@@ -71,7 +71,7 @@ if __name__ == '__main__':
                 
                 pose_path = os.path.join(
                     args.output,
-                    'pose_%i_%i.npy'%(ep, episode_step[i]),
+                    'pose_%04i_%04i.npy'%(ep, episode_step[i]),
                 )
                 numpy.save(pose_path, step_observations['dense_pose_labels'][i])
                 

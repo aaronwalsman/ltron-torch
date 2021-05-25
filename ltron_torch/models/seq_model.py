@@ -4,7 +4,10 @@ import torch
 
 from ltron.gym.rollout_storage import parallel_deepmap
 
-from ltron_torch.models.spatial import NerfSpatialEmbedding2D
+from ltron_torch.models.spatial import (
+    NerfSpatialEmbedding2D,
+    SelfAttentionPose,
+)
 
 class SeqModel(torch.nn.Module):
     
@@ -55,11 +58,18 @@ class SeqModel(torch.nn.Module):
 
 class SeqCrossProductPoseModel(torch.nn.Module):
     
-    def __init__(self, seq_model, feature_head_name, confidence_head_name):
+    def __init__(
+        self,
+        seq_model,
+        feature_head_name,
+        confidence_head_name,
+        translation_scale,
+    ):
         super(SeqCrossProductPoseModel, self).__init__()
         self.seq_model = seq_model
         self.feature_head_name = feature_head_name
         self.confidence_head_name = confidence_head_name
+        self.self_attention_pose = SelfAttentionPose(256, 3, translation_scale)
     
     def forward(self,
         x,
@@ -73,9 +83,19 @@ class SeqCrossProductPoseModel(torch.nn.Module):
         s, b, c, h, w = confidence.shape
         flat_confidence = confidence.view(s, b, h*w)
         if confidence_mode == 'max':
-            confidence_indices = torch.argmax(flat_confidence, dim=-1)
+            confidence_indices = torch.argmax(flat_confidence, dim=-1).view(s*b)
         elif confidence_mode == 'sample':
             pass
         
-        import pdb
-        pdb.set_trace()
+        s, b, c, h, w = dense_features.shape
+        selected_features = dense_features.view(s*b, c, h*w)
+        selected_features = (
+            selected_features[list(range(s*b)), :, confidence_indices])
+        selected_features = selected_features.view(s, b, c)
+        
+        relative_poses = self.self_attention_pose(selected_features)
+        
+        head_features['relative_poses'] = relative_poses
+        head_features['relative_indices'] = confidence_indices.view(s, b)
+        
+        return head_features

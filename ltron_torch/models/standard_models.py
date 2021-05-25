@@ -55,7 +55,6 @@ def seq_model(
         )
     
     # build the backbone
-    print('BBN', backbone_name)
     if backbone_name == 'transformer_fcn':
         backbone = SeqFCN(
             transformer_channels=transformer_channels,
