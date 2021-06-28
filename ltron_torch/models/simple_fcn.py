@@ -1,7 +1,6 @@
 import torch
-import torchvision.models as tv_models
 
-from ltron_torch.models.simple_backbone import SimpleBackbone
+#from ltron_torch.models.simple_backbone import SimpleBackbone
 import ltron_torch.models.resnet as resnet
 
 class SimpleBlock(torch.nn.Module):
@@ -39,6 +38,47 @@ class SimpleDecoder(torch.nn.Module):
         
         return x
 
+class SimpleFCN(torch.nn.Module):
+    def __init__(self,
+        encoder,
+        encoder_channels,
+        decoder_channels,
+        dense_heads = None,
+    ):
+        super(SimpleFCN, self).__init__()
+        self.encoder = encoder
+        self.decoder = SimpleDecoder(
+            encoder_channels=encoder_channels,
+            decoder_channels=decoder_channels,
+        )
+        self.dense_heads = dense_heads
+    
+    def forward(self, x):
+        xn = self.encoder(x)
+        x = self.decoder(*xn)
+        
+        if self.dense_heads is not None:
+            x = self.dense_heads(x)
+        
+        return x
+
+def named_resnet_fcn(
+    name,
+    decoder_channels,
+    dense_heads=None,
+    pretrained=False
+):
+    fcn_layers = ('layer4', 'layer3', 'layer2', 'layer1')
+    encoder = resnet.named_backbone(name, *fcn_layers, pretrained=pretrained)
+    encoder_channels = resnet.named_encoder_channels(name)
+    return SimpleFCN(
+        encoder,
+        encoder_channels,
+        decoder_channels,
+        dense_heads=dense_heads,
+    )
+
+'''
 class SimpleFCN(torch.nn.Module):
     def __init__(self,
         pretrained=True,
@@ -80,3 +120,4 @@ class SimpleFCN(torch.nn.Module):
             x_single = None
         
         return x, x_single
+'''

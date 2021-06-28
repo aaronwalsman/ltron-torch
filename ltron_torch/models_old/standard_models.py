@@ -30,6 +30,7 @@ def seq_model(
     viewpoint_head=False,
     pose_head=False,
     pretrained=True,
+    translation_scale=1.,
 ):
     # build the heads
     dense_heads = {
@@ -47,7 +48,7 @@ def seq_model(
     if pose_head:
         dense_heads['pose'] = torch.nn.Sequential(
             Conv2dStack(3, decoder_channels, decoder_channels, 9),
-            SE3Layer(dim=1),
+            SE3Layer(dim=1, translation_scale=translation_scale),
         )
         global_heads['global_pose'] = torch.nn.Sequential(
             LinearStack(3, transformer_channels, transformer_channels, 9),
