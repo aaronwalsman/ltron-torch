@@ -84,7 +84,7 @@ class SE3Layer(torch.nn.Module):
         secondary_axis = torch.cross(third_axis, primary_axis)
         secondary_axis = secondary_axis * flip
         
-        translation = x[tuple(translation_indices)]
+        translation = x[tuple(translation_indices)] / self.translation_scale
         
         indices = {'X':0, 'Y':1, 'Z':2}
         axes = [None, None, None]
