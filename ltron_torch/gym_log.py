@@ -14,8 +14,8 @@ from ltron.gym.spaces import (
 
 import PIL.Image as Image
 
-import renderpy.masks as masks
-from renderpy.json_numpy import NumpyEncoder
+import splendor.masks as masks
+from splendor.json_numpy import NumpyEncoder
 
 def gym_log(label, data, space, log, step, log_json=True):
     if isinstance(space, ImageSpace):

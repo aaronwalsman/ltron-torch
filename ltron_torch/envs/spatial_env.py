@@ -100,7 +100,7 @@ def pose_estimation_env(
             distance_steps=4,
             start_position='uniform',
             observe_camera_parameters=True,
-            observe_camera_matrix=True,
+            observe_view_matrix=True,
         )
     else:
         components['viewpoint'] = RandomizedAzimuthalViewpointComponent(
@@ -108,7 +108,7 @@ def pose_estimation_env(
             distance=(0.8, 1.2),
             aspect_ratio=(width/height),
             randomize_frequency='reset',
-            observe_camera_matrix=True,
+            observe_view_matrix=True,
         )
         
         '''
@@ -116,7 +116,7 @@ def pose_estimation_env(
             components['scene'],
             azimuth = math.radians(30),
             elevation = math.radians(-45),
-            observe_camera_matrix=True,
+            observe_view_matrix=True,
         )
         '''
     

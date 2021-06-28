@@ -11,11 +11,24 @@ from ltron.gym.spaces import (
 #from ltron.torch.brick_geometric import (
 #        BrickList, BrickGraph, BrickListBatch, BrickGraphBatch)
 
+default_mean = [0.485, 0.456, 0.406]
+default_std = [0.229, 0.224, 0.225]
+
 default_image_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225])])
+    transforms.ToTensor(),
+    transforms.Normalize(mean=default_mean, std=default_std),
+])
+
+def default_image_untransform(x):
+    device = x.device
+    mean = torch.FloatTensor(default_mean).unsqueeze(-1).unsqueeze(-1)
+    mean = mean.to(device)
+    std = torch.FloatTensor(default_std).unsqueeze(-1).unsqueeze(-1)
+    std = std.to(device)
+    x = x * std + mean
+    x = (x * 255).byte().cpu().numpy()
+    x = numpy.moveaxis(x,-3,-1)
+    return x
 
 def gym_space_to_tensors(
         data,
