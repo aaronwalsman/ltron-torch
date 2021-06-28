@@ -2,7 +2,7 @@ import numpy
 
 from PIL import Image, ImageDraw
 
-import renderpy.masks as masks
+import splendor.masks as masks
 
 def make_image_strips(num_strips, concatenate=False, **kwargs):
     image_strips = [make_image_strip(

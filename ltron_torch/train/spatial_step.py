@@ -12,7 +12,7 @@ import PIL.Image as Image
 
 import tqdm
 
-import renderpy.masks as masks
+import splendor.masks as masks
 
 from ltron.geometry.align import best_first_total_alignment
 from ltron.bricks.brick_scene import BrickScene

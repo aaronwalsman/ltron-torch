@@ -13,16 +13,21 @@ import PIL.Image as Image
 
 import tqdm
 
-import renderpy.masks as masks
+import splendor.masks as masks
 
 from ltron.geometry.align import best_first_total_alignment
+from ltron.geometry.relative_alignment import relative_alignment
 from ltron.bricks.brick_scene import BrickScene
 from ltron.bricks.brick_type import BrickType
 
 from ltron_torch.evaluation import spatial_metrics
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.ltron_env import async_ltron
-from ltron.gym.rollout_storage import RolloutStorage, parallel_deepmap
+from ltron.gym.rollout_storage import (
+    RolloutStorage,
+    parallel_deepmap,
+    stack_gym_data,
+)
 
 from ltron_torch.envs.spatial_env import pose_estimation_env
 from ltron_torch.gym_tensor import (
@@ -40,66 +45,67 @@ from ltron_torch.train.loss import (
 import ltron_torch.geometry as geometry
 
 def train_label_confidence(
-        # load checkpoints
-        step_checkpoint = None,
-        edge_checkpoint = None,
-        optimizer_checkpoint = None,
-        
-        # general settings
-        num_epochs = 9999,
-        mini_epochs_per_epoch = 1,
-        mini_epoch_sequences = 2048,
-        mini_epoch_sequence_length = 2,
-        
-        # dasaset settings
-        dataset = 'random_stack',
-        num_processes = 8,
-        train_split = 'train',
-        train_subset = None,
-        test_split = 'test',
-        test_subset = None,
-        augment_dataset = None,
-        image_resolution = (256,256),
-        randomize_viewpoint = True,
-        randomize_colors = True,
-        random_floating_bricks = False,
-        random_floating_pairs = False,
-        random_bricks_per_scene = (10,20),
-        random_bricks_subset = None,
-        random_bricks_rotation_mode = None,
-        controlled_viewpoint=False,
-        
-        # train settings
-        train_steps_per_epoch = 4096,
-        batch_size = 6,
-        learning_rate = 3e-4,
-        weight_decay = 1e-5,
-        class_label_loss_weight = 0.8,
-        class_label_background_weight = 0.05,
-        score_loss_weight = 0.2,
-        rotation_loss_weight = 1.0,
-        translation_loss_weight = 1.0,
-        translation_scale_factor = 0.01,
-        viewpoint_loss_weight = 0.0,
-        entropy_loss_weight = 0.0,
-        max_instances_per_step = 8,
-        
-        # model settings
-        model_backbone = 'simple_fcn',
-        transformer_channels=256,
-        decoder_channels=256,
-        relative_poses=False,
-        
-        # test settings
-        test_frequency = 1,
-        test_steps_per_epoch = 1024,
-        
-        # checkpoint settings
-        checkpoint_frequency = 1,
-        
-        # logging settings
-        log_train = 0,
-        log_test = 0):
+    # load checkpoints
+    step_checkpoint = None,
+    edge_checkpoint = None,
+    optimizer_checkpoint = None,
+    
+    # general settings
+    num_epochs = 9999,
+    mini_epochs_per_epoch = 1,
+    mini_epoch_sequences = 2048,
+    mini_epoch_sequence_length = 2,
+    
+    # dasaset settings
+    dataset = 'random_stack',
+    num_processes = 8,
+    train_split = 'train',
+    train_subset = None,
+    test_split = 'test',
+    test_subset = None,
+    augment_dataset = None,
+    image_resolution = (256,256),
+    randomize_viewpoint = True,
+    randomize_colors = True,
+    random_floating_bricks = False,
+    random_floating_pairs = False,
+    random_bricks_per_scene = (10,20),
+    random_bricks_subset = None,
+    random_bricks_rotation_mode = None,
+    controlled_viewpoint=False,
+    
+    # train settings
+    train_steps_per_epoch = 4096,
+    batch_size = 6,
+    learning_rate = 3e-4,
+    weight_decay = 1e-5,
+    class_label_loss_weight = 0.8,
+    class_label_background_weight = 0.05,
+    score_loss_weight = 0.2,
+    rotation_loss_weight = 1.0,
+    translation_loss_weight = 1.0,
+    translation_scale_factor = 0.01,
+    viewpoint_loss_weight = 0.0,
+    entropy_loss_weight = 0.0,
+    max_instances_per_step = 8,
+    
+    # model settings
+    model_backbone = 'simple_fcn',
+    transformer_channels=256,
+    decoder_channels=256,
+    relative_poses=False,
+    
+    # test settings
+    test_frequency = 1,
+    test_steps_per_epoch = 1024,
+    
+    # checkpoint settings
+    checkpoint_frequency = 1,
+    
+    # logging settings
+    log_train = 0,
+    log_test = 0
+):
     
     print('='*80)
     print('Setup')
@@ -127,6 +133,7 @@ def train_label_confidence(
         decoder_channels=decoder_channels,
         pose_head=True,
         viewpoint_head=controlled_viewpoint,
+        translation_scale=translation_scale_factor,
     )
     
     if relative_poses:
@@ -306,13 +313,6 @@ def train_label_confidence_epoch(
     print('- '*40)
     print('Rolling out episodes to generate data')
     
-    '''
-    seq_terminal = []
-    seq_observations = []
-    seq_rewards = []
-    seq_viewpoint_actions = []
-    seq_action_probs = []
-    '''
     observation_storage = RolloutStorage(train_env.num_envs)
     action_reward_storage = RolloutStorage(train_env.num_envs)
     
@@ -499,7 +499,7 @@ def train_label_confidence_epoch(
             
             # storage ----------------------------------------------------------
             action_reward_storage.append_batch(
-                action=actions,
+                action=stack_gym_data(*actions),
                 reward=step_rewards,
             )
             
@@ -556,7 +556,6 @@ def train_label_confidence_epoch(
         rollout_storage.seq_len(i) for i in range(rollout_storage.num_seqs())
     ) >= 1
     
-    #dataset_size = seq_tensors['color_render'].shape[0]
     tlast = 0
     for mini_epoch in range(1, mini_epochs+1):
         
@@ -667,8 +666,15 @@ def train_label_confidence_epoch(
                 
                 # relative rotation supervision --------------------------------
                 if 'relative_indices' in head_features:
-                    selected_indices = head_features[
-                        'relative_indices'].view(-1)
+                    #selected_indices = head_features[
+                    #    'relative_indices'].view(-1)
+                    rollout_selections = torch.LongTensor(
+                        batch_data['action']['visibility'])
+                    s, b, h, w = rollout_selections.shape
+                    rollout_selections = rollout_selections.view(s*b, h*w)
+                    #valid_frames = torch.sum(rollout_selections, dim=-1)
+                    selected_indices = torch.argmax(rollout_selections, dim=-1)
+                    
                     selected_pose_labels = torch.FloatTensor(
                         batch_data['observation']['dense_pose_labels']).cuda()
                     s, b, h, w, _, _ = selected_pose_labels.shape
@@ -686,7 +692,7 @@ def train_label_confidence_epoch(
                     inverse_pose_labels = inverse_pose_labels.reshape(
                         1, s, b, 4, 4)
                     offsets = torch.matmul(
-                        square_pose_labels, inverse_pose_labels)
+                        inverse_pose_labels, square_pose_labels)
                     
                     relative_rotation_loss = torch.nn.functional.mse_loss(
                         offsets[:,:,:,:3,:3],
@@ -718,7 +724,7 @@ def train_label_confidence_epoch(
                     # translation ---------
                     relative_translation = (
                         head_features['relative_poses']['translation'])
-                    relative_tranlation = (
+                    relative_translation = (
                         relative_translation * translation_scale_factor)
                     relative_translation_loss = torch.nn.functional.mse_loss(
                         offsets[:,:,:,:3,3] * translation_scale_factor,
@@ -819,11 +825,13 @@ def test_checkpoint(
     split='test',
     subset=None,
     image_resolution=(256,256),
+    translation_scale_factor=0.01,
     
     # model settings
     model_backbone = 'simple_fcn',
     transformer_channels = 256,
     decoder_channels = 256,
+    relative_poses=False,
     
     # output settings
     output_path = None,
@@ -840,7 +848,14 @@ def test_checkpoint(
         decoder_channels = decoder_channels,
         pose_head=True,
         viewpoint_head=False,
-    ).cuda()
+        translation_scale=translation_scale_factor,
+    )
+    if relative_poses:
+        seq_model = SeqCrossProductPoseModel(
+            seq_model, 'x', 'confidence', translation_scale_factor)
+    
+    seq_model = seq_model.cuda()
+    
     seq_model.load_state_dict(torch.load(seq_checkpoint))
     
     if model_backbone == 'simple_fcn':
@@ -951,7 +966,7 @@ def test_model(
             ]
             local_features = {
                 key:value for key, value in head_features.items()
-                if 'global' not in key
+                if 'global' not in key and 'relative' not in key
             }
             def index_fn(a):
                 return a[final_seq_ids, list(range(env.num_envs))]
@@ -989,9 +1004,9 @@ def test_model(
                         transform = numpy.eye(4)
                         transform[:3,:3] = numpy.array(max_rotation[i])
                         transform[:3,3] = numpy.array(max_translation[i])
-                        camera_matrix = (
-                            step_tensors['viewpoint']['camera_matrix'][i]).cpu()
-                        camera_pose = numpy.linalg.inv(camera_matrix)
+                        view_matrix = (
+                            step_tensors['viewpoint']['view_matrix'][i]).cpu()
+                        camera_pose = numpy.linalg.inv(view_matrix)
                         active_scenes[i].add_instance(
                             brick_type = inverse_class_ids[class_label],
                             brick_color = 4,
@@ -1026,6 +1041,60 @@ def test_model(
             # store terminal scenes --------------------------------------------
             for i, terminal in enumerate(step_terminal):
                 if terminal:
+                    
+                    # build transforms
+                    s, s, b = (
+                        head_features['relative_poses']['rotation'].shape[:3])
+                    relative_rotations = (
+                        head_features['relative_poses']['rotation'][:,:,i])
+                    relative_translations = (
+                        head_features['relative_poses']['translation'][:,:,i])
+                    transforms = numpy.zeros((s, s, 4, 4))
+                    transforms[:,:,3,3] = 1.
+                    transforms[:,:,:3,:3] = relative_rotations.cpu().numpy()
+                    transforms[:,:,:3,3] = relative_translations.cpu().numpy()
+                    start_transforms = numpy.zeros((s, 4, 4))
+                    start_transforms[:] = numpy.eye(4)
+                    configuration = relative_alignment(
+                        start_transforms, transforms, 10)
+                    
+                    s, b, n, h, w = head_features['class_label'].shape
+                    predicted_class_ids = torch.argmax(
+                        head_features['class_label'], dim=2)[:,i]
+                    predicted_class_ids = predicted_class_ids.view(s, h*w)
+                    relative_indices = head_features['relative_indices'][:,i]
+                    selected_class_ids = predicted_class_ids[
+                        range(s), relative_indices]
+                    new_scene = BrickScene()
+                    for transform, class_label in zip(
+                        configuration, selected_class_ids):
+                        class_label = int(class_label)
+                        if class_label == 0:
+                            continue
+                        new_scene.add_instance(
+                            brick_type = inverse_class_ids[class_label],
+                            brick_color = 4,
+                            transform = transform,
+                        )
+                    new_scene.export_ldraw('./tmp.mpd')
+                    
+                    for j in range(s):
+                        new_scene = BrickScene()
+                        for transform, class_label in zip(
+                            transforms[:,j], selected_class_ids
+                        ):
+                            class_label = int(class_label)
+                            if class_label == 0:
+                                continue
+                            new_scene.add_instance(
+                                brick_type = inverse_class_ids[class_label],
+                                brick_color = 4,
+                                transform = transform,
+                            )
+                        new_scene.export_ldraw('./tmp_%i.mpd'%j)
+                    
+                    import pdb
+                    pdb.set_trace()
                     
                     # compare reconstructed scene and target scene -------------
                     target_class_ids = (
