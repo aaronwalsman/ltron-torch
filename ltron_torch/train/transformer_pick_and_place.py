@@ -14,6 +14,7 @@ from ltron.hierarchy import len_hierarchy
 from ltron.dataset.paths import get_dataset_paths
 from ltron.visualization.drawing import block_upscale_image
 
+from ltron_torch.gym_tensor import default_image_untransform
 from ltron_torch.models.positional_encoding import raw_positional_encoding
 
 class CachedDataset(Dataset):
@@ -168,65 +169,7 @@ def train(
     
     for epoch in range(1, num_epochs+1):
         print('epoch: %i'%epoch)
-        print('train')
-        model.train()
-        iterate = tqdm.tqdm(train_loader)
-        for x, q, y, paths in iterate:
-            x = x.cuda()
-            q = q.cuda()
-            y = y.cuda()
-            
-            mode, pick, place, rotate_pick = model(x, q)
-            
-            total_loss = 0.
-            
-            mode_target = y[:,6]
-            mode_loss = torch.nn.functional.cross_entropy(mode, mode_target)
-            total_loss = total_loss + mode_loss
-            
-            pick_place_batch_entries = (mode_target == 1).unsqueeze(-1)
-            num_pick_place = torch.sum(pick_place_batch_entries)
-            if num_pick_place:
-                pick_target = y[:,:2]
-                pick_loss = torch.nn.functional.cross_entropy(
-                    pick, pick_target, reduction='none')
-                pick_loss = torch.sum(
-                    pick_loss * pick_place_batch_entries) / num_pick_place
-                pick_loss = pick_loss * 0.125
-                total_loss = total_loss + pick_loss
-            
-                place_target = y[:,2:4]
-                place_loss = torch.nn.functional.cross_entropy(
-                    place, place_target, reduction='none')
-                place_loss = torch.sum(
-                    place_loss * pick_place_batch_entries) / num_pick_place
-                place_loss = place_loss * 0.125
-                total_loss = total_loss + place_loss * 0.125
-            
-            rotate_pick_batch_entries = (
-                (mode_target == 2) | (mode_target == 3)).unsqueeze(-1)
-            num_rotate_pick = torch.sum(rotate_pick_batch_entries)
-            if num_rotate_pick:
-                rotate_pick_target = y[:,4:6]
-                rotate_pick_loss = torch.nn.functional.cross_entropy(
-                    rotate_pick, rotate_pick_target, reduction='none')
-                rotate_pick_loss = (torch.sum(
-                    rotate_pick_loss * rotate_pick_batch_entries) /
-                    num_rotate_pick)
-                rotate_pick_loss = rotate_pick_loss * 0.125
-                total_loss = total_loss + rotate_pick_loss
-            
-            total_loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            
-            iterate.set_description(
-                'm: %.02f p: %.02f l: %.02f r: %.03f'%(
-                float(mode_loss),
-                float(pick_loss),
-                float(place_loss),
-                float(rotate_pick_loss)))
-        
+        train_epoch(model, train_loader, optimizer)
         '''
         print('test')
         model.eval()
@@ -262,5 +205,148 @@ def train(
         '''
         torch.save(model.state_dict(), 'transformer_locate_model_%04i.pt'%epoch)
 
+def train_epoch(model, train_loader, optimizer):
+    print('train')
+    model.train()
+    iterate = tqdm.tqdm(train_loader)
+    for x, q, y, paths in iterate:
+        x = x.cuda()
+        q = q.cuda()
+        y = y.cuda()
+        
+        mode, pick, place, rotate_pick = model(x, q)
+        
+        total_loss = 0.
+        
+        mode_target = y[:,6]
+        mode_loss = torch.nn.functional.cross_entropy(mode, mode_target)
+        total_loss = total_loss + mode_loss
+        
+        pick_place_batch_entries = (mode_target == 1).unsqueeze(-1)
+        num_pick_place = torch.sum(pick_place_batch_entries)
+        if num_pick_place:
+            pick_target = y[:,:2]
+            pick_loss = torch.nn.functional.cross_entropy(
+                pick, pick_target, reduction='none')
+            pick_loss = torch.sum(
+                pick_loss * pick_place_batch_entries) / num_pick_place
+            pick_loss = pick_loss * 0.125
+            total_loss = total_loss + pick_loss
+        
+            place_target = y[:,2:4]
+            place_loss = torch.nn.functional.cross_entropy(
+                place, place_target, reduction='none')
+            place_loss = torch.sum(
+                place_loss * pick_place_batch_entries) / num_pick_place
+            place_loss = place_loss * 0.125
+            total_loss = total_loss + place_loss * 0.125
+        
+        rotate_pick_batch_entries = (
+            (mode_target == 2) | (mode_target == 3)).unsqueeze(-1)
+        num_rotate_pick = torch.sum(rotate_pick_batch_entries)
+        if num_rotate_pick:
+            rotate_pick_target = y[:,4:6]
+            rotate_pick_loss = torch.nn.functional.cross_entropy(
+                rotate_pick, rotate_pick_target, reduction='none')
+            rotate_pick_loss = (torch.sum(
+                rotate_pick_loss * rotate_pick_batch_entries) /
+                num_rotate_pick)
+            rotate_pick_loss = rotate_pick_loss * 0.125
+            total_loss = total_loss + rotate_pick_loss
+        
+        total_loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        
+        iterate.set_description(
+            'm: %.02f p: %.02f l: %.02f r: %.03f'%(
+            float(mode_loss),
+            float(pick_loss),
+            float(place_loss),
+            float(rotate_pick_loss)))
+
+def test_checkpoint(checkpoint_path):
+    print('making model')
+    model = Model().cuda()
+    #model.load_state_dict(torch.load(checkpoint_path))
+    
+    print('loading dataset')
+    cached_data = numpy.load(
+        './dvae_cache.npz', allow_pickle=True)['arr_0'].item()
+    test_dataset = CachedDataset(
+        cached_data,
+        'conditional_snap_two_frames',
+        'test',
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=8,
+    )
+    
+    test_epoch(0, model, test_loader)
+
+def test_epoch(epoch, model, test_loader):
+    print('test')
+    model.train()
+    iterate = tqdm.tqdm(test_loader)
+    with torch.no_grad():
+        for x, q, y, paths in iterate:
+            x = x.cuda()
+            q = q.cuda()
+            y = y.cuda()
+        
+            mode, pick, place, rotate_pick = model(x, q)
+            pick = torch.softmax(pick, dim=1)
+            place = torch.softmax(place, dim=1)
+            rotate_pick = torch.softmax(rotate_pick, dim=1)
+            
+            mode_select = torch.argmax(mode, dim=-1)
+            b = mode_select.shape[0]
+            for bb in range(b):
+                out_path = 'ppr_%04i_%04i.png'%(epoch, bb)
+                if mode_select[bb] == 1:
+                    pick_mask = torch.ones(64, 64).cuda()
+                    pick_mask *= pick[bb,:,0].unsqueeze(1)
+                    pick_mask *= pick[bb,:,1].unsqueeze(0)
+                    pick_mask = pick_mask.unsqueeze(-1).cpu().numpy()
+                    pick_mask = block_upscale_image(pick_mask, 256, 256)
+                    
+                    place_mask = torch.ones(64, 64).cuda()
+                    place_mask *= place[bb,:,0].unsqueeze(1)
+                    place_mask *= place[bb,:,1].unsqueeze(0)
+                    place_mask = place_mask.unsqueeze(-1).cpu().numpy()
+                    place_mask = block_upscale_image(place_mask, 256, 256)
+                    
+                    image = numpy.array(Image.open(paths[bb]))
+                    image = (
+                        image * (1. - pick_mask) + 
+                        numpy.array([[[255,0,0]]]) * pick_mask)
+                    image = (
+                        image * (1. - place_mask) +
+                        numpy.array([[[0,255,0]]]) * place_mask)
+                    image = image.astype(numpy.uint8)
+                    
+                    Image.fromarray(image).save(out_path)
+                
+                elif mode_select[bb] == 2 or mode_select[bb] == 3:
+                    pick_mask = torch.ones(64, 64).cuda()
+                    pick_mask *= rotate_pick[bb,:,0].unsqueeze(1)
+                    pick_mask *= rotate_pick[bb,:,1].unsqueeze(0)
+                    pick_mask = pick_mask.unsqueeze(-1).cpu().numpy()
+                    pick_mask = block_upscale_image(pick_mask, 256, 256)
+                    
+                    image = numpy.array(Image.open(paths[bb]))
+                    image = (
+                        image * (1. - pick_mask) +
+                        numpy.array([[[0,255,0]]]) * pick_mask)
+                    image = image.astype(numpy.uint8)
+                    
+                    Image.fromarray(image).save(out_path)
+            
+            break
+
 if __name__ == '__main__':
-    train()
+    #train()
+    test_checkpoint('pick_and_place_01/transformer_locate_model_0025.pt')
