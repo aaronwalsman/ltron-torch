@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from torch.nn import Module
+from torch.nn import Module, MultiheadAttention, Linear, Dropout
 
 import ltron_torch.models.transformer_masks as transformer_masks
 
@@ -25,7 +25,7 @@ def sparse_multihead_attention(
     # it's easier than computing a max for each, and it's better than nothing.
     max_qk = torch.max(qk)
     eqk = torch.exp(qk - max_qk)
-    d = torch.zeros(s, b, n_head, 1)
+    d = torch.zeros(s, b, n_head, 1).to(qk.device)
     d.index_add_(0, q_id, eqk)
     
     eqk = F.dropout(eqk, dropout, training=training)
@@ -40,20 +40,22 @@ def sparse_multihead_attention(
 
 class SparseMultiheadAttention(Module):
     def __init__(
-        self, n_embed, n_head, q_id, k_id,
+        self, sparsity_pattern, channels, n_head,
         attention_dropout=0.,
         residual_dropout=0.,
     ):
-        self.q_linear = Linear(n_embed, n_embed)
-        self.k_linear = Linear(n_embed, n_embed)
-        self.v_linear = Linear(n_embed, n_embed)
+        super(SparseMultiheadAttention, self).__init__()
+        self.q_linear = Linear(channels, channels)
+        self.k_linear = Linear(channels, channels)
+        self.v_linear = Linear(channels, channels)
         
+        q_id, k_id = sparsity_pattern
         self.register_buffer('q_id', q_id)
         self.register_buffer('k_id', k_id)
         
         self.attention_dropout = attention_dropout
         
-        self.x_linear = Linear(n_embed, n_embed)
+        self.x_linear = Linear(channels, channels)
         self.x_dropout = Dropout(residual_dropout)
         
         self.n_head = n_head
@@ -70,6 +72,9 @@ class SparseMultiheadAttention(Module):
         x = self.x_dropout(x)
         
         return x
+
+# TODO: Sparse version of MHA from Transformer-XL with relative encodings
+# TODO: Dense version of MHA from Transformer-XL with relative encodings
 
 # minGPT Multihead Attention ===================================================
 # The following functions have been derived from Karpathy's minGPT example at:
@@ -112,8 +117,17 @@ def mingpt_multihead_attention(
     # output projection
     #y = self.resid_drop(self.proj(y))
     return y.permute(1,0,2)
-    '''
 
+class FixedMaskMultiheadAttention(Module):
+    def __init__(self, mask, embed_dim, *args, **kwargs):
+        super(FixedMaskMultiheadAttention, self).__init__()
+        self.register_buffer('mask', mask)
+        self.attention = MultiheadAttention(embed_dim, *args, **kwargs)
+    
+    def forward(self, x):
+        return self.attention(x, x, x, attn_mask=self.mask)[0]
+    
+'''
 class MinGPTMultiheadAttention(Module):
     def __init__(self, n_embd, n_head, attn_pdrop, resid_pdrop, mask):
         super(MinGPTMultiheadAttention, self).__init__()
