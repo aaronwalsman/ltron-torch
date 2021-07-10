@@ -149,6 +149,11 @@ class SimpleDataset(Dataset):
         return len(self.observation_paths)
 
 
+# Model Utils ==================================================================
+def get_num_model_parameters(model):
+    return sum(parameter.numel() for parameter in model.parameters())
+
+
 # Mask Utils ===================================================================
 def blowfish_mask(h, n, s):
     '''
@@ -245,6 +250,7 @@ class DensePickModel(torch.nn.Module):
         return pick
 
 def train_dense_pick():
+    print('training dense pick')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -254,14 +260,15 @@ def train_dense_pick():
         num_workers=8,
     )
     
+    print('building model')
     model = DensePickModel().cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
     running_pick_accuracy = 0.0
     for epoch in range(1, 6):
         print('epoch: %i'%epoch)
-        print('train')
         model.train()
         iterate = tqdm.tqdm(train_loader)
         for x, q, y in iterate:
@@ -342,6 +349,7 @@ class SparsePickModel(torch.nn.Module):
         return pick
 
 def train_sparse_pick():
+    print('training sparse pick')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -351,8 +359,10 @@ def train_sparse_pick():
         num_workers=8,
     )
     
+    print('building model')
     model = SparsePickModel().cuda()
-    
+    print('parameters: %i'%get_num_model_parameters(model))
+
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
     running_pick_accuracy = 0.0
@@ -449,6 +459,7 @@ class ABMatchModel(torch.nn.Module):
         return match
 
 def train_ab_match():
+    print('training ab match')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -458,14 +469,15 @@ def train_ab_match():
         num_workers=8,
     )
     
+    print('building model')
     model = ABMatchModel().cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
     running_match_accuracy = 0.0
     for epoch in range(1, 6):
         print('epoch: %i'%epoch)
-        print('train')
         model.train()
         iterate = tqdm.tqdm(train_loader)
         for x, q, y in iterate:
@@ -551,6 +563,7 @@ class SparsePickAndPlaceModel(torch.nn.Module):
         return pick_and_place
 
 def train_sparse_pick_and_place():
+    print('training sparse pick and place')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -560,7 +573,9 @@ def train_sparse_pick_and_place():
         num_workers=8,
     )
     
+    print('building model')
     model = SparsePickAndPlaceModel().cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
@@ -676,6 +691,7 @@ class SuperSparsePickPlaceRotateModel(torch.nn.Module):
         return pick_place_rotate
 
 def train_super_sparse_pick_place_rotate():
+    print('training super sparse pick, place and rotate')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -685,7 +701,9 @@ def train_super_sparse_pick_place_rotate():
         num_workers=8,
     )
     
+    print('building model')
     model = SuperSparsePickPlaceRotateModel().cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
@@ -781,6 +799,7 @@ class SparsePickPlaceRotateModel(torch.nn.Module):
         return pick_place_rotate
 
 def train_sparse_pick_place_rotate():
+    print('training sparse pick, place and rotate')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
     train_loader = DataLoader(
@@ -790,7 +809,9 @@ def train_sparse_pick_place_rotate():
         num_workers=8,
     )
     
+    print('building model')
     model = SparsePickPlaceRotateModel().cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
@@ -798,7 +819,6 @@ def train_sparse_pick_place_rotate():
     running_mode_accuracy = 0.0
     for epoch in range(1, 6):
         print('epoch: %i'%epoch)
-        print('train')
         model.train()
         iterate = tqdm.tqdm(train_loader)
         for x, q, y in iterate:

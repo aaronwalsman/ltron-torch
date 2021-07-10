@@ -173,26 +173,59 @@ def encode_dataset(
                 cache['frames'][p] = z_sample[i].cpu().numpy()
                 cache['snaps'][p] = {}
                 
-                neg_snap_path = p.replace(
-                    'color_x_', 'snap_neg_').replace(
-                    '.png', '.npz'
-                )
-                pos_snap_path = neg_snap_path.replace('snap_neg_', 'snap_pos_')
-                if (os.path.exists(neg_snap_path) and
-                    os.path.exists(pos_snap_path)
-                ):
-                    neg_snap_map = numpy.load(neg_snap_path)['arr_0']
-                    pos_snap_map = numpy.load(pos_snap_path)['arr_0']
+                if 'color_x_' in p:
+                    neg_snap_path = p.replace(
+                        'color_x_', 'snap_neg_').replace(
+                        '.png', '.npz'
+                    )
+                    pos_snap_path = neg_snap_path.replace(
+                        'snap_neg_', 'snap_pos_')
+                elif 'color_y_' in p:
+                    # this is relying on the fact that the sequence always
+                    # ends correct because I didn't write out the snap maps
+                    # for the y images when generating frames (oopsie)
+                    neg_snap_path = p.replace(
+                        'color_y_', 'snap_neg_').replace(
+                        '.png', '_0006.npz')
+                    pos_snap_path = neg_snap_path.replace(
+                        'snap_neg_', 'snap_pos_')
+                #if (os.path.exists(neg_snap_path) and
+                #    os.path.exists(pos_snap_path)
+                #):
+                neg_snap_map = numpy.load(neg_snap_path)['arr_0']
+                pos_snap_map = numpy.load(pos_snap_path)['arr_0']
+            
+            
+                # get wedge snaps
+                for snap_id in range(9):
+                    if snap_id <= 4:
+                        snap_map = neg_snap_map
+                    else:
+                        snap_map = pos_snap_map
+                    y, x = numpy.where(
+                        (snap_map[:,:,0] == 1) &
+                        (snap_map[:,:,1] == snap_id)
+                    )
+                    if len(y):
+                        y_mean = numpy.sum(y)/len(y)
+                        x_mean = numpy.sum(x)/len(x)
+                        dy = y - y_mean
+                        dx = x - x_mean
+                        dd = dy**2 + dx**2
+                        pixel_index = numpy.argmin(dd)
+                        best_y = y[pixel_index]
+                        best_x = x[pixel_index]
+                        cache['snaps'][p][1, snap_id] = (best_y, best_x)
                 
-                
-                    # get wedge snaps
-                    for snap_id in range(9):
-                        if snap_id <= 4:
-                            snap_map = neg_snap_map
-                        else:
+                # get slope_snaps
+                for slope_id in 2,3:
+                    for snap_id in range(3):
+                        if snap_id == 0:
                             snap_map = pos_snap_map
+                        else:
+                            snap_map = neg_snap_map
                         y, x = numpy.where(
-                            (snap_map[:,:,0] == 1) &
+                            (snap_map[:,:,0] == slope_id) &
                             (snap_map[:,:,1] == snap_id)
                         )
                         if len(y):
@@ -204,30 +237,8 @@ def encode_dataset(
                             pixel_index = numpy.argmin(dd)
                             best_y = y[pixel_index]
                             best_x = x[pixel_index]
-                            cache['snaps'][p][1, snap_id] = (best_y, best_x)
-                    
-                    # get slope_snaps
-                    for slope_id in 2,3:
-                        for snap_id in range(3):
-                            if snap_id == 0:
-                                snap_map = pos_snap_map
-                            else:
-                                snap_map = neg_snap_map
-                            y, x = numpy.where(
-                                (snap_map[:,:,0] == slope_id) &
-                                (snap_map[:,:,1] == snap_id)
-                            )
-                            if len(y):
-                                y_mean = numpy.sum(y)/len(y)
-                                x_mean = numpy.sum(x)/len(x)
-                                dy = y - y_mean
-                                dx = x - x_mean
-                                dd = dy**2 - dx**2
-                                pixel_index = numpy.argmin(dd)
-                                best_y = y[pixel_index]
-                                best_x = x[pixel_index]
-                                cache['snaps'][p][slope_id, snap_id] = (
-                                    best_y, best_x)
+                            cache['snaps'][p][slope_id, snap_id] = (
+                                best_y, best_x)
     
     numpy.savez_compressed('./dvae_cache.npz', cache)
 
