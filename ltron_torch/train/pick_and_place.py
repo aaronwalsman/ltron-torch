@@ -21,6 +21,7 @@ from ltron.dataset.paths import get_dataset_paths
 from ltron_torch.models.transformer import (
     TokenMapSequenceEncoder,
     TransformerConfig,
+    TrainConfig,
 )
 from ltron_torch.models.transformer_masks import neighborhood
 import ltron_torch.models.dvae as dvae
@@ -360,21 +361,6 @@ def train_dense_pick(
 
 # Sparse Pick ==================================================================
 
-class SparsePickModel(torch.nn.Module):
-    def __init__(self, channels=512):
-        super(SparsePickModel, self).__init__()
-        self.encoder = ImageSequenceEncoder(
-            max_seq_length=1,
-            tokens_per_image=32*32,
-            num_read_tokens=8,
-            read_channels=2,
-            read_from_input=False,
-            channels=channels,
-        )
-    
-    def forward(self, x):
-        return self.encoder(x)
-
 def train_sparse_pick(
     num_epochs=100,
 ):
@@ -385,7 +371,7 @@ def train_sparse_pick(
     )
     train_loader = DataLoader(
         train_dataset,
-        batch_size=16,
+        batch_size=4,
         shuffle=True,
         num_workers=8,
     )
@@ -396,16 +382,28 @@ def train_sparse_pick(
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=16,
+        batch_size=4,
         shuffle=False,
         num_workers=8,
     )
     
     print('making model')
-    model = SparsePickModel().cuda()
+    config = TransformerConfig(
+        decoder_tokens = 8,
+        decode_input = False,
+        
+        decoder_channels = 2,
+        num_layers=6,
+        channels=512,
+        num_heads=8,
+    )
+    model = TokenMapSequenceEncoder(config).cuda()
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    #optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    train_config = TrainConfig()
+    optimizer = model.configure_optimizer(train_config)
     
+    running_loss = 0.
     for epoch in range(1, num_epochs+1):
         print('epoch: %i'%epoch)
         print('train')
@@ -419,7 +417,7 @@ def train_sparse_pick(
             
             snaps = snaps.permute(1, 0, 2).contiguous().cuda()
             #snap_locations = snaps[:,:,0] * 64 + snaps[:,:,1]
-            snap_locations = (snaps[:,:,:2] - 31.5) / 31.5
+            snap_locations = (snaps[:,:,:2] - 31.5) #/ 31.5
             snap_valid = snaps[:,:,[2]]#.view(8*b)
             snap_targets = snap_locations
             #snap_targets = torch.FloatTensor([
@@ -448,13 +446,14 @@ def train_sparse_pick(
             #    pdb.set_trace()
             
             #snap_loss = torch.sum(snap_loss * snap_valid)/torch.sum(snap_valid)
-            total_loss = total_loss + snap_loss
+            total_loss = total_loss + snap_loss # * 0.001
             
             total_loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             
-            iterate.set_description('s: %.04f'%float(snap_loss))
+            running_loss = running_loss * 0.9 + float(snap_loss) * 0.1
+            iterate.set_description('s: %.04f'%running_loss)
         
         torch.save(model.state_dict(), 'model_%04i.pt'%epoch)
         
@@ -520,8 +519,10 @@ def train_sparse_pick(
                     for j in range(8):
                         yy, xx = x[j, i].cpu().numpy()
                         print(xx, yy)
-                        yy = yy * 127.5 + 127.5
-                        xx = xx * 127.5 + 127.5
+                        #yy = yy * 127.5 + 127.5
+                        #xx = xx * 127.5 + 127.5
+                        yy = yy * 4 + 127.5
+                        xx = xx * 4 + 127.5
                         draw_crosshairs(image, xx, yy, 5, [0, 0, 255])
                     print('------')
                     
@@ -534,5 +535,5 @@ def train_sparse_pick(
 if __name__ == '__main__':
     #shorten_cache_data()
     #visualize()
-    train_dense_pick()
-    #train_sparse_pick()
+    #train_dense_pick()
+    train_sparse_pick()
