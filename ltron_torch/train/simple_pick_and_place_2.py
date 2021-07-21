@@ -14,9 +14,7 @@ import tqdm
 
 from ltron.visualization.drawing import block_upscale_image
 
-#from ltron_torch.models.positional_encoding import positional_encoding
-#from ltron_torch.models.transformer_masks import (
-#    blowfish, octopus, anemone, jellyfish)
+
 from ltron_torch.models.transformer import (
     TransformerConfig, TokenMapSequenceEncoder)
 
@@ -291,6 +289,119 @@ def train_sparse_pick():
             one_spots = torch.nonzero(x == 1, as_tuple=False)[::2][:,1:]
             two_spots = torch.nonzero(x == 2, as_tuple=False)[::2][:,1:]
             pick_target = torch.cat((one_spots, two_spots), dim=0)
+            
+            pick_loss = torch.nn.functional.cross_entropy(pick, pick_target)
+            total_loss = total_loss + pick_loss
+            
+            total_loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            pick_max = torch.argmax(pick, dim=1)
+            pick_correct = pick_max == pick_target
+            b = pick_correct.shape[0]
+            pick_accuracy = torch.sum(pick_correct).float() / (b * 2)
+            running_pick_accuracy = (
+                running_pick_accuracy * 0.9 + float(pick_accuracy) * 0.1)
+            
+            iterate.set_description('m: %.04f'%(running_pick_accuracy))
+
+
+# Randomized Sparse Pick =======================================================
+
+def train_randomized_sparse_pick():
+    print('training randomized_sparse pick')
+    print('making dataset')
+    train_dataset = SimpleDataset(train=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=64,
+        shuffle=True,
+        num_workers=8,
+    )
+    
+    #model = SparsePickModel().cuda()
+    config = TransformerConfig(
+        vocabulary=3,
+        map_height=8,
+        map_width=8,
+        decoder_tokens=2,
+        decode_input=False,
+        
+        block = 'transformer',
+        
+        channels=256,
+        residual_channels=256,
+        num_layers=6,
+        num_heads=4,
+        decoder_channels=8+8,
+        
+        positional_encoding_dimensions = 'single',
+        randomize_decoder_embeddings = True,
+        
+        embedding_dropout = 0.0,
+        attention_dropout = 0.5,
+        residual_dropout = 0.5,
+    )
+    print('building model')
+    model = TokenMapSequenceEncoder(config).cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
+    
+    optimizer = torch.optim.Adam(model.parameters(), 3e-4)
+    
+    running_pick_accuracy = 0.0
+    for epoch in range(1, 11):
+        print('epoch: %i'%epoch)
+        model.train()
+        iterate = tqdm.tqdm(train_loader)
+        for x, q, y in iterate:
+            x = x.cuda()
+            b, h, w = x.shape
+            
+            total_loss = 0.
+            
+            pick = model(x.view(1, b, h*w).permute(0,2,1))
+            b = pick.shape[1]
+            #pick_one = pick[0].view(b, 8, 2)
+            #pick_two = pick[1].view(b, 8, 2)
+            #pick = torch.cat((pick_one, pick_two), dim=0)
+            pick = pick.view(2, b, 8, 2)
+            pick_max = torch.argmax(pick, dim=2)
+            
+            one_spots = torch.nonzero(x == 1, as_tuple=False)[::2][:,1:]
+            two_spots = torch.nonzero(x == 2, as_tuple=False)[::2][:,1:]
+            pick_target = torch.stack((one_spots, two_spots), dim=0)
+            
+            pick_max = pick_max.view(2, 1, b, 2)
+            pick_truth = pick_target.view(1, 2, b, 2)
+            distance = torch.sum((pick_max - pick_truth)**2, dim=-1)
+            distance_order_same = distance[[0,1],[0,1]]
+            total_distance_same = torch.sum(distance_order_same, dim=0)
+            distance_order_flip = distance[[0,1],[1,0]]
+            total_distance_flip = torch.sum(distance_order_flip, dim=0)
+            total_distance = torch.stack(
+                (total_distance_same, total_distance_flip), dim=0)
+            
+            flip_locations = torch.argmin(total_distance, dim=0)
+            flip_locations = flip_locations.unsqueeze(-1).unsqueeze(-1)
+            
+            pick_orig = pick
+            pick_flip = pick[[1,0]]
+            pick = pick_orig * (1.-flip_locations) + pick_flip * flip_locations
+            
+            # This seems correct (but complicated!) at the moment.  Doesn't go
+            # above 72% with randomize_decoder_embeddings = True, but if set to
+            # False, hits 100% pretty quickly.  So it's either a bad idea or I
+            # implemented something wrong.  Could also have to do with the
+            # magnitude of the embeddings?
+            
+            # Actually this can just barely touch 90% with the "transformer"
+            # block instead of the "torch" block.
+            
+            # COME BACK TO THIS
+            
+            pick = pick.view(2 * b, 8, 2)
+            pick_target = pick_target.view(2*b, 2)
             
             pick_loss = torch.nn.functional.cross_entropy(pick, pick_target)
             total_loss = total_loss + pick_loss
@@ -813,7 +924,8 @@ if __name__ == '__main__':
         make_dataset(20000)
     #train_dense_pick()
     #train_sparse_pick()
+    train_randomized_sparse_pick()
     #train_ab_match()
     #train_sparse_pick_and_place()
     #train_super_sparse_pick_place_rotate()
-    train_sparse_pick_place_rotate()
+    #train_sparse_pick_place_rotate()

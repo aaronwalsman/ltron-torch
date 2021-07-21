@@ -1,12 +1,16 @@
 import torch
 from torch.nn import (
     Module, Sequential, Linear, Dropout, ReLU, GELU, MultiheadAttention,
-    Embedding, LayerNorm, TransformerEncoderLayer, Parameter
+    Embedding, LayerNorm, TransformerEncoderLayer, Parameter, Identity
 )
 from torch.optim import AdamW
 
+from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.multihead_attention import (
-    SparseMultiheadAttention, FixedMaskMultiheadAttention,
+    SlotAttention,
+    SparseMultiheadAttention,
+    FixedMaskMultiheadAttention,
+    SpatialMultiheadAttention,
 )
 from ltron_torch.models.positional_encoding import positional_encoding
 import ltron_torch.models.transformer_masks as transformer_masks
@@ -31,11 +35,11 @@ class TransformerConfig:
     
     mask = 'full'
     
-    block = 'gpt'
     attention_module = 'torch'
     nonlinearity = 'gelu'
     
-    num_layers = 12
+    block_type = 'gpt'
+    num_blocks = 12
     channels = 768
     residual_channels = None
     num_heads = 12
@@ -52,13 +56,31 @@ class TransformerConfig:
     
     init_weights = True
     
+    verbose = False
+    
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             assert hasattr(self, key)
             setattr(self, key, value)
+        
+        if self.residual_channels is None:
+            self.residual_channels = 4 * self.channels
+
+def print_verbose(verbose, statement):
+    if verbose:
+        print(statement)
+
+def make_block(config):
+    if config.block_type == 'gpt':
+        return Block(config)
+    elif config.block_type == 'slot':
+        return SlotBlock(config)
+    else:
+        raise NotImplementedError
 
 def make_attention_mask(config):
     if config.mask == 'full':
+        '''
         tokens = (
             config.map_height *
             config.map_width *
@@ -66,6 +88,8 @@ def make_attention_mask(config):
             config.decoder_tokens
         )
         return transformer_masks.full(tokens)
+        '''
+        return None
     elif config.mask == 'blowfish':
         return transformer_masks.blowfish(
             config.decoder_tokens,
@@ -91,30 +115,23 @@ def make_attention_module(config):
     elif config.attention_module == 'torch':
         return FixedMaskMultiheadAttention(
             mask, config.channels, config.num_heads, config.attention_dropout)
+    
+    elif config.attention_module == 'spatial':
+        return SpatialMultiheadAttention(
+            config.map_height*config.map_width,
+            config.channels,
+            config.num_heads,
+            config.attention_dropout,
+        )
+    
+    elif config.attention_module == 'none':
+        return Identity()
 
 def make_nonlinearity(config):
     if config.nonlinearity == 'relu':
         return ReLU()
     elif config.nonlinearity == 'gelu':
         return GELU()
-
-def make_block(config):
-    if config.block == 'transformer':
-        raise Exception('"transformer" block deprecated, use "gpt" instead')
-        return TransformerBlock(config)
-    elif config.block == 'gpt':
-        return GPTBlock(config)
-    elif config.block == 'torch':
-        raise Exception('"torch" block deprecated, use "gpt" instead')
-        residual_channels = config.residual_channels
-        if residual_channels is None:
-            residual_channels = 4 * config.channels
-        return TransformerEncoderLayer(
-            config.channels,
-            config.num_heads,
-            residual_channels,
-            config.residual_dropout,
-        )
 
 class EmbeddingBlock(Module):
     def __init__(self, config):
@@ -136,6 +153,8 @@ class EmbeddingBlock(Module):
         # try the Transformer-XL thing.
         
         self.learned_positional_encoding = config.learned_positional_encoding
+        print_verbose(config.verbose, 'making positional encoding')
+        
         if self.learned_positional_encoding:
             if config.positional_encoding_dimensions == 'multi':
                 p = torch.zeros(
@@ -154,7 +173,7 @@ class EmbeddingBlock(Module):
             else:
                 raise NotImplementedError
             
-            self.positional_encoding = Parameter(p)
+            self.positional_encoding = NoWeightDecayParameter(p)
         else:
             if config.positional_encoding_dimensions == 'multi':
                 p = positional_encoding(
@@ -174,6 +193,8 @@ class EmbeddingBlock(Module):
                 raise NotImplementedError
             
             self.register_buffer('positional_encoding', p)
+        
+        print_verbose(config.verbose, 'finished making positional encoding')
         
         self.dropout = Dropout(config.embedding_dropout)
     
@@ -200,44 +221,15 @@ class EmbeddingBlock(Module):
         
         return x
 
-class TransformerBlock(Module):
+class Block(Module):
     def __init__(self, config):
-        super(TransformerBlock, self).__init__()
-        residual_channels = config.residual_channels
-        if residual_channels is None:
-            residual_channels = config.channels*4
+        super(Block, self).__init__()
         
-        self.attention_residual = Sequential(
-            make_attention_module(config),
-            Dropout(config.residual_dropout),
-        )
-        self.attention_norm = LayerNorm(config.channels)
-        
-        self.projection_residual = Sequential(
-            Linear(config.channels, residual_channels),
-            make_nonlinearity(config),
-            Dropout(config.residual_dropout),
-            Linear(residual_channels, config.channels),
-            Dropout(config.residual_dropout),
-        )
-        self.residual_norm = LayerNorm(config.channels)
-    
-    def forward(self, x):
-        r = self.attention_residual(x)
-        x = x + r
-        x = self.attention_norm(x)
-        r = self.projection_residual(x)
-        x = x + r
-        x = self.residual_norm(x)
-        
-        return x
-
-class GPTBlock(Module):
-    def __init__(self, config):
-        super(GPTBlock, self).__init__()
-        residual_channels = config.residual_channels
-        if residual_channels is None:
-            residual_channels = config.channels*4
+        print_verbose(config.verbose, 'building block with:')
+        print_verbose(
+            config.verbose, '  channels: %i'%config.channels)
+        print_verbose(
+            config.verbose, '  residual_channels: %i'%config.residual_channels)
         
         self.attention_residual = Sequential(
             LayerNorm(config.channels),
@@ -245,9 +237,9 @@ class GPTBlock(Module):
         )
         self.projection_residual = Sequential(
             LayerNorm(config.channels),
-            Linear(config.channels, residual_channels),
+            Linear(config.channels, config.residual_channels),
             make_nonlinearity(config),
-            Linear(residual_channels, config.channels),
+            Linear(config.residual_channels, config.channels),
             Dropout(config.residual_dropout),
         )
     
@@ -256,6 +248,43 @@ class GPTBlock(Module):
         x = x + self.projection_residual(x)
         
         return x
+
+class SlotBlock(Module):
+    def __init__(self, config):
+        super(SlotBlock, self).__init__()
+        self.decoder_tokens = config.decoder_tokens
+        
+        self.layernorm = LayerNorm(config.channels)
+        self.attention = SlotAttention(
+            config.channels,
+            config.num_heads,
+            config.attention_dropout,
+            config.residual_dropout,
+        )
+        
+        self.projection_residual = Sequential(
+            LayerNorm(config.channels),
+            Linear(config.channels, config.residual_channels),
+            make_nonlinearity(config),
+            Linear(config.residual_channels, config.channels),
+            Dropout(config.residual_dropout),
+        )
+    
+    def forward(self, x):
+        s = x[:self.decoder_tokens]
+        d = x[self.decoder_tokens:]
+        
+        rs = self.layernorm(s)
+        rd = self.layernorm(d)
+        r = self.attention(rs, rd)
+        s = s + r
+        
+        s = s + self.projection_residual(s)
+        
+        x = torch.cat((s,d), dim=0)
+        
+        return x
+
 
 # TODO: Gated block from Stabilizing Transformers For Reinforcement Learning
 
@@ -282,12 +311,17 @@ class TokenMapSequenceEncoder(Module):
     def __init__(self, config):
         super(TokenMapSequenceEncoder, self).__init__()
         
+        print_verbose(config.verbose, 'building transformer embedding block')
         self.embedding = EmbeddingBlock(config)
-        self.blocks = Sequential(
-            *[make_block(config) for _ in range(config.num_layers)])
         
+        print_verbose(config.verbose, 'building transformer main blocks')
+        self.blocks = Sequential(
+            *[make_block(config) for _ in range(config.num_blocks)])
+        
+        print_verbose(config.verbose, 'building transformer read head')
         self.read_head = ReadHead(config)
         
+        print_verbose(config.verbose, 'initializing weights')
         if config.init_weights:
             self.apply(self._init_weights)
     
@@ -325,7 +359,11 @@ class TokenMapSequenceEncoder(Module):
                     if module_name else param_name
                 )
                 
-                if param_name.endswith('bias'):
+                if isinstance(param, NoWeightDecayParameter):
+                    no_decay_names.add(full_param_name)
+                    no_decay_params.append(param)
+                    print('caught: %s'%full_param_name)
+                elif param_name.endswith('bias'):
                     no_decay_names.add(full_param_name)
                     no_decay_params.append(param)
                 elif param_name.endswith('weight') and is_decay_module:
@@ -335,9 +373,9 @@ class TokenMapSequenceEncoder(Module):
                     no_decay_names.add(full_param_name)
                     no_decay_params.append(param)
         
-        if self.embedding.learned_positional_encoding:
-            no_decay_names.add('embedding.position_encoding')
-            no_decay_params.append(self.embedding.positional_encoding)
+        #if self.embedding.learned_positional_encoding:
+        #    no_decay_names.add('embedding.position_encoding')
+        #    no_decay_params.append(self.embedding.positional_encoding)
         
         param_intersection = decay_names & no_decay_names
         param_union = decay_names | no_decay_names

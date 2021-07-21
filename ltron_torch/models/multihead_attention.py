@@ -4,6 +4,64 @@ from torch.nn import Module, MultiheadAttention, Linear, Dropout
 
 import ltron_torch.models.transformer_masks as transformer_masks
 
+'''
+class CustomMultiheadAttentionThing(Module):
+    def __init__(self, channels, num_sequence_tokens, num_step_tokens, num_spatial_tokens):
+        super(BlockMultiheadAttention, self).__init__()
+        self.q_linear = Linear(channels, channels)
+        self.k_linear = Linear(channels, channels)
+        self.v_linear = Linear(channels, channels)
+        
+        self.num_heads = num_heads
+        self.blocks = blocks
+        self.register_buffer('mask', mask)
+    
+    def forward(self, x):
+        for b1 in blocks:
+            for b2 in blocks:
+                F.multi_head_attention_forward(
+                    q, k, v
+'''
+
+class SlotAttention(Module):
+    def __init__(self, channels, n_heads, attention_dropout, residual_dropout):
+        super(SlotAttention, self).__init__()
+        self.query = Linear(channels, channels)
+        self.key = Linear(channels, channels)
+        self.value = Linear(channels, channels)
+        self.attention_dropout = Dropout(attention_dropout)
+        self.residual_dropout = Dropout(residual_dropout)
+        self.n_heads = n_heads
+    
+    def forward(self, s, d):
+        ts, b, hc = s.shape
+        td = d.shape[0]
+        h = self.n_heads
+        c = hc // h
+        q = self.query(s).view(ts, b, h, c)
+        k = self.key(d).view(td, b, h, c)
+        v = self.value(d).view(1, td, b, h, c)
+        
+        a = torch.einsum('sbhc,dbhc->sdbh', q, k) / c**0.5
+        #raw_a = a
+        a = torch.softmax(a, dim=0).view(ts, td, b, h, 1)
+        a = self.attention_dropout(a)
+        n = torch.sum(a, dim=1) + 1e-3
+        v = torch.sum(a * v, dim=1) / n
+        
+        #print('---------------------')
+        #print(n[:,0,0,0])
+        #qnorm = torch.norm(q, dim=-1)
+        #print(qnorm[:,0,0])
+        #knorm = torch.norm(k, dim=-1)
+        #print(knorm[:,0,0])
+        #print(raw_a[:,:,0,0])
+        
+        v = v.view(ts, b, hc)
+        v = self.residual_dropout(v)
+        
+        return v
+
 def sparse_multihead_attention(
     q, k, v, n_head, q_id, k_id, dropout=0, training=False
 ):
@@ -119,14 +177,31 @@ def mingpt_multihead_attention(
     return y.permute(1,0,2)
 
 class FixedMaskMultiheadAttention(Module):
-    def __init__(self, mask, embed_dim, *args, **kwargs):
+    def __init__(self, mask, *args, **kwargs):
         super(FixedMaskMultiheadAttention, self).__init__()
-        self.register_buffer('mask', mask)
-        self.attention = MultiheadAttention(embed_dim, *args, **kwargs)
+        if mask is None:
+            self.mask = mask
+        else:
+            self.register_buffer('mask', mask)
+        self.attention = MultiheadAttention(*args, **kwargs)
     
     def forward(self, x):
         return self.attention(x, x, x, attn_mask=self.mask)[0]
+
+class SpatialMultiheadAttention(Module):
+    def __init__(self, spatial_tokens, *args, **kwargs):
+        super(SpatialMultiheadAttention, self).__init__()
+        self.spatial_tokens = spatial_tokens
+        self.attention = MultiheadAttention(*args, **kwargs)
     
+    def forward(self, x):
+        s, b, c = x.shape
+        assert s%self.spatial_tokens == 0
+        x = x.view(s//self.spatial_tokens, self.spatial_tokens, b, c)
+        x = x.permute(1, 0, 2, 3).contiguous().view(self.spatial_tokens, -1, c)
+        x = self.attention(x, x, x)[0]
+        x = x.view(self.spatial_tokens, -1, b, c).permute(1, 0, 2, 3)
+        return x
 '''
 class MinGPTMultiheadAttention(Module):
     def __init__(self, n_embd, n_head, attn_pdrop, resid_pdrop, mask):

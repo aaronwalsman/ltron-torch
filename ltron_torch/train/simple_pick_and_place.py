@@ -2,25 +2,24 @@
 import random
 import os
 import glob
+import argparse
+
+import numpy
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-import numpy
-
-from PIL import Image
-
 import tqdm
 
-from ltron.visualization.drawing import block_upscale_image
-
 from ltron_torch.models.positional_encoding import positional_encoding
+from ltron_torch.models.transformer import (
+    TrainConfig, TransformerConfig, TokenMapSequenceEncoder)
 
 # Make Dataset =================================================================
 
 dataset_path = './simple_pick_and_place'
 
-def make_dataset(num_sequences):
+def make_dataset(num_sequences=20000):
     os.makedirs(dataset_path)
     for i in tqdm.tqdm(range(num_sequences)):
         target, brick_maps, actions = make_sequence()
@@ -154,72 +153,16 @@ def get_num_model_parameters(model):
     return sum(parameter.numel() for parameter in model.parameters())
 
 
-# Mask Utils ===================================================================
-def blowfish_mask(h, n, s):
-    '''
-    h : hidden tokens
-    n : spatial tokens
-    s : sequence length
-    '''
-    num_tokens = h + n * s
-    mask = ~torch.eye(num_tokens, dtype=torch.bool)
-    mask[:h] = False
-    mask[:,:h] = False
-    
-    return mask
-
-def octopus_mask(h, n, s):
-    '''
-    h : hidden tokens
-    n : spatial tokens
-    s : sequence length
-    '''
-    mask = blowfish_mask(h, n, s)
-    block = ~torch.eye(n, dtype=torch.bool)
-    for i in range(s):
-        for j in range(s):
-            if i == j:
-                continue
-            mask[h+i*n:h+(i+1)*n, h+j*n:h+(j+1)*n] = block
-    
-    return mask
-
-def anenome_mask(n, s):
-    num_tokens = n * (1+s)
-    mask = ~torch.eye(num_tokens, dtype=torch.bool)
-    mask[:n, :n] = False
-    block = ~torch.eye(n, dtype=torch.bool)
-    for l in range(1, s+1):
-        mask[:n, l*n:(l+1)*n] = block
-        mask[l*n:(l+1)*n, :n] = block
-    
-    return mask
-
-def jellyfish_mask(n, s):
-    '''
-    One head bundle of tokens that can all talk to each other
-    Each leg grows out of one head token and talk to the head token
-    '''
-    mask = anenome_mask(n, s)
-    block = ~torch.eye(n, dtype=torch.bool)
-    for i in range(1, s+1):
-        for j in range(1, s+1):
-            if i == j:
-                continue
-            mask[i*n:(i+1)*n, j*n:(j+1)*n] = block
-    
-    return mask
-
 # Dense Pick ===================================================================
 
-class DensePickModel(torch.nn.Module):
+class BespokeDensePickModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(DensePickModel, self).__init__()
+        super(BespokeDensePickModel, self).__init__()
         self.register_buffer(
-            'sequence_encoding',
+            'positional_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
         )
         
@@ -237,11 +180,10 @@ class DensePickModel(torch.nn.Module):
         self.pick_linear = torch.nn.Linear(channels, 3)
     
     def forward(self, x):
-        b, h, w = x.shape
-        
-        x = x.view(b, h*w).permute(1,0)
+        s, hw, b = x.shape
+        x = x.view(s*hw, b)
         x = self.in_embedding(x)
-        x = x + self.sequence_encoding[:h*w]
+        x = x + self.positional_encoding[:hw]
         
         x = self.transformer(x)
         
@@ -249,7 +191,7 @@ class DensePickModel(torch.nn.Module):
         
         return pick
 
-def train_dense_pick():
+def train_dense_pick(bespoke=False):
     print('training dense pick')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
@@ -260,11 +202,32 @@ def train_dense_pick():
         num_workers=8,
     )
     
-    print('building model')
-    model = DensePickModel().cuda()
+    if bespoke:
+        print('building bespoke model')
+        model = BespokeDensePickModel().cuda()
+        optimizer = torch.optim.Adam(model.parameters(), 3e-4)
+    else:
+        print('building general model')
+        config = TransformerConfig(
+            vocabulary=3,
+            map_height=8,
+            map_width=8,
+            decoder_tokens=0,
+            decode_input=True,
+            
+            num_layers=6,
+            channels = 256,
+            residual_channels = 256,
+            num_heads = 4,
+            decoder_channels = 3,
+            
+            learned_positional_encoding = True,
+            init_weights = True,
+        )
+        model = TokenMapSequenceEncoder(config).cuda()
+        train_config = TrainConfig()
+        optimizer = model.configure_optimizer(train_config)
     print('parameters: %i'%get_num_model_parameters(model))
-    
-    optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
     running_pick_accuracy = 0.0
     for epoch in range(1, 6):
@@ -273,15 +236,16 @@ def train_dense_pick():
         iterate = tqdm.tqdm(train_loader)
         for x, q, y in iterate:
             x = x.cuda()
+            b, h, w = x.shape
             
             total_loss = 0.
             
-            pick = model(x)
+            pick = model(x.view(b, h*w).permute(1,0).unsqueeze(0))
             pick = pick.permute(1,2,0)
             b = pick.shape[0]
             pick = pick.reshape(b,3,8,8)
-            pick_target = torch.zeros((b,8,8), dtype=torch.long)
             
+            pick_target = torch.zeros((b,8,8), dtype=torch.long)
             one_spots = torch.nonzero(x == 1, as_tuple=False)[::2][:,1:]
             pick_target[torch.arange(b), one_spots[:,0], one_spots[:,1]] = 1
             two_spots = torch.nonzero(x == 2, as_tuple=False)[::2][:,1:]
@@ -307,12 +271,12 @@ def train_dense_pick():
 
 # Sparse Pick ==================================================================
 
-class SparsePickModel(torch.nn.Module):
+class BespokeSparsePickModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(SparsePickModel, self).__init__()
+        super(BespokeSparsePickModel, self).__init__()
         self.register_buffer(
             'sequence_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
@@ -333,14 +297,13 @@ class SparsePickModel(torch.nn.Module):
         self.pick_linear = torch.nn.Linear(channels, 8+8)
     
     def forward(self, x):
-        b, h, w = x.shape
-        
-        x = x.view(b, h*w).permute(1,0)
+        s, hw, b = x.shape
+        x = x.view(s*hw, b)
         x = self.x_embedding(x)
         c = x.shape[-1]
         d = self.d_embedding(torch.arange(2).cuda()).unsqueeze(1).expand(2,b,c)
         dx = torch.cat((d,x), dim=0)
-        dx = dx + self.sequence_encoding[:2+h*w]
+        dx = dx + self.sequence_encoding[:2+hw]
         
         dx = self.transformer(dx)
         
@@ -348,7 +311,7 @@ class SparsePickModel(torch.nn.Module):
         
         return pick
 
-def train_sparse_pick():
+def train_sparse_pick(bespoke=False):
     print('training sparse pick')
     print('making dataset')
     train_dataset = SimpleDataset(train=True)
@@ -359,11 +322,35 @@ def train_sparse_pick():
         num_workers=8,
     )
     
-    print('building model')
-    model = SparsePickModel().cuda()
+    if bespoke:
+        print('building bespoke model')
+        model = BespokeSparsePickModel().cuda()
+        optimizer = torch.optim.Adam(model.parameters(), 3e-4)
+    else:
+        print('building general model')
+        config = TransformerConfig(
+            vocabulary=3,
+            map_height=8,
+            map_width=8,
+            decoder_tokens=2,
+            decode_input=False,
+            
+            channels=256,
+            residual_channels=256,
+            num_layers=6,
+            num_heads=4,
+            decoder_channels=8+8,
+            
+            learned_positional_encoding = True,
+            
+            embedding_dropout = 0.0,
+            attention_dropout = 0.5,
+            residual_dropout = 0.5,
+        )
+        model = TokenMapSequenceEncoder(config).cuda()
+        train_config = TrainConfig()
+        optimizer = model.configure_optimizer(train_config)
     print('parameters: %i'%get_num_model_parameters(model))
-
-    optimizer = torch.optim.Adam(model.parameters(), 3e-4)
     
     running_pick_accuracy = 0.0
     for epoch in range(1, 6):
@@ -373,10 +360,11 @@ def train_sparse_pick():
         iterate = tqdm.tqdm(train_loader)
         for x, q, y in iterate:
             x = x.cuda()
+            b, h, w = x.shape
             
             total_loss = 0.
             
-            pick = model(x)
+            pick = model(x.view(1, b, h*w).permute(0,2,1))
             b = pick.shape[1]
             pick_one = pick[0].view(b, 8, 2)
             pick_two = pick[1].view(b, 8, 2)
@@ -404,12 +392,12 @@ def train_sparse_pick():
 
 # AB Match =====================================================================
 
-class ABMatchModel(torch.nn.Module):
+class BespokeABMatchModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(ABMatchModel, self).__init__()
+        super(BespokeABMatchModel, self).__init__()
         self.register_buffer(
             'sequence_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
@@ -443,13 +431,13 @@ class ABMatchModel(torch.nn.Module):
         q = q + self.xq_embedding.weight[1].unsqueeze(0).unsqueeze(1)
         
         # sponge mask
-        mask = torch.ones((h*w*2, h*w*2), dtype=torch.bool)
-        mask[:h*w,:h*w] = False
-        mask[h*w:,h*w:] = False
-        mask[torch.arange(h*w, h*w*2), torch.arange(h*w)] = False
-        mask[torch.arange(h*w), torch.arange(h*w,h*w*2)] = False
-        mask = mask.cuda()
-        #mask = None
+        #mask = torch.ones((h*w*2, h*w*2), dtype=torch.bool)
+        #mask[:h*w,:h*w] = False
+        #mask[h*w:,h*w:] = False
+        #mask[torch.arange(h*w, h*w*2), torch.arange(h*w)] = False
+        #mask[torch.arange(h*w), torch.arange(h*w,h*w*2)] = False
+        #mask = mask.cuda()
+        mask = None
         
         qx = torch.cat((q,x), dim=0)
         qx = self.transformer(qx, mask=mask)
@@ -470,7 +458,7 @@ def train_ab_match():
     )
     
     print('building model')
-    model = ABMatchModel().cuda()
+    model = BespokeABMatchModel().cuda()
     print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
@@ -511,12 +499,12 @@ def train_ab_match():
 
 # Sparse Pick and Place ========================================================
 
-class SparsePickAndPlaceModel(torch.nn.Module):
+class BespokeSparsePickAndPlaceModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(SparsePickAndPlaceModel, self).__init__()
+        super(BespokeSparsePickAndPlaceModel, self).__init__()
         self.register_buffer(
             'sequence_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
@@ -553,8 +541,7 @@ class SparsePickAndPlaceModel(torch.nn.Module):
         dqx = torch.cat((d,q,x), dim=0)
         dqx = dqx + self.sequence_encoding[:2+h*w+h*w]
         
-        mask = blowfish_mask(2, h*w, 2).cuda()
-        #mask = None
+        mask = None
         
         dqx = self.transformer(dqx, mask=mask)
         
@@ -574,7 +561,7 @@ def train_sparse_pick_and_place():
     )
     
     print('building model')
-    model = SparsePickAndPlaceModel().cuda()
+    model = BespokeSparsePickAndPlaceModel().cuda()
     print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
@@ -639,12 +626,12 @@ The model has to recognize globally which piece is the one to move next, then al
 
 This begs the question: how do we assign labels to these amorphous sparse tokens?  We can do hungarian matching ala DETR or... something else we figure out.  Right now we have the benefit of only ever having two distinct bricks, so assigning a token to each is fine.
 '''
-class SuperSparsePickPlaceRotateModel(torch.nn.Module):
+class BespokeSuperSparsePickPlaceRotateModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(SuperSparsePickPlaceRotateModel, self).__init__()
+        super(BespokeSuperSparsePickPlaceRotateModel, self).__init__()
         self.register_buffer(
             'sequence_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
@@ -681,7 +668,6 @@ class SuperSparsePickPlaceRotateModel(torch.nn.Module):
         dqx = torch.cat((d,q,x), dim=0)
         dqx = dqx + self.sequence_encoding[:1+h*w+h*w]
         
-        #mask = blowfish_mask(1, h*w, 2).cuda()
         mask = None
         
         dqx = self.transformer(dqx, mask=mask)
@@ -702,7 +688,7 @@ def train_super_sparse_pick_place_rotate():
     )
     
     print('building model')
-    model = SuperSparsePickPlaceRotateModel().cuda()
+    model = BespokeSuperSparsePickPlaceRotateModel().cuda()
     print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
@@ -747,12 +733,12 @@ def train_super_sparse_pick_place_rotate():
 
 # Sparse Pick Place Rotate =====================================================
 
-class SparsePickPlaceRotateModel(torch.nn.Module):
+class BespokeSparsePickPlaceRotateModel(torch.nn.Module):
     def __init__(
         self,
         channels=256,
     ):
-        super(SparsePickPlaceRotateModel, self).__init__()
+        super(BespokeSparsePickPlaceRotateModel, self).__init__()
         self.register_buffer(
             'sequence_encoding',
             positional_encoding(channels, 5000).unsqueeze(1)
@@ -789,8 +775,7 @@ class SparsePickPlaceRotateModel(torch.nn.Module):
         dqx = torch.cat((d,q,x), dim=0)
         dqx = dqx + self.sequence_encoding[:2+h*w+h*w]
         
-        mask = octopus_mask(2, h*w, 2).cuda()
-        #mask = None
+        mask = None
         
         dqx = self.transformer(dqx, mask=mask)
         
@@ -810,7 +795,7 @@ def train_sparse_pick_place_rotate():
     )
     
     print('building model')
-    model = SparsePickPlaceRotateModel().cuda()
+    model = BespokeSparsePickPlaceRotateModel().cuda()
     print('parameters: %i'%get_num_model_parameters(model))
     
     optimizer = torch.optim.Adam(model.parameters(), 3e-4)
@@ -897,10 +882,6 @@ def train_sparse_pick_place_rotate():
             optimizer.step()
             optimizer.zero_grad()
             
-            #if epoch == 2:
-            #    import pdb
-            #    pdb.set_trace()
-            
             pick_place_max = torch.argmax(one_two_locations, dim=1)
             pick_place_correct = pick_place_max == pick_place_target
             b = pick_place_correct.shape[0]
@@ -925,12 +906,24 @@ def train_sparse_pick_place_rotate():
 
 # Run ==========================================================================
 
+parser = argparse.ArgumentParser()
+
+parser.add_argument('experiment', type=str)
+parser.add_argument('--bespoke', action='store_true')
+
 if __name__ == '__main__':
-    if not os.path.exists(dataset_path):
-        make_dataset(20000)
-    #train_dense_pick()
-    #train_sparse_pick()
-    #train_ab_match()
-    #train_sparse_pick_and_place()
-    #train_super_sparse_pick_place_rotate()
-    train_sparse_pick_place_rotate()
+    
+    args = parser.parse_args()
+    
+    experiment_functions = {
+        'make_dataset' : make_dataset,
+        'dense_pick' : train_dense_pick,
+        'sparse_pick' : train_sparse_pick,
+        'ab_match' : train_ab_match,
+        'sparse_pick_and_place' : train_sparse_pick_and_place,
+        'sparse_pick_place_rotate' : train_sparse_pick_place_rotate,
+    }
+    
+    assert args.experiment in experiment_functions
+    
+    experiment_functions[args.experiment](bespoke=args.bespoke)

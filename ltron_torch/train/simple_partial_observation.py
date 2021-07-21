@@ -181,11 +181,15 @@ def compress_dataset(epochs=10):
         decoder_tokens=4,
         decode_input=False,
         
-        num_layers=4,
+        block_type='gpt',
+        num_blocks=4,
         channels=256,
-        num_heads=4,
+        num_heads=1,
         learned_positional_encoding=True,
         decoder_channels=256,
+        
+        #attention_dropout=0,
+        #residual_dropout=0,
     )
     
     decoder_config = TransformerConfig(
@@ -195,9 +199,10 @@ def compress_dataset(epochs=10):
         map_width=1,
         decode_input=False,
         
-        num_layers=4,
+        block_type='gpt',
+        num_blocks=4,
         channels=256,
-        num_heads=4,
+        num_heads=1,
         learned_positional_encoding=True,
         decoder_channels=2,
     )
@@ -223,13 +228,18 @@ def compress_dataset(epochs=10):
             #x_in = x
             #x = torch.zeros(x.shape, dtype=torch.long)
             t, b = x.shape
-            b = 2
+            #b = 2
             x = torch.zeros(64, b, dtype=torch.long)
-            #hw = torch.randint(1024, (b,))
+            hw = torch.randint(64, (b,))
             #hw = torch.randint(3, (b,))
             #hw = torch.zeros(b).long()
-            x[0,0] = 1
-            x[1,1] = 1
+            #x[0,0] = 1
+            #x[1,1] = 1
+            x[hw,range(b)] = 1
+            hw = torch.randint(64, (b,))
+            x[hw,range(b)] = 1
+            hw = torch.randint(64, (b,))
+            x[hw, range(b)] = 1
             x_in = x
             
             x = x.cuda()
@@ -276,7 +286,7 @@ def compress_dataset(epochs=10):
             iterate.set_description(
                 'l: %.04f'%(running_loss))
             
-            if i % 1 == 0:
+            if i % 64 == 0:
                 #in0 = x_in[:,0].view(32,32).cpu().numpy()
                 in0 = x_in[:,0].view(8,8).cpu().numpy()
                 print_scene(in0)

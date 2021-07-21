@@ -13,7 +13,8 @@ import PIL.Image as Image
 
 import splendor.masks as masks
 
-from ltron.visualization.drawing import block_upscale_image, draw_crosshairs
+from ltron.visualization.drawing import (
+    block_upscale_image, draw_crosshairs, line)
 from ltron.hierarchy import len_hierarchy
 from ltron.dataset.paths import get_dataset_paths
 
@@ -62,7 +63,7 @@ class CachedDataset(Dataset):
         # ----------------------------------------------------------------------
         print('loading dataset')
         cached_data = numpy.load(
-            './dvae_small_cache.npz', allow_pickle=True)['arr_0'].item()
+            '../dvae_small_cache.npz', allow_pickle=True)['arr_0'].item()
         subset=1000
         # ----------------------------------------------------------------------
         #print('loading dataset')
@@ -85,12 +86,13 @@ class CachedDataset(Dataset):
     
     def __getitem__(self, index):
         x_path = self.frame_order[index]
-        y_path = x_path.replace(
+        q_path = x_path.replace(
             'color_x_', 'color_y_')[:-9] + '.png'
         x = self.data['frames'][x_path]
-        q = self.data['frames'][y_path]
+        q = self.data['frames'][q_path]
         
-        snaps = torch.zeros((8,3), dtype=torch.long)
+        x_snaps = torch.zeros((8,3), dtype=torch.long)
+        q_snaps = torch.zeros((8,3), dtype=torch.long)
         
         for i, snap in enumerate((
             (1,5),
@@ -104,11 +106,17 @@ class CachedDataset(Dataset):
         )):
             if snap in self.data['snaps'][x_path]:
                 yy, xx = self.data['snaps'][x_path][snap]
-                snaps[i] = torch.LongTensor([yy,xx,1])
+                x_snaps[i] = torch.LongTensor([yy,xx,1])
             else:
-                snaps[i] = torch.LongTensor([0,0,0])
+                x_snaps[i] = torch.LongTensor([0,0,0])
+            
+            if snap in self.data['snaps'][q_path]:
+                yy, xx = self.data['snaps'][q_path][snap]
+                q_snaps[i] = torch.LongTensor([yy,xx,1])
+            else:
+                q_snaps[i] = torch.LongTensor([0,0,0])
         
-        return x, q, snaps, x_path
+        return x, q, x_snaps, q_snaps, x_path, q_path
 
 
 def visualize():
@@ -230,16 +238,16 @@ def train_dense_pick(
         print('train')
         model.train()
         iterate = tqdm.tqdm(train_loader)
-        for x, q, snaps, paths in iterate:
+        for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
             x = x.cuda()
             
             b, h, w = x.shape
             x = x.view(b, h*w).permute(1,0).unsqueeze(0)
             
-            snaps = snaps.permute(1, 0, 2).contiguous().cuda()
+            x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
             #snap_locations = (snaps[:,:,:2] - 31.5) / 31.5
-            snap_locations = snaps[:,:,:2]
-            snap_valid = snaps[:,:,[2]]#.view(8*b)
+            snap_locations = x_snaps[:,:,:2]
+            snap_valid = x_snaps[:,:,[2]]#.view(8*b)
             
             #x = model(x, mask=attention_mask)
             x = model(x)
@@ -277,7 +285,7 @@ def train_dense_pick(
         with torch.no_grad():
             model.eval()
             iterate = tqdm.tqdm(test_loader)
-            for x, q, snaps, paths in iterate:
+            for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
                 x = x.cuda()
                 
                 b, h, w = x.shape
@@ -289,11 +297,11 @@ def train_dense_pick(
                 #x = x.view(8, b, 64, 64)
                 #snap_maps = torch.sum(x, dim=0).unsqueeze(-1).cpu().numpy()
                 
-                snaps = snaps.permute(1, 0, 2).contiguous().cuda()
-                snap_locations = snaps[:,:,:2]
+                x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
+                snap_locations = x_snaps[:,:,:2]
                 
                 for i in range(b):
-                    path = paths[i]
+                    path = x_paths[i]
                     image = numpy.array(Image.open(path))
                     
                     #x_map = torch.softmax(x[:,i], dim=-1).cpu().numpy()
@@ -371,7 +379,7 @@ def train_sparse_pick(
     )
     train_loader = DataLoader(
         train_dataset,
-        batch_size=4,
+        batch_size=8,
         shuffle=True,
         num_workers=8,
     )
@@ -382,7 +390,7 @@ def train_sparse_pick(
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=4,
+        batch_size=8,
         shuffle=False,
         num_workers=8,
     )
@@ -399,7 +407,6 @@ def train_sparse_pick(
     )
     model = TokenMapSequenceEncoder(config).cuda()
     
-    #optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
     train_config = TrainConfig()
     optimizer = model.configure_optimizer(train_config)
     
@@ -409,43 +416,22 @@ def train_sparse_pick(
         print('train')
         model.train()
         iterate = tqdm.tqdm(train_loader)
-        for x, q, snaps, paths in iterate:
+        for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
             x = x.cuda()
             
             b, h, w = x.shape
             x = x.view(b, h*w).permute(1,0).unsqueeze(0)
             
-            snaps = snaps.permute(1, 0, 2).contiguous().cuda()
-            #snap_locations = snaps[:,:,0] * 64 + snaps[:,:,1]
-            snap_locations = (snaps[:,:,:2] - 31.5) #/ 31.5
-            snap_valid = snaps[:,:,[2]]#.view(8*b)
+            x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
+            snap_locations = (x_snaps[:,:,:2] - 31.5) #/ 31.5
+            snap_valid = x_snaps[:,:,[2]]#.view(8*b)
             snap_targets = snap_locations
-            #snap_targets = torch.FloatTensor([
-            #    [-1.0,-1.0],
-            #    [-0.8,-0.8],
-            #    [-0.6,-0.6],
-            #    [-0.4,-0.4],
-            #    [-0.2,-0.2],
-            #    [ 0.0, 0.0],
-            #    [ 0.2, 0.2],
-            #    [ 0.4, 0.4]]).unsqueeze(1).expand(8,b,2).cuda()
             
             x = model(x)
             
             total_loss = 0.
             
-            #snap_loss = torch.nn.functional.mse_loss(
-            #    x, snap_targets, reduction='none')
-            #snap_loss = torch.nn.functional.mse_loss(x, snap_targets)
             snap_loss = torch.nn.functional.smooth_l1_loss(x, snap_targets)
-            #snap_loss = torch.nn.functional.cross_entropy(
-            #    x.view(8*b,4096), snap_locations.view(8*b), reduction='none')
-            
-            #if epoch == 2:
-            #    import pdb
-            #    pdb.set_trace()
-            
-            #snap_loss = torch.sum(snap_loss * snap_valid)/torch.sum(snap_valid)
             total_loss = total_loss + snap_loss # * 0.001
             
             total_loss.backward()
@@ -460,7 +446,7 @@ def train_sparse_pick(
         with torch.no_grad():
             model.eval()
             iterate = tqdm.tqdm(test_loader)
-            for x, q, snaps, paths in iterate:
+            for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
                 x = x.cuda()
                 
                 b, h, w = x.shape
@@ -468,27 +454,18 @@ def train_sparse_pick(
                 
                 x = model(x)
                 
-                #x = torch.softmax(x, dim=-1)
-                #x = x.view(8, b, 64, 64)
-                #snap_maps = torch.sum(x, dim=0).unsqueeze(-1).cpu().numpy()
-                
-                snaps = snaps.permute(1, 0, 2).contiguous().cuda()
-                snap_locations = snaps[:,:,0] * 64 + snaps[:,:,1]
+                x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
+                snap_locations = x_snaps[:,:,0] * 64 + x_snaps[:,:,1]
                 
                 for i in range(b):
-                    path = paths[i]
+                    path = x_paths[i]
                     image = numpy.array(Image.open(path))
-                    
-                    #snap_map = snap_maps[i]
-                    #snap_map = block_upscale_image(snap_map, 256, 256)
-                    #image = image * (1. - snap_map) + [0,0,255] * snap_map
                     
                     neg_path = path.replace(
                         'color_x_', 'snap_neg_').replace(
                         '.png', '.npz')
                     neg_snap_map = numpy.load(neg_path, allow_pickle=True)
                     neg_snap_map_i = neg_snap_map['arr_0'][:,:,0]
-                    #neg_snap_map_s = neg_snap_map['arr_0'][:,:,1]
                     neg_snap_map = (neg_snap_map_i == 2) | (neg_snap_map_i == 3)
                     
                     pos_path = path.replace(
@@ -496,7 +473,6 @@ def train_sparse_pick(
                         '.png', '.npz')
                     pos_snap_map = numpy.load(pos_path, allow_pickle=True)
                     pos_snap_map_i = pos_snap_map['arr_0'][:,:,0]
-                    #pos_snap_map_s = pos_snap_map['arr_0'][:,:,1]
                     pos_snap_map = pos_snap_map_i == 1
                     
                     gt_dense_snap = neg_snap_map | pos_snap_map
@@ -518,13 +494,9 @@ def train_sparse_pick(
                     
                     for j in range(8):
                         yy, xx = x[j, i].cpu().numpy()
-                        print(xx, yy)
-                        #yy = yy * 127.5 + 127.5
-                        #xx = xx * 127.5 + 127.5
                         yy = yy * 4 + 127.5
                         xx = xx * 4 + 127.5
                         draw_crosshairs(image, xx, yy, 5, [0, 0, 255])
-                    print('------')
                     
                     image = image.astype(numpy.uint8)
                     Image.fromarray(image).save(
@@ -532,8 +504,172 @@ def train_sparse_pick(
                 
                 break
 
+# Sparse Pick And Place ========================================================
+
+def train_sparse_pick_and_place(
+    num_epochs=100,
+):
+    print('making dataset')
+    train_dataset = CachedDataset(
+        'conditional_snap_two_frames',
+        'train',
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=2,
+        shuffle=True,
+        num_workers=8,
+    )
+    
+    test_dataset = CachedDataset(
+        'conditional_snap_two_frames',
+        'train',
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=2,
+        shuffle=False,
+        num_workers=8,
+    )
+    
+    print('making model')
+    config = TransformerConfig(
+        sequence_length = 2,
+        decoder_tokens = 8,
+        decode_input = False,
+        
+        decoder_channels = 4,
+        num_layers=6,
+        channels=256,
+        num_heads=8,
+        residual_channels=256,
+    )
+    model = TokenMapSequenceEncoder(config).cuda()
+    
+    train_config = TrainConfig()
+    optimizer = model.configure_optimizer(train_config)
+    
+    running_loss = 0.
+    for epoch in range(1, num_epochs+1):
+        print('epoch: %i'%epoch)
+        print('train')
+        model.train()
+        iterate = tqdm.tqdm(train_loader)
+        for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
+            x = x.cuda()
+            q = q.cuda()
+            
+            b, h, w = x.shape
+            x = x.view(b, h*w).permute(1,0)
+            q = q.view(b, h*w).permute(1,0)
+            qx = torch.stack((q,x), dim=0)
+            
+            qx = model(qx)
+            
+            total_loss = 0.
+            
+            x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
+            x_snap_locations = (x_snaps[:,:,:2] - 31.5) #/ 31.5
+            x_snap_valid = x_snaps[:,:,[2]]#.view(8*b)
+            
+            q_snaps = q_snaps.permute(1, 0, 2).contiguous().cuda()
+            q_snap_locations = (q_snaps[:,:,:2] - 31.5)
+            q_snap_valid = q_snaps[:,:,[2]]
+            
+            snap_targets = torch.cat(
+                (q_snap_locations, x_snap_locations), dim=-1)
+            
+            snap_loss = torch.nn.functional.smooth_l1_loss(qx, snap_targets)
+            total_loss = total_loss + snap_loss # * 0.001
+            
+            total_loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            running_loss = running_loss * 0.9 + float(snap_loss) * 0.1
+            iterate.set_description('s: %.04f'%running_loss)
+        
+        torch.save(model.state_dict(), 'model_%04i.pt'%epoch)
+        
+        with torch.no_grad():
+            model.eval()
+            iterate = tqdm.tqdm(test_loader)
+            n = 0
+            for x, q, x_snaps, q_snaps, x_paths, q_paths in iterate:
+                x = x.cuda()
+                q = q.cuda()
+                
+                b, h, w = x.shape
+                x = x.view(b, h*w).permute(1,0)
+                q = q.view(b, h*w).permute(1,0)
+                qx = torch.stack((q,x), dim=0)
+                
+                qx = model(qx)
+                
+                x_snaps = x_snaps.permute(1, 0, 2).contiguous().cuda()
+                snap_locations = x_snaps[:,:,0] * 64 + x_snaps[:,:,1]
+                
+                for i in range(b):
+                    x_path = x_paths[i]
+                    x_image = numpy.array(Image.open(x_path))
+                    
+                    q_path = q_paths[i]
+                    q_image = numpy.array(Image.open(q_path))
+                    
+                    neg_path = x_path.replace(
+                        'color_x_', 'snap_neg_').replace(
+                        '.png', '.npz')
+                    neg_snap_map = numpy.load(neg_path, allow_pickle=True)
+                    neg_snap_map_i = neg_snap_map['arr_0'][:,:,0]
+                    neg_snap_map = (neg_snap_map_i == 2) | (neg_snap_map_i == 3)
+                    
+                    pos_path = x_path.replace(
+                        'color_x_', 'snap_pos_').replace(
+                        '.png', '.npz')
+                    pos_snap_map = numpy.load(pos_path, allow_pickle=True)
+                    pos_snap_map_i = pos_snap_map['arr_0'][:,:,0]
+                    pos_snap_map = pos_snap_map_i == 1
+                    
+                    gt_dense_snap = neg_snap_map | pos_snap_map
+                    gt_dense_snap = gt_dense_snap.reshape(64, 64, 1)
+                    gt_dense_snap = block_upscale_image(
+                        gt_dense_snap, 256, 256)
+                    gt_dense_snap = gt_dense_snap * 0.5
+                    x_image = (
+                        x_image * (1. - gt_dense_snap) +
+                        [0,255,0] * gt_dense_snap
+                    )
+                    
+                    gt_snaps = numpy.zeros(4096)
+                    gt_snaps[snap_locations[:,i].cpu()] = 1
+                    gt_snaps = gt_snaps.reshape(64, 64, 1)
+                    gt_snaps = block_upscale_image(gt_snaps, 256, 256)
+                    gt_snaps = gt_snaps * 0.5
+                    x_image = x_image * (1. - gt_snaps) + [255,0,255] * gt_snaps
+                    
+                    for j in range(8):
+                        yy1, xx1 = qx[j, i, :2].cpu().numpy()
+                        yy1 = round(yy1 * 4 + 127.5)
+                        xx1 = round(xx1 * 4 + 127.5)
+                        yy2, xx2 = qx[j, i, 2:].cpu().numpy()
+                        yy2 = round(yy2 * 4 + 127.5)
+                        xx2 = round(xx2 * 4 + 127.5)
+                        yy, xx = line(yy1, xx1, yy2, xx2)
+                        x_image[yy,xx] = [0,0,255]
+                        #draw_crosshairs(image, xx, yy, 5, [0, 0, 255])
+                    
+                    x_image = x_image.astype(numpy.uint8)
+                    image = numpy.concatenate((q_image, x_image), axis=1)
+                    Image.fromarray(image).save(
+                        './tmp_%04i_%04i.png'%(epoch, n))
+                    n += 1
+                
+                if n > 16:
+                    break
+
 if __name__ == '__main__':
     #shorten_cache_data()
     #visualize()
     #train_dense_pick()
-    train_sparse_pick()
+    #train_sparse_pick()
+    train_sparse_pick_and_place()
