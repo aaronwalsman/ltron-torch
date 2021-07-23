@@ -60,7 +60,7 @@ class TransformerConfig:
     
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
-            assert hasattr(self, key)
+            assert hasattr(self, key), 'Invalid Key: %s'%key
             setattr(self, key, value)
         
         if self.residual_channels is None:
@@ -198,24 +198,24 @@ class EmbeddingBlock(Module):
         
         self.dropout = Dropout(config.embedding_dropout)
     
-    def forward(self, x):
-        x = self.embedding(x)
-        s, hw, b, c = x.shape
-        x = x + self.positional_encoding.view(s, hw, 1, c)
-        x = x.view(s*hw, b, c)
+    def forward(self, d):
+        d = self.embedding(d)
+        t, hw, b, c = d.shape
+        d = d + self.positional_encoding.view(t, hw, 1, c)
+        d = d.view(t*hw, b, c)
         
         if self.randomize_decoder_embeddings:
-            #d = self.decoder_embedding.weight.view(1, 1, c)
-            #d = d.expand(self.decoder_tokens, b, c)
-            #d = d + torch.randn(self.decoder_tokens, b, c, device=x.device)
-            d = torch.randn(self.decoder_tokens, b, c, device=x.device)
+            #s = self.decoder_embedding.weight.view(1, 1, c)
+            #s = s.expand(self.decoder_tokens, b, c)
+            #s = s + torch.randn(self.decoder_tokens, b, c, device=x.device)
+            s = torch.randn(self.decoder_tokens, b, c, device=x.device)
         else:
-            d = self.decoder_embedding.weight.view(self.decoder_tokens, 1, c)
-            d = d.expand(self.decoder_tokens, b, c)
+            s = self.decoder_embedding.weight.view(self.decoder_tokens, 1, c)
+            s = s.expand(self.decoder_tokens, b, c)
         
-        x = torch.cat((d, x), dim=0)
-        #s, b, c = x.shape
-        #x = x + self.p2[:s]
+        x = torch.cat((s, d), dim=0)
+        #t, b, c = x.shape
+        #x = x + self.p2[:t]
         
         x = self.dropout(x)
         
@@ -248,6 +248,10 @@ class Block(Module):
         x = x + self.projection_residual(x)
         
         return x
+
+class STBlock(Module):
+    def __init__(self, config):
+        super(Block, self).__init__()
 
 class SlotBlock(Module):
     def __init__(self, config):
