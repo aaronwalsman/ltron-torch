@@ -5,6 +5,7 @@ import os
 import numpy
 
 import torch
+from torch.nn import Module, Embedding, Linear, MultiheadAttention
 from torch.utils.data import Dataset, DataLoader
 
 import tqdm
@@ -14,6 +15,7 @@ from ltron_torch.models.transformer import (
 
 from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
 
+from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.transformoencoder import Transformoencoder
 from ltron_torch.models.slotoencoder import SlotoencoderConfig, Slotoencoder
 
@@ -126,7 +128,8 @@ def collate(data):
     return scenes, observations, actions
 
 class SingleFrameSimplePartialObservationDataset(Dataset):
-    def __init__(self, train):
+    def __init__(self, train, sequence_length):
+        self.sequence_length = sequence_length
         all_paths = os.listdir(dataset_path)
         if train:
             self.paths = all_paths[:35000]
@@ -134,13 +137,15 @@ class SingleFrameSimplePartialObservationDataset(Dataset):
             self.paths = all_paths[35000:]
     
     def __len__(self):
-        return len(self.paths*128)
+        return len(self.paths*self.sequence_length)
     
     def __getitem__(self, i):
-        path_index = i // 128
-        observation_index = i % 128
+        
+        path_index = i // self.sequence_length
+        observation_index = i % self.sequence_length
         
         data = numpy.load(os.path.join(dataset_path, self.paths[path_index]))
+        
         observation = torch.LongTensor(
             data['observations'][observation_index]).view(-1)
         
@@ -154,11 +159,51 @@ def collate_single(data):
 
 # Compress Dataset =============================================================
 
+class DualWeightCompressor(Module):
+    def __init__(
+        self, vocabulary, data_tokens, hidden_tokens, channels, num_heads
+    ):
+        super(DualWeightCompressor, self).__init__()
+        self.attention1 = torch.nn.MultiheadAttention(channels, num_heads)
+        self.attention2 = torch.nn.MultiheadAttention(channels, num_heads)
+        
+        self.data_embedding = Embedding(vocabulary, channels)
+        self.hidden_embedding = Embedding(hidden_tokens, channels)
+        #self.hidden_predictor = Linear(channels, hidden_tokens)
+        
+        pe1 = torch.zeros(data_tokens, 1, channels)
+        self.positional_encoding1 = NoWeightDecayParameter(pe1)
+        
+        pe2 = torch.zeros(data_tokens, 1, channels)
+        self.positional_encoding2 = NoWeightDecayParameter(pe2)
+        
+        self.out_linear = Linear(channels, vocabulary)
+    
+    def forward(self, x):
+        x = self.data_embedding(x)
+        t, hw, b, c = x.shape
+        x = x.view(t*hw, b, c)
+        x = x + self.positional_encoding1
+        #h = self.hidden_predictor(x)
+        #h = torch.softmax(x, dim=1)
+        t, c = self.hidden_embedding.weight.shape
+        s = self.hidden_embedding.weight.view(t, 1, c).expand(t, b, c)
+        x, w1 = self.attention1(s, x, x)
+        p = self.positional_encoding2
+        t, _, c = p.shape
+        p = p.expand(t, b, c)
+        x, w2 = self.attention2(p, x, x)
+        x = self.out_linear(x)
+        
+        return x, w1, w2
+
 def compress_dataset(epochs=10):
-    train_dataset = SingleFrameSimplePartialObservationDataset(train=True)
+    train_dataset = SingleFrameSimplePartialObservationDataset(
+        train=True, sequence_length=32)
     train_loader = DataLoader(
-        train_dataset, batch_size=16, collate_fn=collate_single)
-    test_dataset = SingleFrameSimplePartialObservationDataset(train=False)
+        train_dataset, batch_size=16, collate_fn=collate_single, shuffle=True)
+    test_dataset = SingleFrameSimplePartialObservationDataset(
+        train=False, sequence_length=32)
     test_loader = DataLoader(
         test_dataset, batch_size=16, collate_fn=collate_single)
     
@@ -174,6 +219,7 @@ def compress_dataset(epochs=10):
     model = Slotoencoder(sloto_config).cuda()
     '''
     
+    '''
     encoder_config = TransformerConfig(
         vocabulary=2,
         map_height=8,
@@ -208,27 +254,34 @@ def compress_dataset(epochs=10):
     )
     
     model = Transformoencoder(encoder_config, decoder_config).cuda()
+    '''
+    
+    model = DualWeightCompressor(
+        vocabulary=32,
+        data_tokens=64,
+        hidden_tokens=16,
+        channels=256,
+        num_heads=1,
+    ).cuda()
     
     optimizer_config = OptimizerConfig()
     optimizer = adamw_optimizer(model, optimizer_config)
     
     #optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     #class_weight = torch.ones(4096)
-    class_weight = torch.ones(2)
+    class_weight = torch.ones(32)
     class_weight[0] = 0.1
     class_weight = class_weight.cuda()
     
     #torch.autograd.set_detect_anomaly(True)
-    running_loss = 0.
+    running_loss1 = 0.
+    running_loss2 = 0.
     for epoch in range(1, epochs+1):
         model.train()
         iterate = tqdm.tqdm(train_loader)
         for i, x in enumerate(iterate):
-            #x = x.cuda()
-            #x_in = x
-            #x = torch.zeros(x.shape, dtype=torch.long)
             t, b = x.shape
-            #b = 2
+            '''
             x = torch.zeros(64, b, dtype=torch.long)
             hw = torch.randint(64, (b,))
             #hw = torch.randint(3, (b,))
@@ -240,6 +293,7 @@ def compress_dataset(epochs=10):
             x[hw,range(b)] = 1
             hw = torch.randint(64, (b,))
             x[hw, range(b)] = 1
+            '''
             x_in = x
             
             x = x.cuda()
@@ -249,7 +303,7 @@ def compress_dataset(epochs=10):
             pause = i > 500
             #pause = False
             #x, xc = model(x, pause=pause)
-            x = model(x.unsqueeze(0))
+            x, w1, w2 = model(x.unsqueeze(0))
             hw, b, c = x.shape
             
             #b, c, h, w = x.shape
@@ -270,21 +324,25 @@ def compress_dataset(epochs=10):
             loss1 = torch.nn.functional.cross_entropy(
                 x.view(hw*b, c), y.view(hw*b), weight=class_weight)
             
+            loss2 = torch.nn.functional.mse_loss(
+                w1, w2.permute(0,2,1)) * 0.1
+            
             #yc = torch.LongTensor([0,1]).cuda()
             #loss2 = torch.nn.functional.cross_entropy(xc, yc)
             
             # WHY IS THIS LOSS NECESSARY
-            loss = loss1 #+ loss2
+            loss = loss1 + loss2
             
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             
-            running_loss = running_loss * 0.9 + float(loss) * 0.1
+            running_loss1 = running_loss1 * 0.9 + float(loss1) * 0.1
+            running_loss2 = running_loss2 * 0.9 + float(loss2) * 0.1
             #iterate.set_description(
             #    'r: %.04f l: %.04f c:%.04f'%(running_loss, loss1, loss2))
             iterate.set_description(
-                'l: %.04f'%(running_loss))
+                'l1: %.04f, l2: %.04f'%(running_loss1, running_loss2))
             
             if i % 64 == 0:
                 #in0 = x_in[:,0].view(32,32).cpu().numpy()
@@ -300,6 +358,17 @@ def compress_dataset(epochs=10):
                 out1 = torch.argmax(x[:,1], dim=-1).view(8,8).cpu().numpy()
                 print_scene(out1)
                 
+
+def lossless_compression():
+    train_dataset = SingleFrameSimplePartialObservationDataset(train=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=16, collate_fn=collate_single)
+    
+    iterate = tqdm.tqdm(train_loader)
+    for i, x in enumerate(iterate):
+        t, b = x.shape
+        import pdb
+        pdb.set_trace()
 
 # Model Utils ==================================================================
 
@@ -425,12 +494,12 @@ class TestLayer(torch.nn.Module):
         x = x.view(thw, b, c)
         return x
 
-def train_encoder_reconstruction(epochs=10):
+def train_encoder_reconstruction_cheating(epochs=10):
     print('making train dataset')
     train_dataset = SimplePartialObservationDataset(train=True)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=8,
+        batch_size=16,
         shuffle=True,
         num_workers=0,
         collate_fn = collate,
@@ -440,65 +509,198 @@ def train_encoder_reconstruction(epochs=10):
     test_dataset = SimplePartialObservationDataset(train=False)
     test_loader = DataLoader(
         test_dataset,
-        batch_size=8,
+        batch_size=16,
         shuffle=False,
         num_workers=8,
     )
     
     print('making model')
     model_config = TransformerConfig(
-        sequence_length=128,
-        decoder_tokens=32*32,
-        decode_input=False,
+        sequence_length=33,
+        vocabulary=33,
+        map_height=8,
+        map_width=8,
+        decoder_tokens=0, #8*8,
+        decode_input=True, #False,
         
-        attention_module='none',
+        attention_module='torch',
         
-        num_layers=2,
-        channels=128,
-        residual_channels=128,
+        block_type='time_only',
+        
+        num_blocks=4,
+        channels=512,
+        residual_channels=None,
         num_heads=8,
-        decoder_channels=4,
+        decoder_channels=32,
         
         learned_positional_encoding=False,
         
-        verbose=True,
     )
-    #model = TokenMapSequenceEncoder(model_config).cuda()
+    model = TokenMapSequenceEncoder(model_config).cuda()
     #model = TestModel(channels=128, num_layers=2).cuda()
-    model = AttentionModel(
-        channels=128,
-        residual_channels=None,
-        num_heads=4,
-        num_layers=4,
-        tokens_per_image=8,
-    ).cuda()
+    #model = AttentionModel(
+    #    channels=128,
+    #    residual_channels=None,
+    #    num_heads=4,
+    #    num_layers=4,
+    #    tokens_per_image=8,
+    #).cuda()
     print('parameters: %i'%get_num_model_parameters(model))
     
     print('making optimizer')
-    train_config = TrainConfig()
-    optimizer = model.configure_optimizer(train_config)
+    optimizer_config = OptimizerConfig()
+    optimizer = adamw_optimizer(model, optimizer_config)
     
-    running_train_accuracy = 0.0
+    class_weight = torch.ones(32)
+    class_weight[0] = 0.05
+    class_weight = class_weight.cuda()
+    
+    running_loss = 0.0
+    running_accuracy = 0.0
     for epoch in range(1,epochs+1):
         print('epoch: %i'%epoch)
         model.train()
         iterate = tqdm.tqdm(train_loader)
-        for s, o, a in iterate:
+        for i, (s, o, a) in enumerate(iterate):
             s = s.cuda()
             o = o.cuda()
             
-            import pdb
-            pdb.set_trace()
+            t, hw, b = o.shape
+            
+            decoder_tokens = torch.ones((1, 64, b), dtype=torch.long).cuda()*32
+            o = torch.cat((o, decoder_tokens), dim=0)
             
             x = model(o)
             
-            t, b, c = x.shape
-            #target = s.view(-1)
-            target = torch.zeros(s.shape, dtype=torch.long).view(-1).cuda()
-            loss = torch.nn.functional.cross_entropy(x.view(-1,c), target)
+            #t, b, c = x.shape
+            thw, b, c = x.shape
+            x = x.view(33,64,b,c)[-1]
+            
+            target = s.view(-1)
+            #target = torch.zeros(s.shape, dtype=torch.long).view(-1).cuda()
+            loss = torch.nn.functional.cross_entropy(
+                x.view(-1,c), target, weight=class_weight)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
+            
+            estimate = torch.argmax(x, dim=-1)
+            correct = estimate == s
+            accuracy = torch.sum(correct * (s != 0)).float() / torch.sum(s != 0)
+            
+            running_loss = running_loss * 0.9 + float(loss)*0.1
+            running_accuracy = running_accuracy * 0.9 + float(accuracy)*0.1
+            iterate.set_description(
+                'l: %.04f a: %.04f'%(running_loss, running_accuracy))
+            
+            if i%128 == 0:
+                print_scene(estimate[:,0].view(8,8).cpu().numpy())
+                print_scene(s[:,0].view(8,8).cpu().numpy())
+
+def train_encoder_reconstruction(epochs=10):
+    print('making train dataset')
+    train_dataset = SimplePartialObservationDataset(train=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=16,
+        shuffle=True,
+        num_workers=0,
+        collate_fn = collate,
+    )
+    
+    print('making test dataset')
+    test_dataset = SimplePartialObservationDataset(train=False)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=16,
+        shuffle=False,
+        num_workers=8,
+        collate_fn = collate,
+    )
+    
+    print('making model')
+    model_config = TransformerConfig(
+        sequence_length=33,
+        vocabulary=33,
+        map_height=8,
+        map_width=8,
+        decoder_tokens=0, #8*8,
+        decode_input=True, #False,
+        
+        attention_module='torch',
+        
+        block_type='time_then_space',
+        
+        num_blocks=4,
+        channels=512,
+        residual_channels=None,
+        num_heads=8,
+        decoder_channels=32,
+        
+        learned_positional_encoding=False,
+        
+    )
+    model = TokenMapSequenceEncoder(model_config).cuda()
+    #model = TestModel(channels=128, num_layers=2).cuda()
+    #model = AttentionModel(
+    #    channels=128,
+    #    residual_channels=None,
+    #    num_heads=4,
+    #    num_layers=4,
+    #    tokens_per_image=8,
+    #).cuda()
+    print('parameters: %i'%get_num_model_parameters(model))
+    
+    print('making optimizer')
+    optimizer_config = OptimizerConfig()
+    optimizer = adamw_optimizer(model, optimizer_config)
+    
+    class_weight = torch.ones(32)
+    class_weight[0] = 0.05
+    class_weight = class_weight.cuda()
+    
+    running_loss = 0.0
+    running_accuracy = 0.0
+    for epoch in range(1,epochs+1):
+        print('epoch: %i'%epoch)
+        model.train()
+        iterate = tqdm.tqdm(train_loader)
+        for i, (s, o, a) in enumerate(iterate):
+            s = s.cuda()
+            o = o.cuda()
+            
+            t, hw, b = o.shape
+            
+            decoder_tokens = torch.ones((1, 64, b), dtype=torch.long).cuda()*32
+            o = torch.cat((o, decoder_tokens), dim=0)
+            
+            x = model(o)
+            
+            #t, b, c = x.shape
+            thw, b, c = x.shape
+            x = x.view(33,64,b,c)[-1]
+            
+            target = s.view(-1)
+            #target = torch.zeros(s.shape, dtype=torch.long).view(-1).cuda()
+            loss = torch.nn.functional.cross_entropy(
+                x.view(-1,c), target, weight=class_weight)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            estimate = torch.argmax(x, dim=-1)
+            correct = estimate == s
+            accuracy = torch.sum(correct * (s != 0)).float() / torch.sum(s != 0)
+            
+            running_loss = running_loss * 0.9 + float(loss)*0.1
+            running_accuracy = running_accuracy * 0.9 + float(accuracy)*0.1
+            iterate.set_description(
+                'l: %.04f a: %.04f'%(running_loss, running_accuracy))
+            
+            if i%128 == 0:
+                print_scene(estimate[:,0].view(8,8).cpu().numpy())
+                print_scene(s[:,0].view(8,8).cpu().numpy())
+
 
 if __name__ == '__main__':
     #scene = make_scene(32, 32, 100, 128)
@@ -512,8 +714,10 @@ if __name__ == '__main__':
     #    print_scene(observation)
     #    print(action)
     
-    #make_dataset(40000, 32, 32, 4096, 128)
+    #make_dataset(40000, 8, 8, 32, 32)
     
-    #train_encoder_reconstruction()
+    train_encoder_reconstruction()
     
-    compress_dataset()
+    #compress_dataset()
+
+    #lossless_compression()

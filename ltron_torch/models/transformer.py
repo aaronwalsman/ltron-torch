@@ -75,6 +75,10 @@ def make_block(config):
         return Block(config)
     elif config.block_type == 'slot':
         return SlotBlock(config)
+    elif config.block_type == 'time_only':
+        return TimeOnlyBlock(config)
+    elif config.block_type == 'time_then_space':
+        return TimeThenSpaceBlock(config)
     else:
         raise NotImplementedError
 
@@ -249,9 +253,44 @@ class Block(Module):
         
         return x
 
-class STBlock(Module):
+class TimeOnlyBlock(Block):
     def __init__(self, config):
-        super(Block, self).__init__()
+        super(TimeOnlyBlock, self).__init__(config)
+        self.sequence_length = config.sequence_length
+    
+    def forward(self, x):
+        thw, b, c = x.shape
+        x = x.view(self.sequence_length, -1, c)
+        x = super(TimeOnlyBlock, self).forward(x)
+        x = x.view(thw, b, c)
+        
+        return x
+
+class TimeThenSpaceBlock(Block):
+    def __init__(self, config):
+        super(TimeThenSpaceBlock, self).__init__(config)
+        self.sequence_length = config.sequence_length
+        
+        self.spatial_attention_residual = Sequential(
+            LayerNorm(config.channels),
+            make_attention_module(config),
+        )
+    
+    def forward(self, x):
+        thw, b, c = x.shape
+        t = self.sequence_length
+        hw = thw//self.sequence_length
+        x = x.view(t, hw*b, c)
+        x = x + self.attention_residual(x)
+        
+        x = x.view(t, hw, b, c)
+        x = x.permute(1, 0, 2, 3).contiguous().view(hw, t*b, c)
+        x = x + self.spatial_attention_residual(x)
+        
+        x = x.view(hw, t, b, c).permute(1, 0, 2, 3).contiguous().view(thw, b, c)
+        x = x + self.projection_residual(x)
+        
+        return x
 
 class SlotBlock(Module):
     def __init__(self, config):
@@ -345,58 +384,3 @@ class TokenMapSequenceEncoder(Module):
         elif isinstance(module, LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.)
-    
-    def configure_optimizer(self, train_config):
-        # again mostly from minGPT
-        decay_names = set()
-        no_decay_names = set()
-        decay_params = []
-        no_decay_params = []
-        decay_modules = (Linear,)
-        no_decay_modules = (LayerNorm, Embedding)
-        for module_name, module in self.named_modules():
-            is_decay_module = isinstance(module, decay_modules)
-            is_no_decay_module = isinstance(module, no_decay_modules)
-            for param_name, param in module.named_parameters():
-                full_param_name = (
-                    '%s.%s'%(module_name, param_name)
-                    if module_name else param_name
-                )
-                
-                if isinstance(param, NoWeightDecayParameter):
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-                    print('caught: %s'%full_param_name)
-                elif param_name.endswith('bias'):
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-                elif param_name.endswith('weight') and is_decay_module:
-                    decay_names.add(full_param_name)
-                    decay_params.append(param)
-                elif param_name.endswith('weight') and is_no_decay_module:
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-        
-        #if self.embedding.learned_positional_encoding:
-        #    no_decay_names.add('embedding.position_encoding')
-        #    no_decay_params.append(self.embedding.positional_encoding)
-        
-        param_intersection = decay_names & no_decay_names
-        param_union = decay_names | no_decay_names
-        assert len(param_intersection) == 0
-        assert len(param_union) == len(decay_names) + len(no_decay_names)
-        
-        optimizer_groups = [
-            {'params': decay_params,
-             'weight_decay':train_config.weight_decay,
-            },
-            {'params': no_decay_params,
-             'weight_decay':0.,
-            },
-        ]
-        optimizer = AdamW(
-            optimizer_groups,
-            lr=train_config.learning_rate,
-            betas=train_config.betas,
-        )
-        return optimizer
