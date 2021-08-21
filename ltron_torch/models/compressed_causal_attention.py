@@ -1,84 +1,13 @@
 import torch
 from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 
-from ltron_torch.models.positional_encoding import positional_encoding
 from ltron_torch.models.parameter import NoWeightDecayParameter
 
-class NDLearnedRelativePositionalEncoding(Module):
-    def __init__(self, channels, data_shape, causal_dims):
-        super(NDLearnedPositionalEncoding, self).__init__()
-        encoding_shape = tuple(
-            d if (i in causal_dims) else d*2-1
-            for i, d in enumerate(data_shape)
-        )
-        self.register_buffer('center_offset', torch.LongTensor([
-            0 if (i in causal_dims) else d-1
-            for i,d in enumerate(data_shape)
-        ]))
-        self.dim_encodings = ParameterList([
-            NoWeightDecayParameter(torch.zeros(d, channels))
-            for d in encoding_shape
-        ])
-    
-    def forward(self, i):
-        n, b, d = i.shape
-        r = i.view(n,1,b,d) - i.view(1,n,b,d)
-        r = r + self.center_offset.view(1,1,1,d)
-        cm = torch.max(r < 0, dim=-1)[0]
-        r = torch.clamp(r, min=0)
-        
-        pe = sum(p[r[:,:,:,j]] for j,p in enumerate(self.dim_encodings))
-        
-        return pe, cm
-
-class NDLearnedPositionalEncoding(Module):
-    def __init__(self, channels, data_shape, causal_dims):
-        super(NDLearnedPositionalEncoding, self).__init__()
-        self.dim_encodings = ParameterList([
-            NoWeightDecayParameter(torch.zeros(d, channels))
-            for d in data_shape
-        ])
-        self.causal_dims = causal_dims
-    
-    def forward(self, i):
-        n, b, d = i.shape
-        #r = i.view(n,1,b,d) - i.view(1,n,b,d)
-        #r = r + self.center_offset.view(1,1,1,d)
-        #cm = torch.max(r < 0, dim=-1)[0]
-        #r = torch.clamp(r, min=0)
-        
-        #pe = sum(p[r[:,:,:,j]] for j,p in enumerate(self.dim_encodings))
-        
-        pe = sum(p[i[:,:,j]] for j,p in enumerate(self.dim_encodings))
-        
-        # TMP
-        cm = torch.zeros((n, n, b), dtype=torch.bool, device=i.device)
-        
-        return pe, cm
-
-class NDPositionalEncoding(Module):
-    def __init__(self, channels, data_shape, causal_dims):
-        super(NDPositionalEncoding, self).__init__()
-        positional_linears = []
-        for i, d in enumerate(data_shape):
-            self.register_buffer('pe_%i'%i, positional_encoding(channels, d))
-            positional_linears.append(Linear(channels, channels))
-        self.positional_linears = ModuleList(positional_linears)
-        
-        self.causal_dims = causal_dims
-        self.d = len(data_shape)
-    
-    def forward(self, i):
-        n, b, d = i.shape
-        pe = sum(
-            self.positional_linears[j](getattr(self, 'pe_%i'%j)[i[:,:,j]])
-            for j in range(self.d)
-        )
-        
-        # TMP
-        cm = torch.zeros((n, n, b), dtype=torch.bool, device=i.device)
-        
-        return pe, cm
+#def make_compressed_causal_mask(i, temporal_dim=0):
+#    i = i[:,:,temporal_dim]
+#    n, b = i.shape
+#    causal_mask = i.view(n, 1, b) < i.view(1, n, b)
+#    return causal_mask
 
 class CompressedCausalAttention(Module):
     def __init__(self,
@@ -86,6 +15,8 @@ class CompressedCausalAttention(Module):
         heads,
         attention_dropout=0.,
         content_dropout=0.,
+        memory_length=0,
+        memory_batch_size=0,
     ):
         super(CompressedCausalAttention, self).__init__()
         assert channels % heads == 0
@@ -93,33 +24,157 @@ class CompressedCausalAttention(Module):
         self.h = heads
         self.cc = self.c // self.h
         
-        self.qkv = Linear(self.c, 3*self.c)
+        self.qkv_linear = Linear(self.c, 3*self.c)
+        
+        memory_k = torch.zeros(
+            memory_length, memory_batch_size, self.h, self.cc)
+        memory_v = torch.zeros(
+            memory_length, memory_batch_size, self.h, self.cc)
+        memory_length = torch.zeros((0,), dtype=torch.long)
+        self.register_buffer('memory_k', memory_k)#, persistent=False)
+        self.register_buffer('memory_v', memory_v)#, persistent=False)
+        self.register_buffer('memory_length', memory_length)#, persistent=False)
         
         self.attention_dropout = Dropout(attention_dropout)
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
-    def forward(self, x, pe, cm, pm):
+    def forward(self, x, t, positional_encoding, content_mask, padding_mask):
+        '''
+        x                  [s, b, c] - data
+        t                  [b]       - terminal
+        postional_encoding [s, b, c] - 
+        content_mask       [s, s, b] - 
+        padding_mask       [b, s]    - 
+        '''
         s, b, c = x.shape
         
-        qkv = self.qkv(x+pe)
+        # compute q,k,v
+        qkv = self.qkv_linear(x+positional_encoding)
         q, k, v = torch.chunk(qkv, 3, dim=-1)
         q = q.view(s, b, self.h, self.cc)
         k = k.view(s, b, self.h, self.cc)
         v = v.view(s, b, self.h, self.cc)
         
+        # add memory to k and v
+        if self.training:
+            kv_padding_mask = padding_mask
+        else:
+            k, v, content_mask, kv_padding_mask = self.cat_memory(
+                k, v, t, content_mask, padding_mask)
+        t = k.shape[0]
+        
+        # compute attention
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
-        t = 1. / self.cc ** 0.5
-        a = qk * t
-        a.masked_fill(cm.unsqueeze(-1), float('-inf'))
+        temperature = 1. / self.cc ** 0.5
+        a = qk * temperature
+        try:
+            a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
+        except:
+            import pdb
+            pdb.set_trace()
+        a.masked_fill(kv_padding_mask.view(1, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
+        # compute output content
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
         
+        # save memory
+        if not self.training:
+            self.save_memory(k, v, padding_mask)
+        
         return x
+    
+    def expand_memory_batch(self, b):
+        ms, mb = self.memory_k.shape[:2]
+        if mb < b:
+            new_k = torch.zeros(ms, b-mb, self.h, self.cc)
+            new_k = new_k.to(self.memory_k.device)
+            self.memory_k = torch.cat((self.memory_k, new_k), dim=1)
+            
+            new_v = torch.zeros(ms, b-mb, self.h, self.cc)
+            new_v = new_v.to(self.memory_v.device)
+            self.memory_v = torch.cat((self.memory_v, new_v), dim=1)
+            
+            new_lengths = torch.zeros(
+                b-mb, dtype=torch.long, device=self.memory_length.device)
+            self.memory_length = torch.cat((self.memory_length, new_lengths))
+    
+    def expand_memory_length(self, s):
+        ms, mb = self.memory_k.shape[:2]
+        if ms < s:
+            new_k = torch.zeros(s-ms, mb, self.h, self.cc)
+            new_k = new_k.to(self.memory_k.device)
+            self.memory_k = torch.cat((self.memory_k, new_k), dim=0)
+            
+            new_v = torch.zeros(s-ms, mb, self.h, self.cc)
+            new_v = new_v.to(self.memory_v.device)
+            self.memory_v = torch.cat((self.memory_v, new_v), dim=0)
+    
+    def cat_memory(self, k, v, t, content_mask, padding_mask):
+        s, b, h, c = k.shape
+        self.expand_memory_batch(b)
+        self.clear_memory(t)
+        max_len = torch.max(self.memory_length)
+        print('prek', k.shape, self.memory_k.shape)
+        print(self.memory_length)
+        k = torch.cat((self.memory_k[:max_len], k), dim=0)
+        v = torch.cat((self.memory_v[:max_len], v), dim=0)
+        print('postk', k.shape)
+        
+        ms = self.memory_k.shape[0]
+        #memory_content_mask = torch.ones(
+        #    (ms, s, b), dtype=torch.bool, device=content_mask.device) # s x ms?
+        #content_mask = torch.cat((memory_content_mask, content_mask), dim=0)
+        memory_content_mask = torch.ones(
+            (s, ms, b), dtype=torch.bool, device=content_mask.device)
+        content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
+        
+        memory_padding_mask = torch.zeros((max_len, b), dtype=torch.bool)
+        for i in range(b):
+            memory_padding_mask[self.memory_length[i]:, i] = True
+        memory_padding_mask = memory_padding_mask.to(padding_mask.device)
+        kv_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
+        
+        return k, v, content_mask, kv_padding_mask
+    
+    def save_memory(self, k, v, padding_mask):
+        s, b, h, c = k.shape
+        
+        # expand memory if necessary
+        active_elements = ~padding_mask
+        kv_lengths = torch.sum(active_elements, dim=0)
+        new_lengths = self.memory_length + kv_lengths
+        self.expand_memory_length(torch.max(new_lengths))
+        
+        # generate indices
+        kv_i = torch.zeros((s, b, 2), dtype=torch.long, device=k.device)
+        kv_i[:,:,0] = torch.arange(s, device=k.device).view(s, 1)
+        kv_i[:,:,1] = torch.arange(b, device=k.device).view(1, b)
+        memory_i = kv_i.clone()
+        memory_i[:,:,0] += self.memory_length.view(1, b)
+        kv_i = kv_i[padding_mask]
+        memory_i  = memory_i[padding_mask]
+        
+        # insert into memory
+        self.memory_k[memory_i[:,1], memory_i[:,0]] = k[kv_i[:,1], kv_i[:,0]]
+        self.memory_v[memory_i[:,1], memory_i[:,0]] = v[kv_i[:,1], kv_i[:,0]]
+        
+        # update lengths
+        self.memory_length = new_lengths
+    
+    def clear_memory(self, terminal=None):
+        if terminal is None:
+            self.memory_length = torch.zeros_like(self.memory_length)
+        else:
+            self.memory_length[terminal] = 0
+    
+    def train(self, mode=True):
+        super(CompressedCausalAttention, self).train(mode)
+        self.clear_memory()
 
 
 class CompressedRelativeCausalAttention(Module):
@@ -177,13 +232,13 @@ class CompressedRelativeCausalAttention(Module):
         dd_ud = torch.einsum('sbhc,tbhc->stbh', qu, k)
         
         # Compute dp_wp.
-        #qw = q + w
-        #pe = pe.view(s, s, b, self.h, self.cc)
-        #dp_wp = torch.einsum('sbhc,stbhc->stbh', qw, pe)
+        qw = q + w
+        pe = pe.view(s, s, b, self.h, self.cc)
+        dp_wp = torch.einsum('sbhc,stbhc->stbh', qw, pe)
         
         t = 1. / self.cc ** 0.5
-        #a = (dd_ud + dp_wp) * t
-        a = dd_ud * t
+        a = (dd_ud + dp_wp) * t
+        #a = dd_ud * t
         a.masked_fill(cm.unsqueeze(-1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)

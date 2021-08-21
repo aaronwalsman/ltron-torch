@@ -202,6 +202,77 @@ class SpatialMultiheadAttention(Module):
         x = self.attention(x, x, x)[0]
         x = x.view(self.spatial_tokens, -1, b, c).permute(1, 0, 2, 3)
         return x
+
+class MyMultiheadAttention(Module):
+    def __init__(
+        self,
+        channels,
+        num_heads,
+        attention_dropout,
+        residual_dropout,
+        q_channels,
+        kv_channels,
+    ):
+        super(MultiheadAttention, self).__init__()
+        assert (
+            channels % num_heads == 0,
+            'channels must be divisible by num_heads'
+        )
+        
+        self.query = Linear(channels, channels)
+        self.key = Linear(channels, channels)
+        self.value = Linear(channels, channels)
+        self.linear = Linear(channels, channels)
+        self.attention_dropout = Dropout(attention_dropout)
+        self.residual_dropout = Dropout(residual_dropout)
+        
+        self.num_heads = num_heads
+    
+    def forward(self, x):
+        *s, hc = x.shape
+        
+        h = self.num_heads
+        c = hc // h
+        
+        q = self.query(x).view(*s, h, c)
+        k = self.key(x).view(*s, h, c)
+        v = self.value(x).view(*s, h, c)
+ 
+
+class RelativeSpatialAttention(Module):
+    '''
+    Transformer-XL
+    '''
+    def __init__(self, channels, heads):
+        super(RelativeSpatialAttention, self).__init__()
+        assert channels % heads == 0
+        self.c = channels
+        self.h = heads
+        self.cc = self.c // self.h
+        self.wq = Linear(channels, channels)
+        self.wke = Linear(channels, channels)
+        self.wkr = Linear(channels, channels)
+        
+        self.u = Parameter(torch.zeros(channels))
+        self.v = Parameter(torch.zeros(channels))
+    
+    def forward(self, x):
+        s, b, c = x.shape
+        
+        # needs headification
+        ewq = self.wq(x).view(s,b,self.h,self.cc)
+        ewke = self.wke(x).view(s,b,self.h,self.cc)
+        a = torch.einsum('sbnc,tbnc->stbn', ewq, ewke)
+        
+        rwkr = something.view(s,b,self.h,self.cc)
+        b = torch.einsum('sbnc,tbnc->stbn', ewq, rwkr)
+        
+        uwke = self.wke(self.u.view(1,-1)).view(1, 1, c).expand(s, b, c)
+        c = torch.einsum('sbc,tbc->stb', uwke, ewke)
+        
+        vwke = self.wkr(self.v.view(1,-1)).view(1, 1, c).expand(s, b, c)
+        d = torch.einsum('sbc,tbc->stb', vwke, rwkr)
+
 '''
 class MinGPTMultiheadAttention(Module):
     def __init__(self, n_embd, n_head, attn_pdrop, resid_pdrop, mask):
