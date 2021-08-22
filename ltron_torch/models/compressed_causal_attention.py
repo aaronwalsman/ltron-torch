@@ -60,7 +60,8 @@ class CompressedCausalAttention(Module):
         if self.training:
             kv_padding_mask = padding_mask
         else:
-            k, v, content_mask, kv_padding_mask = self.cat_memory(
+            prek, prev = k, v
+            k, v, content_mask, kv_padding_mask = self.load_memory(
                 k, v, t, content_mask, padding_mask)
         t = k.shape[0]
         
@@ -68,12 +69,8 @@ class CompressedCausalAttention(Module):
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
         temperature = 1. / self.cc ** 0.5
         a = qk * temperature
-        try:
-            a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
-        except:
-            import pdb
-            pdb.set_trace()
-        a.masked_fill(kv_padding_mask.view(1, t, b, 1), float('-inf'))
+        a = a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
+        a = a.masked_fill(kv_padding_mask.view(1, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
@@ -84,7 +81,7 @@ class CompressedCausalAttention(Module):
         
         # save memory
         if not self.training:
-            self.save_memory(k, v, padding_mask)
+            self.save_memory(prek, prev, padding_mask)
         
         return x
     
@@ -114,32 +111,31 @@ class CompressedCausalAttention(Module):
             new_v = new_v.to(self.memory_v.device)
             self.memory_v = torch.cat((self.memory_v, new_v), dim=0)
     
-    def cat_memory(self, k, v, t, content_mask, padding_mask):
+    def load_memory(self, k, v, t, content_mask, padding_mask):
         s, b, h, c = k.shape
+        
+        # expand and clear memory
         self.expand_memory_batch(b)
         self.clear_memory(t)
+        
+        # concatenate memory onto k and v
         max_len = torch.max(self.memory_length)
-        print('prek', k.shape, self.memory_k.shape)
-        print(self.memory_length)
-        k = torch.cat((self.memory_k[:max_len], k), dim=0)
-        v = torch.cat((self.memory_v[:max_len], v), dim=0)
-        print('postk', k.shape)
+        mk = torch.cat((self.memory_k[:max_len], k), dim=0)
+        mv = torch.cat((self.memory_v[:max_len], v), dim=0)
         
-        ms = self.memory_k.shape[0]
-        #memory_content_mask = torch.ones(
-        #    (ms, s, b), dtype=torch.bool, device=content_mask.device) # s x ms?
-        #content_mask = torch.cat((memory_content_mask, content_mask), dim=0)
-        memory_content_mask = torch.ones(
-            (s, ms, b), dtype=torch.bool, device=content_mask.device)
-        content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
+        # compute new content mask
+        memory_content_mask = torch.zeros(
+            (s, max_len, b), dtype=torch.bool, device=content_mask.device)
+        m_content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
         
+        # compute new padding mask
         memory_padding_mask = torch.zeros((max_len, b), dtype=torch.bool)
         for i in range(b):
             memory_padding_mask[self.memory_length[i]:, i] = True
         memory_padding_mask = memory_padding_mask.to(padding_mask.device)
-        kv_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
+        m_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
         
-        return k, v, content_mask, kv_padding_mask
+        return mk, mv, m_content_mask, m_padding_mask
     
     def save_memory(self, k, v, padding_mask):
         s, b, h, c = k.shape
@@ -156,12 +152,12 @@ class CompressedCausalAttention(Module):
         kv_i[:,:,1] = torch.arange(b, device=k.device).view(1, b)
         memory_i = kv_i.clone()
         memory_i[:,:,0] += self.memory_length.view(1, b)
-        kv_i = kv_i[padding_mask]
-        memory_i  = memory_i[padding_mask]
+        kv_i = kv_i[active_elements]
+        memory_i  = memory_i[active_elements]
         
         # insert into memory
-        self.memory_k[memory_i[:,1], memory_i[:,0]] = k[kv_i[:,1], kv_i[:,0]]
-        self.memory_v[memory_i[:,1], memory_i[:,0]] = v[kv_i[:,1], kv_i[:,0]]
+        self.memory_k[memory_i[:,0], memory_i[:,1]] = k[kv_i[:,0], kv_i[:,1]]
+        self.memory_v[memory_i[:,0], memory_i[:,1]] = v[kv_i[:,0], kv_i[:,1]]
         
         # update lengths
         self.memory_length = new_lengths
@@ -170,7 +166,7 @@ class CompressedCausalAttention(Module):
         if terminal is None:
             self.memory_length = torch.zeros_like(self.memory_length)
         else:
-            self.memory_length[terminal] = 0
+            self.memory_length[terminal.bool()] = 0
     
     def train(self, mode=True):
         super(CompressedCausalAttention, self).train(mode)
@@ -239,7 +235,7 @@ class CompressedRelativeCausalAttention(Module):
         t = 1. / self.cc ** 0.5
         a = (dd_ud + dp_wp) * t
         #a = dd_ud * t
-        a.masked_fill(cm.unsqueeze(-1), float('-inf'))
+        a = a.masked_fill(cm.unsqueeze(-1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
@@ -381,7 +377,7 @@ Ok, brainstorm.  I have a list of absolute positions p.  By subtracting p from p
         '''
         t = 1. / self.cc ** 0.5
         p = (ee_ue + er_wr) * t
-        p.masked_fill(m, float('-inf'))
+        p = p.masked_fill(m, float('-inf'))
         p = torch.softmax(p, dim=1)
         p = self.attention_dropout(p)
         
