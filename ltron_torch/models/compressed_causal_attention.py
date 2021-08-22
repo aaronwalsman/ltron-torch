@@ -3,12 +3,6 @@ from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 
 from ltron_torch.models.parameter import NoWeightDecayParameter
 
-#def make_compressed_causal_mask(i, temporal_dim=0):
-#    i = i[:,:,temporal_dim]
-#    n, b = i.shape
-#    causal_mask = i.view(n, 1, b) < i.view(1, n, b)
-#    return causal_mask
-
 class CompressedCausalAttention(Module):
     def __init__(self,
         channels,
@@ -39,29 +33,26 @@ class CompressedCausalAttention(Module):
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
-    def forward(self, x, t, positional_encoding, content_mask, padding_mask):
+    def forward(self, x, t, pe, content_mask, padding_mask):
         '''
         x                  [s, b, c] - data
-        t                  [b]       - terminal
-        postional_encoding [s, b, c] - 
-        content_mask       [s, s, b] - 
-        padding_mask       [b, s]    - 
+        t                  [b]       - terminal (used to clear memory)
+        pe                 [s, b, c] - positional encoding added to x
+        content_mask       [s, s, b] - qk content mask
+        padding_mask       [b, s]    - sequence padding mask
         '''
         s, b, c = x.shape
         
         # compute q,k,v
-        qkv = self.qkv_linear(x+positional_encoding)
+        qkv = self.qkv_linear(x+pe)
         q, k, v = torch.chunk(qkv, 3, dim=-1)
         q = q.view(s, b, self.h, self.cc)
         k = k.view(s, b, self.h, self.cc)
         v = v.view(s, b, self.h, self.cc)
         
         # add memory to k and v
-        if self.training:
-            kv_padding_mask = padding_mask
-        else:
-            prek, prev = k, v
-            k, v, content_mask, kv_padding_mask = self.load_memory(
+        if not training:
+            k, v, content_mask, padding_mask = self.load_memory(
                 k, v, t, content_mask, padding_mask)
         t = k.shape[0]
         
@@ -70,7 +61,7 @@ class CompressedCausalAttention(Module):
         temperature = 1. / self.cc ** 0.5
         a = qk * temperature
         a = a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
-        a = a.masked_fill(kv_padding_mask.view(1, t, b, 1), float('-inf'))
+        a = a.masked_fill(padding_mask.view(1, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
@@ -80,8 +71,8 @@ class CompressedCausalAttention(Module):
         x = self.content_dropout(x)
         
         # save memory
-        if not self.training:
-            self.save_memory(prek, prev, padding_mask)
+        #if not self.training:
+        #    self.save_memory(prek, prev, padding_mask)
         
         return x
     
@@ -134,6 +125,9 @@ class CompressedCausalAttention(Module):
             memory_padding_mask[self.memory_length[i]:, i] = True
         memory_padding_mask = memory_padding_mask.to(padding_mask.device)
         m_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
+        
+        # append k and v to memory
+        self.save_memory(k, v, padding_mask)
         
         return mk, mv, m_content_mask, m_padding_mask
     
