@@ -33,7 +33,7 @@ class CompressedCausalAttention(Module):
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
-    def forward(self, x, t, pe, content_mask, padding_mask):
+    def forward(self, x, pe, content_mask, padding_mask, terminal=None):
         '''
         x                  [s, b, c] - data
         t                  [b]       - terminal (used to clear memory)
@@ -51,9 +51,9 @@ class CompressedCausalAttention(Module):
         v = v.view(s, b, self.h, self.cc)
         
         # add memory to k and v
-        if not training:
+        if not self.training:
             k, v, content_mask, padding_mask = self.load_memory(
-                k, v, t, content_mask, padding_mask)
+                k, v, content_mask, padding_mask, terminal)
         t = k.shape[0]
         
         # compute attention
@@ -70,44 +70,14 @@ class CompressedCausalAttention(Module):
         x = self.content_linear(x)
         x = self.content_dropout(x)
         
-        # save memory
-        #if not self.training:
-        #    self.save_memory(prek, prev, padding_mask)
-        
         return x
     
-    def expand_memory_batch(self, b):
-        ms, mb = self.memory_k.shape[:2]
-        if mb < b:
-            new_k = torch.zeros(ms, b-mb, self.h, self.cc)
-            new_k = new_k.to(self.memory_k.device)
-            self.memory_k = torch.cat((self.memory_k, new_k), dim=1)
-            
-            new_v = torch.zeros(ms, b-mb, self.h, self.cc)
-            new_v = new_v.to(self.memory_v.device)
-            self.memory_v = torch.cat((self.memory_v, new_v), dim=1)
-            
-            new_lengths = torch.zeros(
-                b-mb, dtype=torch.long, device=self.memory_length.device)
-            self.memory_length = torch.cat((self.memory_length, new_lengths))
-    
-    def expand_memory_length(self, s):
-        ms, mb = self.memory_k.shape[:2]
-        if ms < s:
-            new_k = torch.zeros(s-ms, mb, self.h, self.cc)
-            new_k = new_k.to(self.memory_k.device)
-            self.memory_k = torch.cat((self.memory_k, new_k), dim=0)
-            
-            new_v = torch.zeros(s-ms, mb, self.h, self.cc)
-            new_v = new_v.to(self.memory_v.device)
-            self.memory_v = torch.cat((self.memory_v, new_v), dim=0)
-    
-    def load_memory(self, k, v, t, content_mask, padding_mask):
+    def load_memory(self, k, v, content_mask, padding_mask, terminal):
         s, b, h, c = k.shape
         
         # expand and clear memory
         self.expand_memory_batch(b)
-        self.clear_memory(t)
+        self.clear_memory(terminal)
         
         # concatenate memory onto k and v
         max_len = torch.max(self.memory_length)
@@ -156,7 +126,33 @@ class CompressedCausalAttention(Module):
         # update lengths
         self.memory_length = new_lengths
     
+    def expand_memory_batch(self, b):
+        # if the batch dimension is not large enough, expand
+        ms, mb = self.memory_k.shape[:2]
+        if mb < b:
+            device = self.memory_k.device
+            new_k = torch.zeros(ms, b-mb, self.h, self.cc, device=device)
+            self.memory_k = torch.cat((self.memory_k, new_k), dim=1)
+            
+            new_v = torch.zeros(ms, b-mb, self.h, self.cc, device=device)
+            self.memory_v = torch.cat((self.memory_v, new_v), dim=1)
+            
+            new_lengths = torch.zeros(b-mb, dtype=torch.long, device=device)
+            self.memory_length = torch.cat((self.memory_length, new_lengths))
+    
+    def expand_memory_length(self, s):
+        # if the sequence dimension is not large enough, expand
+        ms, mb = self.memory_k.shape[:2]
+        if ms < s:
+            device = self.memory_k.device
+            new_k = torch.zeros(s-ms, mb, self.h, self.cc, device=device)
+            self.memory_k = torch.cat((self.memory_k, new_k), dim=0)
+            
+            new_v = torch.zeros(s-ms, mb, self.h, self.cc, device=device)
+            self.memory_v = torch.cat((self.memory_v, new_v), dim=0)
+    
     def clear_memory(self, terminal=None):
+        # reset terminal entries to 0, if terminal is None, reset all entries
         if terminal is None:
             self.memory_length = torch.zeros_like(self.memory_length)
         else:
