@@ -65,6 +65,11 @@ class CompressedCausalAttention(Module):
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
+        if torch.any(torch.isnan(p)):
+            print('nan in p')
+            import pdb
+            pdb.set_trace()
+        
         # compute output content
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
@@ -116,12 +121,24 @@ class CompressedCausalAttention(Module):
         kv_i[:,:,1] = torch.arange(b, device=k.device).view(1, b)
         memory_i = kv_i.clone()
         memory_i[:,:,0] += self.memory_length.view(1, b)
-        kv_i = kv_i[active_elements]
+        kv_ia = kv_i[active_elements]
         memory_i  = memory_i[active_elements]
         
         # insert into memory
-        self.memory_k[memory_i[:,0], memory_i[:,1]] = k[kv_i[:,0], kv_i[:,1]]
-        self.memory_v[memory_i[:,0], memory_i[:,1]] = v[kv_i[:,0], kv_i[:,1]]
+        if (torch.any(memory_i[:,0] >= self.memory_k.shape[0]) or
+            torch.any(memory_i[:,1] >= self.memory_k.shape[1])):
+            print('memory out of bounds')
+            import pdb
+            pdb.set_trace()
+        
+        if (torch.any(kv_ia[:,0] >= k.shape[0]) or
+            torch.any(kv_ia[:,1] >= k.shape[1])):
+            print('k out of bounds')
+            import pdb
+            pdb.set_trace()
+        
+        self.memory_k[memory_i[:,0], memory_i[:,1]] = k[kv_ia[:,0], kv_ia[:,1]]
+        self.memory_v[memory_i[:,0], memory_i[:,1]] = v[kv_ia[:,0], kv_ia[:,1]]
         
         # update lengths
         self.memory_length = new_lengths
