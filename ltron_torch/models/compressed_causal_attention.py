@@ -43,32 +43,17 @@ class CompressedCausalAttention(Module):
         
         # add memory to k and v
         if not self.training:
-            #print('pre')
-            #print(k.shape, v.shape)
-            prek = k
-            prev = v
             k, v, content_mask = self.load_memory(
                 k, v, content_mask, pad, terminal)
-            #print('pre')
-            #print(k.shape, v.shape)
-            #if prek.shape == k.shape:
-            #    print(torch.all(prek == k))
-            #    print(torch.all(prev == v))
         t = k.shape[0]
         
         # compute attention
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
         temperature = 1. / self.cc ** 0.5
         a = qk * temperature
-        #print('a')
-        #print(a[:,:,0,0]) # MATCH???
         a = a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
-        #print(a[:,:,0,0]) # MATCH???
-        #a = a.masked_fill(padding_mask.view(1, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
-        #print('p')
-        #print(p[:,:,0,0]) # MATCH???
         
         if torch.any(torch.isnan(p)):
             print('nan in p')
@@ -79,9 +64,6 @@ class CompressedCausalAttention(Module):
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
-        
-        #print('x')
-        #print(x[:,0,:12])
         
         return x
     
@@ -113,75 +95,7 @@ class CompressedCausalAttention(Module):
         mk = mkv[...,:self.cc]
         mv = mkv[...,self.cc:]
         
-        #max_len = torch.max(self.memory_length)
-        #mk = torch.cat((self.memory_k[:max_len], k), dim=0)
-        #mv = torch.cat((self.memory_v[:max_len], v), dim=0)
-        
-        # compute new content mask
-        #memory_content_mask = torch.zeros(
-        #    (s, max_len, b), dtype=torch.bool, device=content_mask.device)
-        #m_content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
-        '''
-        m_content_mask = torch.zeros(
-            (s, torch.max(self.memory_length), b),
-            dtype=torch.bool,
-            device=content_mask.device,
-        )
-        m_content_mask, _ = cat_padded_seqs(
-            m_content_mask, content_mask, self.memory_lengths, pad,
-            seq_dim=1, batch_dim=2)
-        '''
-        '''
-        # compute new padding mask
-        memory_padding_mask = torch.zeros((max_len, b), dtype=torch.bool)
-        for i in range(b):
-            memory_padding_mask[self.memory_length[i]:, i] = True
-        memory_padding_mask = memory_padding_mask.to(padding_mask.device)
-        m_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
-        '''
-        ## append k and v to memory
-        #self.save_memory(k, v, pad)
-        
         return mk, mv, m_content_mask
-    
-    '''
-    def save_memory(self, k, v, pad):
-        s, b, h, c = k.shape
-        
-        # expand memory if necessary
-        active_elements = ~padding_mask
-        kv_lengths = torch.sum(active_elements, dim=0)
-        new_lengths = self.memory_length + kv_lengths
-        self.expand_memory_length(torch.max(new_lengths))
-        
-        # generate indices
-        kv_i = torch.zeros((s, b, 2), dtype=torch.long, device=k.device)
-        kv_i[:,:,0] = torch.arange(s, device=k.device).view(s, 1)
-        kv_i[:,:,1] = torch.arange(b, device=k.device).view(1, b)
-        memory_i = kv_i.clone()
-        memory_i[:,:,0] += self.memory_length.view(1, b)
-        kv_ia = kv_i[active_elements]
-        memory_i  = memory_i[active_elements]
-        
-        # insert into memory
-        if (torch.any(memory_i[:,0] >= self.memory_k.shape[0]) or
-            torch.any(memory_i[:,1] >= self.memory_k.shape[1])):
-            print('memory out of bounds')
-            import pdb
-            pdb.set_trace()
-        
-        if (torch.any(kv_ia[:,0] >= k.shape[0]) or
-            torch.any(kv_ia[:,1] >= k.shape[1])):
-            print('k out of bounds')
-            import pdb
-            pdb.set_trace()
-        
-        self.memory_k[memory_i[:,0], memory_i[:,1]] = k[kv_ia[:,0], kv_ia[:,1]]
-        self.memory_v[memory_i[:,0], memory_i[:,1]] = v[kv_ia[:,0], kv_ia[:,1]]
-        
-        # update lengths
-        self.memory_length = new_lengths
-    '''
     
     def expand_memory_batch(self, b):
         # if the batch dimension is not large enough, expand
@@ -196,17 +110,6 @@ class CompressedCausalAttention(Module):
             
             new_lengths = torch.zeros(b-mb, dtype=torch.long, device=device)
             self.memory_length = torch.cat((self.memory_length, new_lengths))
-    
-    def expand_memory_length(self, s):
-        # if the sequence dimension is not large enough, expand
-        ms, mb = self.memory_k.shape[:2]
-        if ms < s:
-            device = self.memory_k.device
-            new_k = torch.zeros(s-ms, mb, self.h, self.cc, device=device)
-            self.memory_k = torch.cat((self.memory_k, new_k), dim=0)
-            
-            new_v = torch.zeros(s-ms, mb, self.h, self.cc, device=device)
-            self.memory_v = torch.cat((self.memory_v, new_v), dim=0)
     
     def clear_memory(self, terminal=None):
         # reset terminal entries to 0, if terminal is None, reset all entries
