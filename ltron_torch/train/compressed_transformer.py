@@ -25,6 +25,7 @@ from ltron_torch.gym_tensor import gym_space_to_tensors
 from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
 from ltron_torch.models.compressed_transformer import (
     CompressedTransformer, CompressedTransformerConfig)
+from ltron_torch.models.padding import linearize_padded_seq
 
 class CountingEnvA(Env):
     def __init__(self, count_max=32):
@@ -89,7 +90,7 @@ class TrainConfig(Config):
     training_passes_per_epoch=8
     batch_size=16
     num_envs=16
-    rollout_steps_per_epoch=2048*64
+    rollout_steps_per_epoch=2048*16
     
     env = 'Max'
     count_max=32
@@ -114,13 +115,13 @@ def train_compressed_transformer(train_config):
     print('-'*80)
     print('Building Model')
     model_config = CompressedTransformerConfig(
-        t=32,
-        h=1,
-        w=1,
+        data_shape=(32,),
         tile_h=1,
         tile_w=1,
         
-        num_blocks=6, #TMP
+        num_blocks=4,
+        channels=256,
+        num_heads=4,
         
         input_mode='token',
         input_token_vocab=train_config.count_max,
@@ -190,20 +191,22 @@ def rollout(train_config, epoch, env, model, log, clock):
             range(train_config.batch_rollout_steps_per_epoch)
         ):
             # start new sequences if necessary
-            action_reward_storage.start_new_sequences(terminal)
-            observation_storage.start_new_sequences(terminal)
+            action_reward_storage.start_new_seqs(terminal)
+            observation_storage.start_new_seqs(terminal)
             
             # add latest observation to storage
             observation_storage.append_batch(observation=observation)
             
             # use model to compute actions
             x = torch.LongTensor(observation).view(1,-1).cuda()
-            padding_mask = torch.zeros(x.shape, dtype=torch.bool).cuda()
+            #padding_mask = torch.zeros(x.shape, dtype=torch.bool).cuda()
             n, b = x.shape
+            pad_lengths = torch.ones(b, dtype=torch.long) * n
+            pad_lengths = pad_lengths.cuda()
             i = torch.zeros((n, b, 3), dtype=torch.long).cuda()
-            i[:,:,0] = torch.arange(n).view(n,1)
-            t = torch.BoolTensor(terminal).cuda()
-            a_logits = model(x, i, padding_mask, t)
+            i[:,:,0] = step%32 #torch.arange(n).view(n,1)
+            term = torch.BoolTensor(terminal).cuda()
+            a_logits = model(x, i, pad_lengths, terminal=term)
             
             #a = torch.softmax(x[-1], dim=-1)
             action_distribution = torch.distributions.Categorical(
@@ -221,11 +224,11 @@ def rollout(train_config, epoch, env, model, log, clock):
             if train_config.env == 'A':
                 labels = (x[0] + 1).cpu().numpy()
             elif train_config.env == 'B':
-                labels, padding_mask = observation_storage.get_current_seqs()
+                labels, _ = observation_storage.get_current_seqs()
                 labels = labels['observation']
                 labels = numpy.sum(labels, axis=0)
             elif train_config.env == 'Max':
-                labels, padding_mask = observation_storage.get_current_seqs()
+                labels, _ = observation_storage.get_current_seqs()
                 labels = labels['observation']
                 labels = numpy.max(labels, axis=0)
             
@@ -247,9 +250,9 @@ def train_on_rollouts(
     
     for p in range(1, train_config.training_passes_per_epoch+1):
         print('Pass: %i'%p)
-        batch_iterator = rollout_data.batch_sequence_iterator(
+        batch_iterator = rollout_data.batch_seq_iterator(
             train_config.batch_size, shuffle=True)
-        for batch, padding_mask in tqdm.tqdm(batch_iterator):
+        for batch, pad_lengths in tqdm.tqdm(batch_iterator):
             
             # train the model on the batch
             x = torch.LongTensor(batch['observation']).cuda()
@@ -257,8 +260,8 @@ def train_on_rollouts(
             i = torch.zeros((n, b, 3), dtype=torch.long).cuda()
             i[:,:,0] = torch.arange(n).view(n,1)
             t = None
-            padding_mask = torch.BoolTensor(padding_mask).cuda()
-            a_logits = model(x, i, padding_mask)
+            pad_lengths = torch.LongTensor(pad_lengths).cuda()
+            a_logits = model(x, i, pad_lengths)
             
             '''
             if p == 4:
@@ -273,8 +276,9 @@ def train_on_rollouts(
                             tt = torch.ones(b, dtype=torch.bool).cuda()
                         else:
                             tt = torch.zeros(b, dtype=torch.bool).cuda()
-                        pp = torch.zeros(1, b, dtype=torch.bool).cuda()
-                        b_logits.append(model(xx, ii, tt, pp))
+                        #pp = torch.zeros(1, b, dtype=torch.bool).cuda()
+                        pad = torch.ones(b, dtype=torch.long).cuda()
+                        b_logits.append(model(xx, ii, pad, terminal=tt))
                 
                 b_logits = torch.cat(b_logits, dim=0)
                 
@@ -289,14 +293,14 @@ def train_on_rollouts(
             
             loss = torch.nn.functional.cross_entropy(
                 a_logits, a_labels, reduction='none')
-            loss = loss.masked_fill(padding_mask.view(-1), 0.)
-            loss = torch.sum(loss) / torch.sum(~padding_mask)
+            loss = linearize_padded_seq(loss.view(s,b), pad_lengths)
+            loss = torch.sum(loss) / torch.sum(pad_lengths)
             loss.backward()
             
-            train_correct = a_prediction == a_labels
-            train_correct = train_correct.masked_fill(padding_mask.view(-1), 0)
+            train_correct = (a_prediction == a_labels).view(s,b)
+            train_correct = linearize_padded_seq(train_correct, pad_lengths)
             train_correct = (
-                torch.sum(train_correct).float() / torch.sum(~padding_mask))
+                torch.sum(train_correct).float() / torch.sum(pad_lengths))
             log.add_scalar('train/correct', train_correct, clock[0])
             clock[0] += 1
             
