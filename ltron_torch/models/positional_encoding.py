@@ -25,8 +25,8 @@ def sinusoid_positional_encoding(channels, *shape, dtype=torch.float):
     
     return encoding
 
-def compressed_causal_mask(i, temporal_dim=0):
-    i = i[:,:,temporal_dim]
+def compressed_causal_mask(i, causal_dim):
+    i = i[:,:,causal_dim]
     n, b = i.shape
     causal_mask = i.view(n, 1, b) < i.view(1, n, b)
     return causal_mask
@@ -62,6 +62,7 @@ class FactoredLearnedRelativePositionalEncoding(Module):
         
         return pe, cm
 
+'''
 class NoBatchedFactoredPositionalEncoding(Module):
     def __init__(self, channels, data_shape, causal_dims, learned):
         super(FactoredPositionalEncoding, self).__init__()
@@ -97,41 +98,43 @@ class NoBatchedFactoredPositionalEncoding(Module):
         cm = torch.zeros((n, n), dtype=torch.bool, device=i.device)
         
         return pe, cm
+'''
 
 class FactoredPositionalEncoding(Module):
-    def __init__(self, channels, data_shape, causal_dims, learned):
+    def __init__(self, channels, data_shape, causal_dim, learned):
         super(FactoredPositionalEncoding, self).__init__()
         self.learned = learned
         if self.learned:
             self.dim_encodings = ParameterList([
-                NoWeightDecayParameter(torch.zeros(d, channels))
+                NoWeightDecayParameter(torch.zeros(d+1, channels))
                 for d in data_shape
             ])
         else:
             positional_linears = []
+            self.register_buffer(
+                'pe', sinusoid_positional_encoding(channels, max(data_shape)+1))
             for i, d in enumerate(data_shape):
-                self.register_buffer(
-                    'pe_%i'%i, sinusoid_positional_encoding(channels, d))
                 positional_linears.append(Linear(channels, channels))
             self.positional_linears = ModuleList(positional_linears)
             
-        self.causal_dims = causal_dims
+        self.causal_dim = causal_dim
         self.d = len(data_shape)
 
     def forward(self, i):
         n, b, d = i.shape
         
         if self.learned:
-            pe = sum(p[i[:,:,j]] for j,p in enumerate(self.dim_encodings))
+            print(torch.max(i[:,:,1]))
+            pe = sum(p[i[:,:,j]+1] for j,p in enumerate(self.dim_encodings))
         else:
             pe = sum(
-                self.positional_linears[j](getattr(self, 'pe_%i'%j)[i[:,:,j]])
+                self.positional_linears[j](getattr(self, 'pe')[i[:,:,j]+1])
                 for j in range(self.d)
             )
 
         # TMP
         #cm = torch.zeros((n, n, b), dtype=torch.bool, device=i.device)
-        cm = compressed_causal_mask(i)
+        cm = compressed_causal_mask(i, causal_dim=self.causal_dim)
 
         return pe, cm
 

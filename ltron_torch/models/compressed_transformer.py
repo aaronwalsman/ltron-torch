@@ -26,9 +26,10 @@ import ltron_torch.models.transformer_masks as transformer_masks
 # Config =======================================================================
 
 class CompressedTransformerConfig(Config):
-    t = 128
-    h = 16
-    w = 16
+    #t = 128
+    #h = 16
+    #w = 16
+    data_shape = (128, 16, 16)
     tile_h = 16
     tile_w = 16
     decoder_tokens = 0
@@ -107,6 +108,39 @@ class TileEmbeddingBlock(Module):
         return x
 
 
+class DecoderEmbeddingBlock(Module):
+    def __init__(self, config):
+        super(DecoderEmbeddingBlock, self).__init__()
+        self.decoder_tokens = config.decoder_tokens
+        self.channels = config.channels
+        self.decoder_embedding = Embedding(self.decoder_tokens, self.channels)
+    
+    def forward(self, x, i, t, padding_mask):
+        s, b, dims = i.shape
+        
+        dx = self.decoder_embedding.weight
+        dx = dx.unsqueeze(1).expand(self.decoder_tokens, b, self.channels)
+        di = torch.ones(
+            (self.decoder_tokens, b, dims),
+            dtype=torch.long,
+            device=i.device,
+        ) * -1
+        di[:,:,0] = 1
+        di[:,range(b),1] = t
+        
+        d_pad = torch.zeros(
+            (self.decoder_tokens, b),
+            dtype=torch.bool,
+            device=padding_mask.device,
+        )
+        
+        x = torch.cat((dx, x), dim=0)
+        i = torch.cat((di, i), dim=0)
+        padding_mask = torch.cat((d_pad, padding_mask), dim=0)
+        
+        return x, i, padding_mask
+
+
 # Blocks =======================================================================
 
 class Block(Module):
@@ -137,11 +171,11 @@ class Block(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self, x, t, pe, causal_mask, padding_mask):
+    def forward(self, x, pe, causal_mask, padding_mask, terminal=None):
         if isinstance(pe, torch.Tensor):
             pe = self.attention_norm(pe)
         x = x + self.attention(
-            self.attention_norm(x), t, pe, causal_mask, padding_mask)
+            self.attention_norm(x), pe, causal_mask, padding_mask, terminal)
         x = x + self.projection_residual(x)
         
         return x
@@ -176,10 +210,11 @@ class CompressedTransformer(Module):
         super(CompressedTransformer, self).__init__()
         
         if config.relative_positional_encoding:
+            raise Exception('No longer supported')
             self.positional_encoding =  (
                 FactoredLearnedRelativePositionalEncoding(
                     config.channels,
-                    (config.t, config.h, config.w),
+                    config.data_shape,
                     (0,),
                 )
             )
@@ -187,22 +222,27 @@ class CompressedTransformer(Module):
             if config.factored_positional_encoding:
                 self.positional_encoding = FactoredPositionalEncoding(
                     channels=config.channels,
-                    data_shape=(config.t, config.h, config.w),
-                    causal_dims=(0,),
+                    data_shape=config.data_shape,
+                    causal_dim=1,
                     learned=config.learned_positional_encoding,
                 )
             else:
+                raise Exception('No longer supported (need to implement -1)')
                 self.positional_encoding = PositionalEncoding(
                     channels=config.channels,
-                    data_shape=(config.t, config.h, config.w),
-                    causal_dims=(0,),
+                    data_shape=config.data_shape,
+                    causal_dim=0,
                     learned=config.learned_positional_encoding,
                 )
         
         if config.input_mode == 'tile':
-            self.embedding = TileEmbeddingBlock(config)
+            self.embedding_block = TileEmbeddingBlock(config)
         elif config.input_mode == 'token':
-            self.embedding = TokenEmbeddingBlock(config)
+            self.embedding_block = TokenEmbeddingBlock(config)
+        
+        self.decoder_tokens = config.decoder_tokens
+        if self.decoder_tokens:
+            self.decoder_block = DecoderEmbeddingBlock(config)
         
         self.blocks = ModuleList(
             [Block(config) for _ in range(config.num_blocks)])
@@ -211,13 +251,16 @@ class CompressedTransformer(Module):
         if config.init_weights:
             self.apply(self._init_weights)
     
-    def forward(self, x, i, t, padding_mask):
-        pe, causal_mask = self.positional_encoding(i)
+    def forward(self, x, i, padding_mask, t=None, terminal=None):
         #causal_mask = make_compressed_causal_mask(i)
-        x = self.embedding(x, 0)
+        x = self.embedding_block(x, 0)
+        if self.decoder_tokens:
+            x, i, padding_mask = self.decoder_block(x, i, t, padding_mask)
+        
+        pe, causal_mask = self.positional_encoding(i)
         
         for block in self.blocks:
-            x = block(x, t, pe, causal_mask, padding_mask)
+            x = block(x, pe, causal_mask, padding_mask, terminal)
         x = self.read_head(x)
         
         return x
