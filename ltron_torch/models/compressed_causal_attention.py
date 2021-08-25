@@ -2,6 +2,7 @@ import torch
 from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 
 from ltron_torch.models.parameter import NoWeightDecayParameter
+from ltron_torch.models.padding import cat_padded_seqs
 
 class CompressedCausalAttention(Module):
     def __init__(self,
@@ -20,27 +21,17 @@ class CompressedCausalAttention(Module):
         
         self.qkv_linear = Linear(self.c, 3*self.c)
         
-        memory_k = torch.zeros(
-            memory_length, memory_batch_size, self.h, self.cc)
-        memory_v = torch.zeros(
-            memory_length, memory_batch_size, self.h, self.cc)
+        memory_kv = torch.zeros(
+            memory_length, memory_batch_size, self.h, 2*self.cc)
         memory_length = torch.zeros((0,), dtype=torch.long)
-        self.register_buffer('memory_k', memory_k)#, persistent=False)
-        self.register_buffer('memory_v', memory_v)#, persistent=False)
+        self.register_buffer('memory_kv', memory_kv)#, persistent=False)
         self.register_buffer('memory_length', memory_length)#, persistent=False)
         
         self.attention_dropout = Dropout(attention_dropout)
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
-    def forward(self, x, pe, content_mask, padding_mask, terminal=None):
-        '''
-        x                  [s, b, c] - data
-        t                  [b]       - terminal (used to clear memory)
-        pe                 [s, b, c] - positional encoding added to x
-        content_mask       [s, s, b] - qk content mask
-        padding_mask       [b, s]    - sequence padding mask
-        '''
+    def forward(self, x, pe, content_mask, pad, terminal=None):
         s, b, c = x.shape
         
         # compute q,k,v
@@ -52,18 +43,32 @@ class CompressedCausalAttention(Module):
         
         # add memory to k and v
         if not self.training:
-            k, v, content_mask, padding_mask = self.load_memory(
-                k, v, content_mask, padding_mask, terminal)
+            #print('pre')
+            #print(k.shape, v.shape)
+            prek = k
+            prev = v
+            k, v, content_mask = self.load_memory(
+                k, v, content_mask, pad, terminal)
+            #print('pre')
+            #print(k.shape, v.shape)
+            #if prek.shape == k.shape:
+            #    print(torch.all(prek == k))
+            #    print(torch.all(prev == v))
         t = k.shape[0]
         
         # compute attention
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
         temperature = 1. / self.cc ** 0.5
         a = qk * temperature
+        #print('a')
+        #print(a[:,:,0,0]) # MATCH???
         a = a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
-        a = a.masked_fill(padding_mask.view(1, t, b, 1), float('-inf'))
+        #print(a[:,:,0,0]) # MATCH???
+        #a = a.masked_fill(padding_mask.view(1, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
+        #print('p')
+        #print(p[:,:,0,0]) # MATCH???
         
         if torch.any(torch.isnan(p)):
             print('nan in p')
@@ -75,38 +80,72 @@ class CompressedCausalAttention(Module):
         x = self.content_linear(x)
         x = self.content_dropout(x)
         
+        #print('x')
+        #print(x[:,0,:12])
+        
         return x
     
-    def load_memory(self, k, v, content_mask, padding_mask, terminal):
+    def load_memory(self, k, v, content_mask, pad, terminal):
         s, b, h, c = k.shape
         
         # expand and clear memory
         self.expand_memory_batch(b)
         self.clear_memory(terminal)
         
+        # compute new content_mask
+        m_content_mask = torch.zeros(
+            (s, torch.max(self.memory_length), b),
+            dtype=torch.bool,
+            device=content_mask.device,
+        )
+        m_content_mask, _ = cat_padded_seqs(
+            m_content_mask, content_mask, self.memory_length, pad,
+            pad_dim=1, batch_dim=2, pad_value=True)
+        
         # concatenate memory onto k and v
+        kv = torch.cat((k, v), dim=-1)
+        self.memory_kv, self.memory_length = cat_padded_seqs(
+            self.memory_kv, kv, self.memory_length, pad)
+        
+        # chop off any extra bits from long unused memory storage
         max_len = torch.max(self.memory_length)
-        mk = torch.cat((self.memory_k[:max_len], k), dim=0)
-        mv = torch.cat((self.memory_v[:max_len], v), dim=0)
+        mkv = self.memory_kv[:max_len]
+        mk = mkv[...,:self.cc]
+        mv = mkv[...,self.cc:]
+        
+        #max_len = torch.max(self.memory_length)
+        #mk = torch.cat((self.memory_k[:max_len], k), dim=0)
+        #mv = torch.cat((self.memory_v[:max_len], v), dim=0)
         
         # compute new content mask
-        memory_content_mask = torch.zeros(
-            (s, max_len, b), dtype=torch.bool, device=content_mask.device)
-        m_content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
-        
+        #memory_content_mask = torch.zeros(
+        #    (s, max_len, b), dtype=torch.bool, device=content_mask.device)
+        #m_content_mask = torch.cat((memory_content_mask, content_mask), dim=1)
+        '''
+        m_content_mask = torch.zeros(
+            (s, torch.max(self.memory_length), b),
+            dtype=torch.bool,
+            device=content_mask.device,
+        )
+        m_content_mask, _ = cat_padded_seqs(
+            m_content_mask, content_mask, self.memory_lengths, pad,
+            seq_dim=1, batch_dim=2)
+        '''
+        '''
         # compute new padding mask
         memory_padding_mask = torch.zeros((max_len, b), dtype=torch.bool)
         for i in range(b):
             memory_padding_mask[self.memory_length[i]:, i] = True
         memory_padding_mask = memory_padding_mask.to(padding_mask.device)
         m_padding_mask = torch.cat((memory_padding_mask, padding_mask), dim=0)
+        '''
+        ## append k and v to memory
+        #self.save_memory(k, v, pad)
         
-        # append k and v to memory
-        self.save_memory(k, v, padding_mask)
-        
-        return mk, mv, m_content_mask, m_padding_mask
+        return mk, mv, m_content_mask
     
-    def save_memory(self, k, v, padding_mask):
+    '''
+    def save_memory(self, k, v, pad):
         s, b, h, c = k.shape
         
         # expand memory if necessary
@@ -142,17 +181,18 @@ class CompressedCausalAttention(Module):
         
         # update lengths
         self.memory_length = new_lengths
+    '''
     
     def expand_memory_batch(self, b):
         # if the batch dimension is not large enough, expand
-        ms, mb = self.memory_k.shape[:2]
+        ms, mb = self.memory_kv.shape[:2]
         if mb < b:
-            device = self.memory_k.device
-            new_k = torch.zeros(ms, b-mb, self.h, self.cc, device=device)
-            self.memory_k = torch.cat((self.memory_k, new_k), dim=1)
+            device = self.memory_kv.device
+            new_kv = torch.zeros(ms, b-mb, self.h, self.cc*2, device=device)
+            self.memory_kv = torch.cat((self.memory_kv, new_kv), dim=1)
             
-            new_v = torch.zeros(ms, b-mb, self.h, self.cc, device=device)
-            self.memory_v = torch.cat((self.memory_v, new_v), dim=1)
+            #new_v = torch.zeros(ms, b-mb, self.h, self.cc, device=device)
+            #self.memory_v = torch.cat((self.memory_v, new_v), dim=1)
             
             new_lengths = torch.zeros(b-mb, dtype=torch.long, device=device)
             self.memory_length = torch.cat((self.memory_length, new_lengths))
