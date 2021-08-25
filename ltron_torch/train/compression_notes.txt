@@ -1,0 +1,15 @@
+Ok, so I have images that are 32x32 tokens, and sequences of up to 128 in length.  Even a few MLP layers on a dense volume of 32x32x128 struggles to fit into memory on my 11GB card.  How do we compress the data to make this work better.
+
+1. Don't do it.  Use a bigger card like the quadros on the cluster.  24GB is more than 2x bigger than 11.  This makes testing harder though.
+
+2. Mess with the DVAE to try to get it down to 16x16 tokens.  This would reduce the sequence length by 4.  Probably make the tokens either no longer discrete, or multi-discrete because I already tried this with discrete tokens and had trouble with getting the same fidelity out.
+
+3. Merge tokens into blocks.  A 2x2x2 block cuts the number of tokens by 8.
+
+4. Try actual compression.  The problem with this is that unless I compress either all the images in the same way or compress in time the same way, then everything won't be a nice neat block anymore, and I will have scraggly connections everywhere.  Also, when I compress multiple tokens together, how do I even handle sparse connections?  Anything that connected to any of the pre-compressed tokens is now connected to the block?  This seems to thwart some of the benefits of compression as we may still have lots of connections.
+
+5. Mohit's hashing thing.  Here's a quick idea.  Pick some primes.  Each token has two integers associated with it: its value and it's position.  Turn this into one big integer through multiplication, then an even bigger one by multiplying it by one of the primes.  Mod it with the small sequence length to find a location to add the embedded value.  It's not clear this can be reconstructed, but maybe it would work?
+
+6. Do something where we figure out how to only look at part of the sequence at a time.
+
+7. Only store changing tiles in VIT style.
