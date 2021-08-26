@@ -4,7 +4,7 @@ import torch
 from torch.nn import (
     Module, ModuleList, Sequential, Linear, Dropout, ReLU, GELU,
     MultiheadAttention, Embedding, LayerNorm, TransformerEncoderLayer,
-    Parameter, Identity, Conv3d
+    Parameter, Identity
 )
 from torch.optim import AdamW
 
@@ -25,9 +25,6 @@ import ltron_torch.models.transformer_masks as transformer_masks
 # Config =======================================================================
 
 class CompressedTransformerConfig(Config):
-    #t = 128
-    #h = 16
-    #w = 16
     data_shape = (128, 16, 16)
     tile_h = 16
     tile_w = 16
@@ -115,7 +112,7 @@ class DecoderEmbeddingBlock(Module):
         self.channels = config.channels
         self.decoder_embedding = Embedding(self.decoder_tokens, self.channels)
     
-    def forward(self, x, i, t, pad_lengths):
+    def forward(self, x, i, t, pad):
         s, b, dims = i.shape
         
         dx = self.decoder_embedding.weight
@@ -131,30 +128,22 @@ class DecoderEmbeddingBlock(Module):
         x = torch.cat((dx, x), dim=0)
         i = torch.cat((di, i), dim=0)
         
-        return x, i, pad_lengths + self.decoder_tokens
+        return x, i, pad + self.decoder_tokens
 
 
-# Blocks =======================================================================
+# Transformer Blocks ===========================================================
 
 class Block(Module):
     def __init__(self, config):
         super(Block, self).__init__()
         
         self.attention_norm = LayerNorm(config.channels)
-        if config.relative_positional_encoding:
-            self.attention = CompressedRelativeCausalAttention(
-                config.channels,
-                config.num_heads,
-                attention_dropout = config.attention_dropout,
-                content_dropout = config.content_dropout,
-            )
-        else:
-            self.attention = CompressedCausalAttention(
-                config.channels,
-                config.num_heads,
-                attention_dropout = config.attention_dropout,
-                content_dropout = config.content_dropout,
-            )
+        self.attention = CompressedCausalAttention(
+            config.channels,
+            config.num_heads,
+            attention_dropout = config.attention_dropout,
+            content_dropout = config.content_dropout,
+        )
         
         self.projection_residual = Sequential(
             LayerNorm(config.channels),
@@ -164,11 +153,11 @@ class Block(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self, x, pe, causal_mask, pad_lengths, terminal=None):
+    def forward(self, x, pe, causal_mask, pad, terminal=None):
         if isinstance(pe, torch.Tensor):
             pe = self.attention_norm(pe)
         x = x + self.attention(
-            self.attention_norm(x), pe, causal_mask, pad_lengths, terminal)
+            self.attention_norm(x), pe, causal_mask, pad, terminal)
         x = x + self.projection_residual(x)
         
         return x
@@ -202,6 +191,7 @@ class CompressedTransformer(Module):
     def __init__(self, config):
         super(CompressedTransformer, self).__init__()
         
+        # positional encoding
         if config.relative_positional_encoding:
             raise Exception('No longer supported')
             self.positional_encoding =  (
@@ -228,32 +218,43 @@ class CompressedTransformer(Module):
                     learned=config.learned_positional_encoding,
                 )
         
+        # embedding
         if config.input_mode == 'tile':
             self.embedding_block = TileEmbeddingBlock(config)
         elif config.input_mode == 'token':
             self.embedding_block = TokenEmbeddingBlock(config)
         
+        # decoder tokens
         self.decoder_tokens = config.decoder_tokens
         if self.decoder_tokens:
             self.decoder_block = DecoderEmbeddingBlock(config)
         
+        # blocks
         self.blocks = ModuleList(
             [Block(config) for _ in range(config.num_blocks)])
         self.read_head = ReadHead(config)
         
+        # initialize weights
         if config.init_weights:
             self.apply(self._init_weights)
     
-    def forward(self, x, i, pad_lengths, t=None, terminal=None):
-        #causal_mask = make_compressed_causal_mask(i)
+    def forward(self, x, i, pad, t=None, terminal=None):
+        
+        # embed tokens
         x = self.embedding_block(x, 0)
+        
+        # make decoder tokens
         if self.decoder_tokens:
-            x, i, pad_lengths = self.decoder_block(x, i, t, pad_lengths)
+            x, i, pad = self.decoder_block(x, i, t, pad)
         
-        pe, causal_mask = self.positional_encoding(i, pad_lengths)
+        # make positional encoding
+        pe, causal_mask = self.positional_encoding(i, pad)
         
+        # run through each transformer block
         for block in self.blocks:
-            x = block(x, pe, causal_mask, pad_lengths, terminal)
+            x = block(x, pe, causal_mask, pad, terminal)
+        
+        # read off the values
         x = self.read_head(x)
         
         return x

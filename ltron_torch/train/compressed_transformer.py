@@ -198,7 +198,7 @@ def train_compressed_transformer(train_config):
         print('Elapsed: %.02f seconds'%(epoch_end-epoch_start))
 
 def rollout_epoch(train_config, epoch, env, model, log, clock):
-    print('- '*40)
+    print('-'*80)
     print('Rolling Out Episodes')
     
     # initialize storage for observations, actions and rewards
@@ -233,26 +233,10 @@ def rollout_epoch(train_config, epoch, env, model, log, clock):
             a_logits = model(x, i, pad, terminal=term)
             action_distribution = torch.distributions.Categorical(
                 logits=a_logits[-1])
-                #logits=a_logits[-1].cpu())
-            #try:
-            #    #a = action_distribution.sample().cpu().numpy()
-            #    a = action_distribution.sample().numpy()
-            #except RuntimeError:
-            #    import pdb
-            #    pdb.set_trace()
-            
             a = action_distribution.sample().cpu().numpy()
-            
-            #print('-----------')
-            #print(x[0].cpu().numpy())
-            #print(a)
-            #print(i[0,:,0].cpu().numpy())
-            #print(numpy.sum(x[0].cpu().numpy()+1 == a) / 32.)
             
             # send actions to the environment
             observation, reward, terminal, info = env.step(a)
-            
-            #print(numpy.mean(reward))
             
             # make labels
             if train_config.env == 'next':
@@ -266,7 +250,7 @@ def rollout_epoch(train_config, epoch, env, model, log, clock):
                 labels = labels['observation'][:,:,1]
                 labels = numpy.max(labels, axis=0)
             
-            # store actions and rewards
+            # store actions, rewards and labels
             action_reward_storage.append_batch(
                 action=a,
                 reward=reward,
@@ -281,8 +265,9 @@ def rollout_epoch(train_config, epoch, env, model, log, clock):
     return observation_storage | action_reward_storage
 
 def train_epoch(
-    train_config, epoch, model, optimizer, rollout_data, log, clock):
-    print('- '*40)
+    train_config, epoch, model, optimizer, rollout_data, log, clock, debug=False
+):
+    print('-'*80)
     print('Training On Episodes')
     
     model.train()
@@ -302,8 +287,9 @@ def train_epoch(
             pad = torch.LongTensor(pad).cuda()
             a_logits = model(x, i, pad).view(n*b,-1)
             
-            '''
-            if p == 4:
+            # this can be used to verify parity between a whole-sequence forward
+            # pass and a step-by-step forward pass
+            if debug:
                 b_logits = []
                 with torch.no_grad():
                     model.eval()
@@ -321,7 +307,6 @@ def train_epoch(
                 b_logits = torch.cat(b_logits, dim=0)
                 import pdb
                 pdb.set_trace()
-            '''
             
             # compute loss
             a_labels = torch.LongTensor(batch['labels']).cuda().view(n*b)

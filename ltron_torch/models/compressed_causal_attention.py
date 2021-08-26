@@ -14,23 +14,25 @@ class CompressedCausalAttention(Module):
         memory_batch_size=0,
     ):
         super(CompressedCausalAttention, self).__init__()
+        
+        # store values we need for later
         assert channels % heads == 0
         self.c = channels
         self.h = heads
         self.cc = self.c // self.h
         
-        # qkv layer
-        self.qkv_linear = Linear(self.c, 3*self.c)
-        
-        # memory
+        # memory struture
         memory_kv = torch.zeros(
             memory_length, memory_batch_size, self.h, 2*self.cc)
         memory_length = torch.zeros((0,), dtype=torch.long)
         self.register_buffer('memory_kv', memory_kv)#, persistent=False)
         self.register_buffer('memory_length', memory_length)#, persistent=False)
         
-        # dropout
+        # qkv layer
+        self.qkv_linear = Linear(self.c, 3*self.c)
         self.attention_dropout = Dropout(attention_dropout)
+        
+        # forward projection
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
@@ -44,7 +46,7 @@ class CompressedCausalAttention(Module):
         k = k.view(s, b, self.h, self.cc)
         v = v.view(s, b, self.h, self.cc)
         
-        # add memory to k and v
+        # add memory to k and v if in eval mode
         if not self.training:
             k, v, content_mask = self.load_memory(
                 k, v, content_mask, pad, terminal)
@@ -58,20 +60,10 @@ class CompressedCausalAttention(Module):
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
-        #if torch.any(torch.isnan(p)):
-        #    print('nan in p')
-        #    import pdb
-        #    pdb.set_trace()
-        
-        # compute output content
+        # compute forward projection
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
-        
-        if torch.any(torch.isnan(x)):
-            print('nan in x')
-            import pdb
-            pdb.set_trace()
         
         return x
     
@@ -83,26 +75,19 @@ class CompressedCausalAttention(Module):
         self.clear_memory(terminal)
         
         # compute new content_mask
-        '''
-        m_content_mask = torch.zeros(
-            (s, torch.max(self.memory_length), b),
-            dtype=torch.bool,
-            device=content_mask.device,
-        )
-        '''
         m_content_mask = make_padding_mask(
             self.memory_length, (s, torch.max(self.memory_length), b),
-            pad_dim=1, batch_dim=2)
+            seq_dim=1, batch_dim=2)
         m_content_mask, _ = cat_padded_seqs(
             m_content_mask, content_mask, self.memory_length, pad,
-            pad_dim=1, batch_dim=2, pad_value=True)
+            seq_dim=1, batch_dim=2, pad_value=True)
         
-        # concatenate memory onto k and v
+        # concatenate k and v onto the memory
         kv = torch.cat((k, v), dim=-1)
         self.memory_kv, self.memory_length = cat_padded_seqs(
             self.memory_kv, kv, self.memory_length, pad)
         
-        # chop off any extra bits from long unused memory storage
+        # chop off extra length from long unused memory storage
         max_len = torch.max(self.memory_length)
         mkv = self.memory_kv[:max_len]
         mk = mkv[...,:self.cc]
