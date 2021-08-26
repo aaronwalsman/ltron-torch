@@ -11,7 +11,6 @@ from torch.optim import AdamW
 from ltron_torch.config import Config
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.compressed_causal_attention import (
-    CompressedRelativeCausalAttention,
     CompressedCausalAttention,
     #make_compressed_causal_mask,
 )
@@ -34,6 +33,7 @@ class CompressedTransformerConfig(Config):
     tile_w = 16
     decoder_tokens = 0
     decode_input = False
+    causal_dim = 0
     
     input_mode='tile'
     input_tile_channels = 3
@@ -115,7 +115,7 @@ class DecoderEmbeddingBlock(Module):
         self.channels = config.channels
         self.decoder_embedding = Embedding(self.decoder_tokens, self.channels)
     
-    def forward(self, x, i, t, padding_mask):
+    def forward(self, x, i, t, pad_lengths):
         s, b, dims = i.shape
         
         dx = self.decoder_embedding.weight
@@ -128,17 +128,10 @@ class DecoderEmbeddingBlock(Module):
         di[:,:,0] = 1
         di[:,range(b),1] = t
         
-        d_pad = torch.zeros(
-            (self.decoder_tokens, b),
-            dtype=torch.bool,
-            device=padding_mask.device,
-        )
-        
         x = torch.cat((dx, x), dim=0)
         i = torch.cat((di, i), dim=0)
-        padding_mask = torch.cat((d_pad, padding_mask), dim=0)
         
-        return x, i, padding_mask
+        return x, i, pad_lengths + self.decoder_tokens
 
 
 # Blocks =======================================================================
@@ -171,11 +164,11 @@ class Block(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self, x, pe, causal_mask, padding_mask, terminal=None):
+    def forward(self, x, pe, causal_mask, pad_lengths, terminal=None):
         if isinstance(pe, torch.Tensor):
             pe = self.attention_norm(pe)
         x = x + self.attention(
-            self.attention_norm(x), pe, causal_mask, padding_mask, terminal)
+            self.attention_norm(x), pe, causal_mask, pad_lengths, terminal)
         x = x + self.projection_residual(x)
         
         return x
@@ -223,7 +216,7 @@ class CompressedTransformer(Module):
                 self.positional_encoding = FactoredPositionalEncoding(
                     channels=config.channels,
                     data_shape=config.data_shape,
-                    causal_dim=1,
+                    causal_dim=config.causal_dim,
                     learned=config.learned_positional_encoding,
                 )
             else:
@@ -251,16 +244,16 @@ class CompressedTransformer(Module):
         if config.init_weights:
             self.apply(self._init_weights)
     
-    def forward(self, x, i, padding_mask, t=None, terminal=None):
+    def forward(self, x, i, pad_lengths, t=None, terminal=None):
         #causal_mask = make_compressed_causal_mask(i)
         x = self.embedding_block(x, 0)
         if self.decoder_tokens:
-            x, i, padding_mask = self.decoder_block(x, i, t, padding_mask)
+            x, i, pad_lengths = self.decoder_block(x, i, t, pad_lengths)
         
-        pe, causal_mask = self.positional_encoding(i)
+        pe, causal_mask = self.positional_encoding(i, pad_lengths)
         
         for block in self.blocks:
-            x = block(x, pe, causal_mask, padding_mask, terminal)
+            x = block(x, pe, causal_mask, pad_lengths, terminal)
         x = self.read_head(x)
         
         return x

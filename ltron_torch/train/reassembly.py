@@ -19,6 +19,7 @@ from ltron.gym.rollout_storage import RolloutStorage
 from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.hierarchy import stack_numpy_hierarchies
 
+from ltron_torch.models.padding import cat_padded_seqs
 from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
@@ -76,6 +77,7 @@ def train_reassembly(train_config):
         data_shape = (2, max_sequence_length, wh, ww, hh, hw),
         tile_h=train_config.tile_height,
         tile_w=train_config.tile_width,
+        causal_dim=1,
         
         num_blocks=8, # who knows?
         
@@ -173,33 +175,37 @@ def rollout(train_config, epoch, env, model, log, clock):
                 observation_storage.get_current_seq_lens())
             workspace_storage = (
                 observation_storage['observation', 'workspace_color_render'])
-            workspace_frames, padding_mask = workspace_storage.get_current_seqs(
+            workspace_frames, pad_lengths = workspace_storage.get_current_seqs(
                 start=-2)
             
             handspace_storage = (
                 observation_storage['observation', 'handspace_color_render'])
-            handspace_frames, padding_mask = handspace_storage.get_current_seqs(
+            handspace_frames, pad_lengths = handspace_storage.get_current_seqs(
                 start=-2)
             
-            (wx, wi, w_mask) = batch_deduplicate_tiled_seqs(
+            (wx, wi, w_pad) = batch_deduplicate_tiled_seqs(
                 workspace_frames,
-                padding_mask,
+                pad_lengths,
                 train_config.tile_width,
                 train_config.tile_height,
                 background=102,
                 s_start=seq_lengths,
             )
             num_workspace = wx.shape[0]
+            wi = numpy.insert(wi, (0,3,3), -1, axis=-1)
+            wi[:,:,0] = 0
             
-            (hx, hi, h_mask) = batch_deduplicate_tiled_seqs(
+            (hx, hi, h_pad) = batch_deduplicate_tiled_seqs(
                 handspace_frames,
-                padding_mask,
+                pad_lengths,
                 train_config.tile_width,
                 train_config.tile_height,
                 background=102,
                 s_start=seq_lengths,
             )
             num_handspace = hx.shape[0]
+            hi = numpy.insert(hi, (0,1,1), -1, axis=-1)
+            hi[:,:,0] = 0
             
             '''
             STOP
@@ -212,20 +218,28 @@ def rollout(train_config, epoch, env, model, log, clock):
             based on decoder tokens or whatever?
             '''
             
-            x = numpy.concatenate((wx, hx), axis=0)
+            #x = numpy.concatenate((wx, hx), axis=0)
+            wx = torch.FloatTensor(wx)
+            hx = torch.FloatTensor(hx)
+            w_pad = torch.LongTensor(w_pad)
+            h_pad = torch.LongTensor(h_pad)
+            x, tile_pad_lengths = cat_padded_seqs(wx, hx, w_pad, h_pad)
             x = default_tile_transform(x).cuda()
+            tile_pad_lengths = tile_pad_lengths.cuda()
             s, b = x.shape[:2]
-            i = numpy.ones((s, b, 6)) * -1
-            i[:num_workspace, :, 0] = 0
-            i[:num_workspace, :, [1,2,3]] = wi
-            i[num_workspace:, :, [1,4,5]] = hi
-            i = torch.LongTensor(i).cuda()
-            tile_padding_mask = numpy.concatenate((w_mask, h_mask))
-            tile_padding_mask = torch.BoolTensor(tile_padding_mask).cuda()
+            i, _ = cat_padded_seqs(
+                torch.LongTensor(wi), torch.LongTensor(hi), w_pad, h_pad)
+            i = i.cuda()
+            #i[:num_workspace, :, 0] = 0
+            #i[:num_workspace, :, [1,2,3]] = wi
+            #i[num_workspace:, :, [1,4,5]] = hi
+            #i = torch.LongTensor(i).cuda()
+            #tile_padding_mask = numpy.concatenate((w_mask, h_mask))
+            #tile_padding_mask = torch.BoolTensor(tile_padding_mask).cuda()
             t = torch.LongTensor(seq_lengths).cuda()
             terminal = torch.BoolTensor(terminal).cuda()
             
-            action_logits = model(x, i, tile_padding_mask, t, terminal)
+            action_logits = model(x, i, tile_pad_lengths, t, terminal)
             
             polarity_logits = action_logits[:,:,:2].view(-1,2)
             polarity_distribution = Categorical(logits=polarity_logits)

@@ -25,10 +25,18 @@ def sinusoid_positional_encoding(channels, *shape, dtype=torch.float):
     
     return encoding
 
-def compressed_causal_mask(i, causal_dim):
+def compressed_causal_mask(i, pad, causal_dim):
     i = i[:,:,causal_dim]
     n, b = i.shape
     causal_mask = i.view(n, 1, b) < i.view(1, n, b)
+    square = torch.max(torch.arange(n).view(n,1), torch.arange(n).view(1,n))
+    square = square.to(pad.device)
+    padding_mask = square.unsqueeze(-1) >= pad.view(1,1,b)
+    causal_mask = causal_mask | padding_mask
+    
+    # make the diagonal False to avoid nan
+    causal_mask[torch.arange(n), torch.arange(n), :] = False
+    
     return causal_mask
 
 class FactoredLearnedRelativePositionalEncoding(Module):
@@ -120,11 +128,10 @@ class FactoredPositionalEncoding(Module):
         self.causal_dim = causal_dim
         self.d = len(data_shape)
 
-    def forward(self, i):
+    def forward(self, i, pad_lengths):
         n, b, d = i.shape
         
         if self.learned:
-            print(torch.max(i[:,:,1]))
             pe = sum(p[i[:,:,j]+1] for j,p in enumerate(self.dim_encodings))
         else:
             pe = sum(
@@ -132,10 +139,8 @@ class FactoredPositionalEncoding(Module):
                 for j in range(self.d)
             )
 
-        # TMP
-        #cm = torch.zeros((n, n, b), dtype=torch.bool, device=i.device)
-        cm = compressed_causal_mask(i, causal_dim=self.causal_dim)
-
+        cm = compressed_causal_mask(i, pad_lengths, causal_dim=self.causal_dim)
+        
         return pe, cm
 
 class PositionalEncoding(Module):

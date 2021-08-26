@@ -11,7 +11,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from gym import Env
-from gym.spaces import Discrete
+from gym.spaces import Discrete, MultiDiscrete
 from gym.vector.async_vector_env import AsyncVectorEnv
 
 from ltron.dataset.paths import get_dataset_info
@@ -27,73 +27,102 @@ from ltron_torch.models.compressed_transformer import (
     CompressedTransformer, CompressedTransformerConfig)
 from ltron_torch.models.padding import linearize_padded_seq
 
-class CountingEnvA(Env):
+
+# Test Environments ============================================================
+
+class NextEnv(Env):
     def __init__(self, count_max=32):
         self.count_max = count_max
-        self.observation_space = Discrete(count_max)
+        self.observation_space = MultiDiscrete((count_max, count_max))
         self.action_space = Discrete(count_max)
     
     def reset(self):
+        self.t = 0
         self.index = random.randint(0, self.count_max-1)
-        return self.index
+        return (self.t, self.index)
     
     def step(self, action):
         if action == self.index+1:
             reward = 1
         else:
             reward = 0
+        self.t += 1
         self.index += 1
-        return self.index, reward, self.index == self.count_max, {}
+        return (self.t, self.index), reward, self.index == self.count_max, {}
 
-class CountingEnvB(Env):
+class CountEnv(Env):
     def __init__(self, episode_len=32):
         self.episode_len = episode_len
-        self.observation_space = Discrete(2)
+        self.observation_space = MultiDiscrete((episode_len, 2))
         self.action_space = Discrete(episode_len)
     
     def reset(self):
         self.count = 0
-        self.steps = 0
+        self.t = 0
         obs = random.random() < 0.05
         self.count += obs
-        return obs
+        return (self.t, obs)
     
     def step(self, action):
         reward = action == self.count
         obs = random.random() < 0.05
         self.count += obs
-        self.steps += 1
-        return obs, reward, self.steps == self.episode_len, {}
+        self.t += 1
+        return (self.t, obs), reward, self.t == self.episode_len, {}
     
 class MaxEnv(Env):
     def __init__(self, num_values=32, episode_len=32):
         self.num_values = num_values
         self.episode_len = episode_len
-        self.observation_space = Discrete(num_values)
+        self.observation_space = MultiDiscrete((episode_len, num_values))
         self.action_space = Discrete(num_values)
     
     def reset(self):
         obs = random.randint(0, self.num_values-1)
         self.max_value = obs
-        self.steps = 0
-        return obs
+        self.t = 0
+        return (self.t, obs)
     
     def step(self, action):
         reward = action == self.max_value
         obs = random.randint(0, self.num_values-1)
         self.max_value = max(self.max_value, obs)
-        self.steps += 1
-        return obs, reward, self.steps == self.episode_len, {}
+        self.t += 1
+        return (self.t, obs), reward, self.t == self.episode_len, {}
+
+class VariableMaxEnv(Env):
+    def __init__(self, num_values=32, p_end=0.05, max_len=32):
+        self.num_values = num_values
+        self.p_end = p_end
+        self.observation_space = MultiDiscrete((10000, num_values))
+        self.action_space = Discrete(num_values)
+        self.max_len = max_len
+    
+    def reset(self):
+        obs = random.randint(0, self.num_values-1)
+        self.max_value = obs
+        self.t = 0
+        return (self.t, obs)
+    
+    def step(self, action):
+        reward = action == self.max_value
+        obs = random.randint(0, self.num_values-1)
+        self.max_value = max(self.max_value, obs)
+        self.t += 1
+        terminal = random.random() < self.p_end or self.t >= self.max_len
+        return (self.t, obs), reward, terminal, {}
+
+
+# Train Config =================================================================
 
 class TrainConfig(Config):
     epochs=10
     training_passes_per_epoch=8
     batch_size=16
     num_envs=16
-    rollout_steps_per_epoch=2048*16
+    rollout_steps_per_epoch=2048*4
     
-    env = 'Max'
-    count_max=32
+    env = 'max'
     
     test_frequency=None
     checkpoint_frequency=1
@@ -102,6 +131,9 @@ class TrainConfig(Config):
         self.batch_rollout_steps_per_epoch = (
             self.rollout_steps_per_epoch // self.num_envs
         )
+
+
+# Training Scripts =============================================================
 
 def train_compressed_transformer(train_config):
     
@@ -124,10 +156,10 @@ def train_compressed_transformer(train_config):
         num_heads=4,
         
         input_mode='token',
-        input_token_vocab=train_config.count_max,
+        input_token_vocab=32,
         
         decode_input=True,
-        decoder_channels=train_config.count_max+1,
+        decoder_channels=32+1,
         
         content_dropout = 0.,
         embedding_dropout = 0.,
@@ -136,17 +168,21 @@ def train_compressed_transformer(train_config):
     )
     model = CompressedTransformer(model_config).cuda()
     
+    print('-'*80)
+    print('Building Optimizer')
     optimizer_config = OptimizerConfig(learning_rate=3e-5)
     optimizer = adamw_optimizer(model, optimizer_config)
     
     print('-'*80)
-    print('Building Train Env')
-    if train_config.env == 'A':
-        constructors = [CountingEnvA for i in range(train_config.num_envs)]
-    elif train_config.env == 'B':
-        constructors = [CountingEnvB for i in range(train_config.num_envs)]
-    elif train_config.env == 'Max':
+    print('Building Envs')
+    if train_config.env == 'next':
+        constructors = [NextEnv for i in range(train_config.num_envs)]
+    elif train_config.env == 'count':
+        constructors = [CountEnv for i in range(train_config.num_envs)]
+    elif train_config.env == 'max':
         constructors = [MaxEnv for i in range(train_config.num_envs)]
+    elif train_config.env == 'variable_max':
+        constructors = [VariableMaxEnv for i in range(train_config.num_envs)]
     envs = AsyncVectorEnv(constructors, context='spawn')
     
     for epoch in range(1, train_config.epochs+1):
@@ -154,25 +190,16 @@ def train_compressed_transformer(train_config):
         print('='*80)
         print('Epoch: %i'%epoch)
         
-        train_epoch(train_config, epoch, envs, model, optimizer, log, clock)
+        episodes = rollout_epoch(train_config, epoch, envs, model, log, clock)
+        train_epoch(train_config, epoch, model, optimizer, episodes, log, clock)
         save_checkpoint(train_config, epoch, model, optimizer, log, clock)
-        test_epoch(train_config, epoch, envs, model, log, clock)
         
         epoch_end = time.time()
         print('Elapsed: %.02f seconds'%(epoch_end-epoch_start))
-        
-def train_epoch(train_config, epoch, train_env, model, optimizer, log, clock):
-    print('-'*80)
-    print('Train')
-    
-    rollout_data_labels = rollout(
-        train_config, epoch, train_env, model, log, clock)
-    train_on_rollouts(
-        train_config, epoch, model, optimizer, rollout_data_labels, log, clock)
 
-def rollout(train_config, epoch, env, model, log, clock):
+def rollout_epoch(train_config, epoch, env, model, log, clock):
     print('- '*40)
-    print('Rolling out episodes')
+    print('Rolling Out Episodes')
     
     # initialize storage for observations, actions and rewards
     observation_storage = RolloutStorage(train_config.num_envs)
@@ -198,38 +225,45 @@ def rollout(train_config, epoch, env, model, log, clock):
             observation_storage.append_batch(observation=observation)
             
             # use model to compute actions
-            x = torch.LongTensor(observation).view(1,-1).cuda()
-            #padding_mask = torch.zeros(x.shape, dtype=torch.bool).cuda()
+            i = torch.LongTensor(observation[:,0]).view(1,-1, 1).cuda()
+            x = torch.LongTensor(observation[:,1]).view(1,-1).cuda()
             n, b = x.shape
-            pad_lengths = torch.ones(b, dtype=torch.long) * n
-            pad_lengths = pad_lengths.cuda()
-            i = torch.zeros((n, b, 3), dtype=torch.long).cuda()
-            i[:,:,0] = step%32 #torch.arange(n).view(n,1)
+            pad = (torch.ones(b, dtype=torch.long) * n).cuda()
             term = torch.BoolTensor(terminal).cuda()
-            a_logits = model(x, i, pad_lengths, terminal=term)
-            
-            #a = torch.softmax(x[-1], dim=-1)
+            a_logits = model(x, i, pad, terminal=term)
             action_distribution = torch.distributions.Categorical(
                 logits=a_logits[-1])
+                #logits=a_logits[-1].cpu())
+            #try:
+            #    #a = action_distribution.sample().cpu().numpy()
+            #    a = action_distribution.sample().numpy()
+            #except RuntimeError:
+            #    import pdb
+            #    pdb.set_trace()
+            
             a = action_distribution.sample().cpu().numpy()
+            
+            #print('-----------')
+            #print(x[0].cpu().numpy())
+            #print(a)
+            #print(i[0,:,0].cpu().numpy())
+            #print(numpy.sum(x[0].cpu().numpy()+1 == a) / 32.)
             
             # send actions to the environment
             observation, reward, terminal, info = env.step(a)
             
-            log.add_scalar(
-                'rollout/reward', numpy.sum(reward)/reward.shape[0], clock[0])
-            clock[0] += 1
+            #print(numpy.mean(reward))
             
             # make labels
-            if train_config.env == 'A':
+            if train_config.env == 'next':
                 labels = (x[0] + 1).cpu().numpy()
-            elif train_config.env == 'B':
+            elif train_config.env == 'count':
                 labels, _ = observation_storage.get_current_seqs()
-                labels = labels['observation']
+                labels = labels['observation'][:,:,1]
                 labels = numpy.sum(labels, axis=0)
-            elif train_config.env == 'Max':
+            elif train_config.env in ('max', 'variable_max'):
                 labels, _ = observation_storage.get_current_seqs()
-                labels = labels['observation']
+                labels = labels['observation'][:,:,1]
                 labels = numpy.max(labels, axis=0)
             
             # store actions and rewards
@@ -238,30 +272,35 @@ def rollout(train_config, epoch, env, model, log, clock):
                 reward=reward,
                 labels=labels,
             )
+            
+            # log
+            log.add_scalar(
+                'rollout/reward', numpy.sum(reward)/reward.shape[0], clock[0])
+            clock[0] += 1
     
     return observation_storage | action_reward_storage
 
-def train_on_rollouts(
+def train_epoch(
     train_config, epoch, model, optimizer, rollout_data, log, clock):
     print('- '*40)
-    print('Training on episodes')
+    print('Training On Episodes')
     
     model.train()
     
     for p in range(1, train_config.training_passes_per_epoch+1):
+        
         print('Pass: %i'%p)
         batch_iterator = rollout_data.batch_seq_iterator(
             train_config.batch_size, shuffle=True)
-        for batch, pad_lengths in tqdm.tqdm(batch_iterator):
+        for batch, pad in tqdm.tqdm(batch_iterator):
             
-            # train the model on the batch
-            x = torch.LongTensor(batch['observation']).cuda()
+            # compute logits
+            obs = batch['observation']
+            i = torch.LongTensor(obs[:,:,0]).unsqueeze(-1).cuda()
+            x = torch.LongTensor(obs[:,:,1]).cuda()
             n, b = x.shape
-            i = torch.zeros((n, b, 3), dtype=torch.long).cuda()
-            i[:,:,0] = torch.arange(n).view(n,1)
-            t = None
-            pad_lengths = torch.LongTensor(pad_lengths).cuda()
-            a_logits = model(x, i, pad_lengths)
+            pad = torch.LongTensor(pad).cuda()
+            a_logits = model(x, i, pad).view(n*b,-1)
             
             '''
             if p == 4:
@@ -276,40 +315,37 @@ def train_on_rollouts(
                             tt = torch.ones(b, dtype=torch.bool).cuda()
                         else:
                             tt = torch.zeros(b, dtype=torch.bool).cuda()
-                        #pp = torch.zeros(1, b, dtype=torch.bool).cuda()
-                        pad = torch.ones(b, dtype=torch.long).cuda()
-                        b_logits.append(model(xx, ii, pad, terminal=tt))
+                        b_pad = torch.ones(b, dtype=torch.long).cuda()
+                        b_logits.append(model(xx, ii, b_pad, terminal=tt))
                 
                 b_logits = torch.cat(b_logits, dim=0)
-                
                 import pdb
                 pdb.set_trace()
             '''
             
-            s, b, c = a_logits.shape
-            a_logits = a_logits.view(s*b, c)
-            a_prediction = torch.argmax(a_logits, dim=-1)
-            a_labels = torch.LongTensor(batch['labels']).cuda().view(s*b)
-            
+            # compute loss
+            a_labels = torch.LongTensor(batch['labels']).cuda().view(n*b)
             loss = torch.nn.functional.cross_entropy(
                 a_logits, a_labels, reduction='none')
-            loss = linearize_padded_seq(loss.view(s,b), pad_lengths)
-            loss = torch.sum(loss) / torch.sum(pad_lengths)
-            loss.backward()
+            loss = linearize_padded_seq(loss.view(n,b), pad)
+            loss = torch.sum(loss) / torch.sum(pad)
             
-            train_correct = (a_prediction == a_labels).view(s,b)
-            train_correct = linearize_padded_seq(train_correct, pad_lengths)
+            # optimize
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            # compute training accuracy
+            a_prediction = torch.argmax(a_logits, dim=-1)
+            train_correct = (a_prediction == a_labels).view(n,b)
+            train_correct = linearize_padded_seq(train_correct, pad)
             train_correct = (
-                torch.sum(train_correct).float() / torch.sum(pad_lengths))
+                torch.sum(train_correct).float() / torch.sum(pad))
+            
+            # log
             log.add_scalar('train/correct', train_correct, clock[0])
             clock[0] += 1
             
-            optimizer.step()
-
-def test_epoch(train_config, epoch, test_env, model, log, clock):
-    frequency = train_config.test_frequency
-    if frequency is not None and epoch % frequency == 0:
-        rollout_data = rollout(train_config, epoch, test_env, model, log, clock)
 
 def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
     frequency = train_config.checkpoint_frequency
@@ -329,6 +365,3 @@ def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
             checkpoint_directory, 'optimizer_%04i.pt'%epoch)
         print('Saving optimizer to: %s'%optimizer_path)
         torch.save(optimizer.state_dict(), optimizer_path)
-
-if __name__ == '__main__':
-    train_compressed_transformer()

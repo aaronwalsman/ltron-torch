@@ -2,7 +2,7 @@ import torch
 from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 
 from ltron_torch.models.parameter import NoWeightDecayParameter
-from ltron_torch.models.padding import cat_padded_seqs
+from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 
 class CompressedCausalAttention(Module):
     def __init__(self,
@@ -58,15 +58,20 @@ class CompressedCausalAttention(Module):
         p = torch.softmax(a, dim=1)
         p = self.attention_dropout(p)
         
-        if torch.any(torch.isnan(p)):
-            print('nan in p')
-            import pdb
-            pdb.set_trace()
+        #if torch.any(torch.isnan(p)):
+        #    print('nan in p')
+        #    import pdb
+        #    pdb.set_trace()
         
         # compute output content
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
+        
+        if torch.any(torch.isnan(x)):
+            print('nan in x')
+            import pdb
+            pdb.set_trace()
         
         return x
     
@@ -78,11 +83,16 @@ class CompressedCausalAttention(Module):
         self.clear_memory(terminal)
         
         # compute new content_mask
+        '''
         m_content_mask = torch.zeros(
             (s, torch.max(self.memory_length), b),
             dtype=torch.bool,
             device=content_mask.device,
         )
+        '''
+        m_content_mask = make_padding_mask(
+            self.memory_length, (s, torch.max(self.memory_length), b),
+            pad_dim=1, batch_dim=2)
         m_content_mask, _ = cat_padded_seqs(
             m_content_mask, content_mask, self.memory_length, pad,
             pad_dim=1, batch_dim=2, pad_value=True)
