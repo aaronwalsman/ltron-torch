@@ -23,25 +23,18 @@ def cat_padded_seqs(
         ab = a.clone()
     
     # construct indices for reading and writing elements
-    #ai = torch.cat([
-    #    torch.arange(la,la+lb, device=device)
-    #    for la, lb in zip(a_lengths, b_lengths)
-    #])
     ai = get_pad_range_indices(a_lengths, b_lengths)
-    #bi = torch.cat([torch.arange(l, device=device) for l in b_lengths])
-    #bj = torch.cat([
-    #    torch.ones(l, dtype=torch.long, device=device)*i
-    #    for i, l in enumerate(b_lengths)
-    #])
     bi, bj = get_pad_batch_indices(b_lengths)
     
     # use pad_dim and batch_dim to pack indices into an index tuple
-    ab_index = [slice(None) for s in ab.shape]
-    ab_index[pad_dim] = ai
-    ab_index[batch_dim] = bj
-    b_index = [slice(None) for s in b.shape]
-    b_index[pad_dim] = bi
-    b_index[batch_dim] = bj
+    #ab_index = [slice(None) for s in ab.shape]
+    #ab_index[pad_dim] = ai
+    #ab_index[batch_dim] = bj
+    ab_index = get_index_tuple(ai, bj, len(ab.shape), pad_dim, batch_dim)
+    #b_index = [slice(None) for s in b.shape]
+    #b_index[pad_dim] = bi
+    #b_index[batch_dim] = bj
+    b_index = get_index_tuple(bi, bj, len(b.shape), pad_dim, batch_dim)
     
     # read values from b and write into ab
     ab[tuple(ab_index)] = b[tuple(b_index)]
@@ -49,30 +42,22 @@ def cat_padded_seqs(
     return ab, ab_lengths
 
 def linearize_padded_seq(x, pad, pad_dim=0, batch_dim=1):
-    #device = x.device
-    #xi = torch.cat([torch.arange(l, device=device) for l in pad])
-    #xj = torch.cat([
-    #    torch.ones(l, dtype=torch.long, device=device)*i
-    #    for i, l in enumerate(pad)
-    #])
     xi, xj = get_pad_batch_indices(pad)
-    x_index = [slice(None) for s in x.shape]
-    x_index[pad_dim] = xi
-    x_index[batch_dim] = xj
-    return x[tuple(x_index)]
+    #x_index = [slice(None) for s in x.shape]
+    #x_index[pad_dim] = xi
+    #x_index[batch_dim] = xj
+    #return x[tuple(x_index)]
+    x_index = get_index_tuple(xi, xj, len(x.shape), pad_dim, batch_dim)
+    return x[x_index]
 
 def make_padding_mask(pad, shape, pad_dim=0, batch_dim=1):
-    #device = pad.device
     mask = torch.ones(shape, dtype=torch.bool, device=pad.device)
-    #p_index = torch.cat([torch.arange(l, device=device) for l in pad])
-    #b_index = torch.cat([
-    #    torch.ones(l, dtype=torch.long, device=device)*i
-    #    for i, l in enumerate(pad)
-    #])
     p_index, b_index = get_pad_batch_indices(pad)
-    index = [slice(None) for s in shape]
-    index[pad_dim] = p_index
-    index[batch_dim] = b_index
+    #index = [slice(None) for s in shape]
+    #index[pad_dim] = p_index
+    #index[batch_dim] = b_index
+    #mask[index] = False
+    index = get_index_tuple(p_index, b_index, len(shape), pad_dim, batch_dim)
     mask[index] = False
     
     return mask
@@ -98,3 +83,9 @@ def get_batch_indices(pad):
         for i, p in enumerate(pad)
     ]).to(pad.device)
     return batch_indices
+
+def get_index_tuple(pad_indices, batch_indices, dims, pad_dim, batch_dim):
+    index = [slice(None) for d in range(dims)]
+    index[pad_dim] = pad_indices
+    index[batch_dim] = batch_indices
+    return tuple(index)
