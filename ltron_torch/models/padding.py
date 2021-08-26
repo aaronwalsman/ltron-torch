@@ -23,16 +23,17 @@ def cat_padded_seqs(
         ab = a.clone()
     
     # construct indices for reading and writing elements
-    ai = torch.cat([
-        torch.arange(la,la+lb, device=device)
-        for la, lb in zip(a_lengths, b_lengths)
-    ])
+    #ai = torch.cat([
+    #    torch.arange(la,la+lb, device=device)
+    #    for la, lb in zip(a_lengths, b_lengths)
+    #])
+    ai = get_pad_range_indices(a_lengths, b_lengths)
     #bi = torch.cat([torch.arange(l, device=device) for l in b_lengths])
     #bj = torch.cat([
     #    torch.ones(l, dtype=torch.long, device=device)*i
     #    for i, l in enumerate(b_lengths)
     #])
-    bi, bj = padding_indices(b_lengths)
+    bi, bj = get_pad_batch_indices(b_lengths)
     
     # use pad_dim and batch_dim to pack indices into an index tuple
     ab_index = [slice(None) for s in ab.shape]
@@ -54,7 +55,7 @@ def linearize_padded_seq(x, pad, pad_dim=0, batch_dim=1):
     #    torch.ones(l, dtype=torch.long, device=device)*i
     #    for i, l in enumerate(pad)
     #])
-    xi, xj = padding_indices(pad)
+    xi, xj = get_pad_batch_indices(pad)
     x_index = [slice(None) for s in x.shape]
     x_index[pad_dim] = xi
     x_index[batch_dim] = xj
@@ -68,7 +69,7 @@ def make_padding_mask(pad, shape, pad_dim=0, batch_dim=1):
     #    torch.ones(l, dtype=torch.long, device=device)*i
     #    for i, l in enumerate(pad)
     #])
-    p_index, b_index = padding_indices(pad)
+    p_index, b_index = get_pad_batch_indices(pad)
     index = [slice(None) for s in shape]
     index[pad_dim] = p_index
     index[batch_dim] = b_index
@@ -76,11 +77,24 @@ def make_padding_mask(pad, shape, pad_dim=0, batch_dim=1):
     
     return mask
 
-def padding_indices(pad):
+def get_pad_batch_indices(pad):
+    pad_indices = get_pad_indices(pad)
+    batch_indices = get_batch_indices(pad)
+    return pad_indices, batch_indices
+
+def get_pad_indices(pad):
     pad_indices = torch.cat([torch.arange(p) for p in pad]).to(pad.device)
+    return pad_indices
+    
+def get_pad_range_indices(pad_start, pad):
+    pad_indices = torch.cat([
+        torch.arange(ps, ps+p) for ps, p in zip(pad_start, pad)
+    ])
+    return pad_indices
+
+def get_batch_indices(pad):
     batch_indices = torch.cat([
         torch.ones(p, dtype=torch.long)*i
         for i, p in enumerate(pad)
     ]).to(pad.device)
-    
-    return pad_indices, batch_indices
+    return batch_indices
