@@ -68,13 +68,12 @@ def train_reassembly(train_config):
     
     print('-'*80)
     print('Building Model')
-    max_sequence_length = 32
     wh = train_config.workspace_image_height // train_config.tile_height
     ww = train_config.workspace_image_width // train_config.tile_width
     hh = train_config.handspace_image_height // train_config.tile_height
     hw = train_config.handspace_image_width // train_config.tile_width
     model_config = CompressedTransformerConfig(
-        data_shape = (2, max_sequence_length, wh, ww, hh, hw),
+        data_shape = (2, train_config.max_episode_length, wh, ww, hh, hw),
         tile_h=train_config.tile_height,
         tile_w=train_config.tile_width,
         causal_dim=1,
@@ -126,8 +125,11 @@ def train_reassembly(train_config):
         print('='*80)
         print('Epoch: %i'%epoch)
         
-        train_epoch(
-            train_config, epoch, train_env, model, optimizer, log, clock)
+        #train_epoch(
+        #    train_config, epoch, train_env, model, optimizer, log, clock)
+        episodes = rollout_epoch(
+            train_config, epoch, train_env, model, log, clock)
+        train_epoch(train_config, epoch, model, optimizer, episodes, log, clock)
         save_checkpoint(train_config, epoch, model, optimizer, log, clock)
         test_epoch(train_config, epoch, test_env, model, log, clock)
         
@@ -143,7 +145,7 @@ def train_epoch(train_config, epoch, train_env, model, optimizer, log, clock):
     train_on_rollouts(
         train_config, epoch, model, rollout_data_labels, log, clock)
 
-def rollout(train_config, epoch, env, model, log, clock):
+def rollout_epoch(train_config, epoch, env, model, log, clock):
     print('- '*40)
     print('Rolling out episodes')
     
@@ -155,6 +157,17 @@ def rollout(train_config, epoch, env, model, log, clock):
     model.eval()
     
     # reset and get first observation
+    b = train_config.num_envs
+    wh = train_config.workspace_image_height
+    ww = train_config.workspace_image_width
+    hh = train_config.handspace_image_height
+    hw = train_config.handspace_image_width
+    th = train_config.tile_height
+    tw = train_config.tile_width
+    prev_workspace_frame = numpy.ones((b, wh, ww, 3), dtype=numpy.uint8) * 102
+    prev_handspace_frame = numpy.ones((b, hh, hw, 3), dtype=numpy.uint8) * 102
+    
+    # reset
     observation = env.reset()
     terminal = numpy.ones(train_config.num_envs, dtype=numpy.bool)
     reward = numpy.zeros(train_config.num_envs)
@@ -167,79 +180,61 @@ def rollout(train_config, epoch, env, model, log, clock):
             action_reward_storage.start_new_seqs(terminal)
             observation_storage.start_new_seqs(terminal)
             
+            # get sequence lengths before adding the new observation
+            seq_lengths = numpy.array(
+                observation_storage.get_current_seq_lens())
+                
             # add latest observation to storage
             observation_storage.append_batch(observation=observation)
             
-            # package data for the model
-            seq_lengths = numpy.array(
-                observation_storage.get_current_seq_lens())
-            workspace_storage = (
-                observation_storage['observation', 'workspace_color_render'])
-            workspace_frames, pad_lengths = workspace_storage.get_current_seqs(
-                start=-2)
-            
-            handspace_storage = (
-                observation_storage['observation', 'handspace_color_render'])
-            handspace_frames, pad_lengths = handspace_storage.get_current_seqs(
-                start=-2)
-            
+            # generate tile sequences from the workspace
+            workspace_frame = observation['workspace_color_render'].reshape(
+                1, b, wh, ww, 3)
+            pad = numpy.ones(b, dtype=numpy.long)
             (wx, wi, w_pad) = batch_deduplicate_tiled_seqs(
-                workspace_frames,
-                pad_lengths,
-                train_config.tile_width,
-                train_config.tile_height,
-                background=102,
+                workspace_frame, pad, tw, th,
+                background=prev_workspace_frame,
                 s_start=seq_lengths,
             )
+            prev_workspace_frame = workspace_frame
             num_workspace = wx.shape[0]
             wi = numpy.insert(wi, (0,3,3), -1, axis=-1)
             wi[:,:,0] = 0
             
+            # generate tile sequences from the handspace
+            handspace_frame = observation['handspace_color_render'].reshape(
+                1, b, hh, hw, 3)
             (hx, hi, h_pad) = batch_deduplicate_tiled_seqs(
-                handspace_frames,
-                pad_lengths,
-                train_config.tile_width,
-                train_config.tile_height,
-                background=102,
+                handspace_frame, pad, tw, th,
+                background=prev_handspace_frame,
                 s_start=seq_lengths,
             )
+            prev_handspace_frame = handspace_frame
             num_handspace = hx.shape[0]
             hi = numpy.insert(hi, (0,1,1), -1, axis=-1)
             hi[:,:,0] = 0
             
-            '''
-            STOP
-            
-            Need to figure out the whole input space thing.
-            The decoder tokens should be integer embeddings, not tiles.
-            So I can't just tack dummy entries onto the input.
-            Do I break the embedding out of the transformer model?
-            Or do I go in and actually make it do a more complicated thing
-            based on decoder tokens or whatever?
-            '''
-            
-            #x = numpy.concatenate((wx, hx), axis=0)
+            # move data to torch and cuda
             wx = torch.FloatTensor(wx)
             hx = torch.FloatTensor(hx)
             w_pad = torch.LongTensor(w_pad)
             h_pad = torch.LongTensor(h_pad)
-            x, tile_pad_lengths = cat_padded_seqs(wx, hx, w_pad, h_pad)
+            x, tile_pad = cat_padded_seqs(wx, hx, w_pad, h_pad)
             x = default_tile_transform(x).cuda()
-            tile_pad_lengths = tile_pad_lengths.cuda()
+            tile_pad = tile_pad.cuda()
             s, b = x.shape[:2]
             i, _ = cat_padded_seqs(
                 torch.LongTensor(wi), torch.LongTensor(hi), w_pad, h_pad)
             i = i.cuda()
-            #i[:num_workspace, :, 0] = 0
-            #i[:num_workspace, :, [1,2,3]] = wi
-            #i[num_workspace:, :, [1,4,5]] = hi
-            #i = torch.LongTensor(i).cuda()
-            #tile_padding_mask = numpy.concatenate((w_mask, h_mask))
-            #tile_padding_mask = torch.BoolTensor(tile_padding_mask).cuda()
             t = torch.LongTensor(seq_lengths).cuda()
-            terminal = torch.BoolTensor(terminal).cuda()
+            terminal_tensor = torch.BoolTensor(terminal).cuda()
             
-            action_logits = model(x, i, tile_pad_lengths, t, terminal)
+            # compute action logits and sample actions
+            if i.numel():
+                print(torch.max(i[:,:,1]))
+            else:
+                print('empty')
+            action_logits = model(x, i, tile_pad, t, terminal_tensor)
             
             polarity_logits = action_logits[:,:,:2].view(-1,2)
             polarity_distribution = Categorical(logits=polarity_logits)
@@ -259,6 +254,7 @@ def rollout(train_config, epoch, env, model, log, clock):
             
             pick = numpy.stack((pick_y, pick_x), axis=-1)
             
+            # assemble actions
             actions = []
             for i in range(b):
                 action = handspace_reassembly_template_action()
@@ -271,22 +267,21 @@ def rollout(train_config, epoch, env, model, log, clock):
                 actions.append(action)
             
             # send actions to the environment
-            observation, terminal, reward, info = env.step(actions)
+            observation, reward, terminal, info = env.step(actions)
             
             # store actions and rewards
             action_reward_storage.append_batch(
-                #action=stack_gym_data(*actions),
                 action=stack_numpy_hierarchies(*actions),
                 reward=reward,
             )
     
     return observation_storage | action_reward_storage
 
-def train_on_rollouts(train_config, epoch, model, rollout_data, log):
+def train_epoch(train_config, epoch, model, optimizer, episodes, log, clock):
     print('- '*40)
     print('Training on episodes')
     
-    batch_iterator = rollout_data.batch_sequence_iterator(
+    batch_iterator = episodes.batch_seq_iterator(
         train_config.batch_size, shuffle=True)
     for batch in tqdm.tqdm(batch_iterator):
         
