@@ -8,6 +8,7 @@ from torch.nn import (
 )
 from torch.optim import AdamW
 
+from ltron_torch.models.padding import cat_padded_seqs
 from ltron_torch.config import Config
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.compressed_causal_attention import (
@@ -112,23 +113,45 @@ class DecoderEmbeddingBlock(Module):
         self.channels = config.channels
         self.decoder_embedding = Embedding(self.decoder_tokens, self.channels)
     
-    def forward(self, x, i, t, pad):
-        s, b, dims = i.shape
+    def forward(self, x, xi, x_pad, ti, t_pad):
+        s, b, dims = xi.shape
+        ts = ti.shape[0]
         
-        dx = self.decoder_embedding.weight
-        dx = dx.unsqueeze(1).expand(self.decoder_tokens, b, self.channels)
+        d = self.decoder_embedding.weight
+        d = d.view(1, self.decoder_tokens, 1, self.channels)
+        d = d.expand(ts, self.decoder_tokens, b, self.channels)
+        d = d.reshape(ts*self.decoder_tokens, b, self.channels)
+        #d = d.unsqueeze(1).expand(self.decoder_tokens, b, self.channels)
+        '''
         di = torch.ones(
             (self.decoder_tokens, b, dims),
             dtype=torch.long,
-            device=i.device,
+            device=xi.device,
         ) * -1
         di[:,:,0] = 1
-        di[:,range(b),1] = t
+        di[:,range(b),1] = ti
+        '''
+        # ti (ts x b)
+        di = torch.ones(
+            (self.decoder_tokens * ts, b, dims),
+            dtype=torch.long,
+            device=xi.device,
+        ) * -1
+        di[:,:,0] = 1
+        di[:,:,1] = ti.view(
+            ts, 1, b).expand(
+            ts, self.decoder_tokens, b).reshape(
+            ts * self.decoder_tokens, b)
         
-        x = torch.cat((dx, x), dim=0)
-        i = torch.cat((di, i), dim=0)
+        #x = torch.cat((d, x), dim=0)
+        #xi = torch.cat((di, xi), dim=0)
         
-        return x, i, pad + self.decoder_tokens
+        d_pad = t_pad*self.decoder_tokens
+        dx, dx_pad = cat_padded_seqs(d, x, d_pad, x_pad)
+        dxi, _ = cat_padded_seqs(di, xi, d_pad, x_pad)
+        
+        #return x, xi, pad + self.decoder_tokens
+        return dx, dxi, dx_pad, d_pad
 
 
 # Transformer Blocks ===========================================================
@@ -176,13 +199,16 @@ class ReadHead(Module):
             Linear(config.channels, config.decoder_channels),
         )
     
-    def forward(self, x):
+    def forward(self, x, pad, d_pad):
         if not self.decode_input:
-            x = x[:self.decoder_tokens]
+            #x = x[:self.decoder_tokens]
+            max_pad = torch.max(d_pad)
+            x = x[:max_pad]
+            pad = d_pad
         
         x = self.head(x)
         
-        return x
+        return x, pad
 
 
 # Transformer ==================================================================
@@ -238,14 +264,16 @@ class CompressedTransformer(Module):
         if config.init_weights:
             self.apply(self._init_weights)
     
-    def forward(self, x, i, pad, t=None, terminal=None):
+    def forward(self, x, i, pad, t=None, t_pad=None, terminal=None):
         
         # embed tokens
         x = self.embedding_block(x, 0)
         
         # make decoder tokens
         if self.decoder_tokens:
-            x, i, pad = self.decoder_block(x, i, t, pad)
+            x, i, pad, d_pad = self.decoder_block(x, i, pad, t, t_pad)
+        else:
+            d_pad = None
         
         # make positional encoding
         pe, causal_mask = self.positional_encoding(i, pad)
@@ -255,9 +283,9 @@ class CompressedTransformer(Module):
             x = block(x, pe, causal_mask, pad, terminal)
         
         # read off the values
-        x = self.read_head(x)
+        x, pad = self.read_head(x, pad, d_pad)
         
-        return x
+        return x, pad
     
     def _init_weights(self, module):
         # from minGPT
