@@ -36,7 +36,7 @@ def linearize_padded_seq(x, pad, seq_dim=0, batch_dim=1):
     '''
     12__
     3456
-    78__ -> 123456789
+    78__ + (2,4,2,1) -> 123456789
     9___
     '''
     # return all elements from x that are inside the pad region

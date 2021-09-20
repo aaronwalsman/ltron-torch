@@ -27,15 +27,15 @@ import ltron_torch.models.transformer_masks as transformer_masks
 
 class CompressedTransformerConfig(Config):
     data_shape = (128, 16, 16)
+    causal_dim = 0
+    include_tile_embedding=True,
+    include_token_embedding=True,
     tile_h = 16
     tile_w = 16
+    tile_c = 3
+    token_vocab = 4096
     decoder_tokens = 0
     decode_input = False
-    causal_dim = 0
-    
-    input_mode='tile'
-    input_tile_channels = 3
-    input_token_vocab = 4096
     
     nonlinearity = 'gelu'
     
@@ -75,7 +75,7 @@ def make_nonlinearity(config):
 class TokenEmbeddingBlock(Module):
     def __init__(self, config):
         super(TokenEmbeddingBlock, self).__init__()
-        self.embedding = Embedding(config.input_token_vocab, config.channels)
+        self.embedding = Embedding(config.token_vocab, config.channels)
         self.dropout = Dropout(config.embedding_dropout)
     
     def forward(self, x, pe=0):
@@ -91,7 +91,7 @@ class TileEmbeddingBlock(Module):
         self.decoder_tokens = config.decoder_tokens
         
         self.tile_linear = Linear(
-            config.tile_h*config.tile_w*config.input_tile_channels,
+            config.tile_h*config.tile_w*config.tile_c,
             config.channels,
         )
         
@@ -217,6 +217,9 @@ class CompressedTransformer(Module):
     def __init__(self, config):
         super(CompressedTransformer, self).__init__()
         
+        self.include_tile_embedding = config.include_tile_embedding
+        self.include_token_embedding = config.include_token_embedding
+        
         # positional encoding
         if config.relative_positional_encoding:
             raise Exception('No longer supported')
@@ -245,10 +248,14 @@ class CompressedTransformer(Module):
                 )
         
         # embedding
-        if config.input_mode == 'tile':
-            self.embedding_block = TileEmbeddingBlock(config)
-        elif config.input_mode == 'token':
-            self.embedding_block = TokenEmbeddingBlock(config)
+        #if config.input_mode == 'tile':
+        #    self.embedding_block = TileEmbeddingBlock(config)
+        #elif config.input_mode == 'token':
+        #    self.embedding_block = TokenEmbeddingBlock(config)
+        if config.include_tile_embedding:
+            self.tile_embedding_block = TileEmbeddingBlock(config)
+        if config.include_token_embedding:
+            self.token_embedding_block = TokenEmbeddingBlock(config)
         
         # decoder tokens
         self.decoder_tokens = config.decoder_tokens
@@ -264,16 +271,52 @@ class CompressedTransformer(Module):
         if config.init_weights:
             self.apply(self._init_weights)
     
-    def forward(self, x, i, pad, t=None, t_pad=None, terminal=None):
+    def forward(self,
+        tile_x=None, tile_i=None, tile_pad=None,
+        token_x=None, token_i=None, token_pad=None,
+        decoder_i=None, decoder_pad=None,
+        terminal=None,
+    ):
+        
+        if not self.include_tile_embedding:
+            assert tile_x is None
+            assert tile_i is None
+            assert tile_pad is None
+        
+        if not self.include_token_embedding:
+            assert tile_x is None
+            assert tile_i is None
+            assert tile_pad is None
+        
+        # embed tiles
+        if tile_x is not None:
+            tile_x = self.tile_embedding_block(tile_x, 0)
         
         # embed tokens
-        x = self.embedding_block(x, 0)
+        if token_x is not None:
+            token_x = self.token_embedding_block(token_x, 0)
+        
+        # combine tokens
+        if tile_x is not None and token_x is not None:
+            x, pad = cat_padded_seqs(tile_x, token_x, tile_pad, token_pad)
+            i, _ = cat_padded_seqs(tile_i, token_i, tile_pad, token_pad)
+        elif tile_x is not None:
+            x = tile_x
+            i = tile_i
+            pad = tile_pad
+        elif token_x is not None:
+            x = token_x
+            i = token_i
+            pad = poken_pad
+        else:
+            assert False, 'No input'
         
         # make decoder tokens
         if self.decoder_tokens:
-            x, i, pad, d_pad = self.decoder_block(x, i, pad, t, t_pad)
+            x, i, pad, decoder_pad = self.decoder_block(
+                x, i, pad, decoder_i, decoder_pad)
         else:
-            d_pad = None
+            decoder_pad = None
         
         # make positional encoding
         pe, causal_mask = self.positional_encoding(i, pad)
@@ -283,7 +326,7 @@ class CompressedTransformer(Module):
             x = block(x, pe, causal_mask, pad, terminal)
         
         # read off the values
-        x, pad = self.read_head(x, pad, d_pad)
+        x, pad = self.read_head(x, pad, decoder_pad)
         
         return x, pad
     
