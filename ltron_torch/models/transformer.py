@@ -60,7 +60,7 @@ class TransformerConfig:
     
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
-            assert hasattr(self, key)
+            assert hasattr(self, key), key
             setattr(self, key, value)
         
         if self.residual_channels is None:

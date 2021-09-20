@@ -19,7 +19,7 @@ from ltron_torch.models.transformer import (
 
 dataset_path = './simple_pick_and_place'
 
-def make_dataset(num_sequences=20000):
+def make_dataset(num_sequences=20000, bespoke=False):
     os.makedirs(dataset_path)
     for i in tqdm.tqdm(range(num_sequences)):
         target, brick_maps, actions = make_sequence()
@@ -211,11 +211,11 @@ def train_dense_pick(bespoke=False):
         config = TransformerConfig(
             vocabulary=3,
             map_height=8,
-            map_width=8,
+            map_widthw=8,
             decoder_tokens=0,
             decode_input=True,
             
-            num_layers=6,
+            num_blocks=6,
             channels = 256,
             residual_channels = 256,
             num_heads = 4,
@@ -337,7 +337,7 @@ def train_sparse_pick(bespoke=False):
             
             channels=256,
             residual_channels=256,
-            num_layers=6,
+            num_blocks=6,
             num_heads=4,
             decoder_channels=8+8,
             
