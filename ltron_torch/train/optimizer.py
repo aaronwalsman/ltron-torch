@@ -33,7 +33,6 @@ def adamw_optimizer(model, config):
             if isinstance(param, NoWeightDecayParameter):
                 no_decay_names.add(full_param_name)
                 no_decay_params.append(param)
-                print('caught: %s'%full_param_name)
             elif param_name.endswith('bias'):
                 no_decay_names.add(full_param_name)
                 no_decay_params.append(param)

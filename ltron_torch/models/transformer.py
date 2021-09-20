@@ -1,10 +1,14 @@
+from functools import reduce
+
 import torch
 from torch.nn import (
     Module, Sequential, Linear, Dropout, ReLU, GELU, MultiheadAttention,
-    Embedding, LayerNorm, TransformerEncoderLayer, Parameter, Identity
+    Embedding, LayerNorm, TransformerEncoderLayer, Parameter, Identity,
+    Conv3d
 )
 from torch.optim import AdamW
 
+from ltron_torch.config import Config
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.multihead_attention import (
     SlotAttention,
@@ -12,28 +16,26 @@ from ltron_torch.models.multihead_attention import (
     FixedMaskMultiheadAttention,
     SpatialMultiheadAttention,
 )
-from ltron_torch.models.positional_encoding import positional_encoding
+from ltron_torch.models.positional_encoding import sinusoid_positional_encoding
 import ltron_torch.models.transformer_masks as transformer_masks
 
-class TrainConfig:
-    learning_rate = 3e-4
-    weight_decay = 0.1
-    betas = (0.9, 0.95)
-    
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            assert hasattr(self, key)
-            setattr(self, key, value)
 
-class TransformerConfig:
-    vocabulary = 4096
-    sequence_length = 1
-    map_height = 32
-    map_width = 32
+# Config =======================================================================
+
+class TransformerConfig(Config):
+    v = 4096
+    t = 1
+    h = None
+    w = None
+    grid_t = None
+    grid_h = None
+    grid_w = None
     decoder_tokens = 0
     decode_input = True
     
     mask = 'full'
+    
+    input_type = 'tokens' # images
     
     attention_module = 'torch'
     nonlinearity = 'gelu'
@@ -45,10 +47,9 @@ class TransformerConfig:
     num_heads = 12
     decoder_channels = 1
     
-    learned_positional_encoding = False
-    # so far, for most purposes, multi is worse than single
-    positional_encoding_dimensions = 'single' # single/multi
     randomize_decoder_embeddings = False
+    
+    learned_positional_encoding = True
     
     embedding_dropout = 0.1
     residual_dropout = 0.1
@@ -58,43 +59,52 @@ class TransformerConfig:
     
     verbose = False
     
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            assert hasattr(self, key), key
-            setattr(self, key, value)
-        
+    def set_dependent_variables(self):
         if self.residual_channels is None:
             self.residual_channels = 4 * self.channels
+        
+        if self.grid_t is None:
+            self.grid_t = 1
+        if self.h is None:
+            if self.input_type == 'tokens':
+                self.h = 32
+            elif self.input_type == 'images':
+                self.h = 256
+        if self.grid_h is None:
+            if self.input_type == 'tokens':
+                self.grid_h = 1
+            elif self.input_type == 'images':
+                self.grid_h = 16
+        if self.w is None:
+            if self.input_type == 'tokens':
+                self.w = 32
+            elif self.input_type == 'images':
+                self.w = 256
+        if self.grid_w is None:
+            if self.input_type == 'tokens':
+                self.grid_w = 1
+            elif self.input_type == 'images':
+                self.grid_w = 16
+        
+        self.tt = self.t // self.grid_t
+        self.hh = self.h // self.grid_h
+        self.ww = self.w // self.grid_w
+
+
+# Components ===================================================================
 
 def print_verbose(verbose, statement):
     if verbose:
         print(statement)
 
-def make_block(config):
-    if config.block_type == 'gpt':
-        return Block(config)
-    elif config.block_type == 'slot':
-        return SlotBlock(config)
-    else:
-        raise NotImplementedError
-
 def make_attention_mask(config):
     if config.mask == 'full':
-        '''
-        tokens = (
-            config.map_height *
-            config.map_width *
-            config.sequence_length +
-            config.decoder_tokens
-        )
-        return transformer_masks.full(tokens)
-        '''
         return None
     elif config.mask == 'blowfish':
         return transformer_masks.blowfish(
             config.decoder_tokens,
-            config.map_height * config.map_width,
-            config.sequence_length,
+            config.h * config.w,
+            config.t,
         )
 
 def make_attention_module(config):
@@ -118,7 +128,7 @@ def make_attention_module(config):
     
     elif config.attention_module == 'spatial':
         return SpatialMultiheadAttention(
-            config.map_height*config.map_width,
+            config.h*config.w,
             config.channels,
             config.num_heads,
             config.attention_dropout,
@@ -133,93 +143,147 @@ def make_nonlinearity(config):
     elif config.nonlinearity == 'gelu':
         return GELU()
 
+
+# Embedding ====================================================================
+
+def make_embedding_block(config):
+    return EmbeddingBlock(config)
+
+class GridEmbedding(Module):
+    def __init__(self, config):
+        super(GridEmbedding, self).__init__()
+        self.t = config.t
+        self.h = config.h
+        self.w = config.w
+        self.grid_t = config.grid_t
+        self.grid_h = config.grid_h
+        self.grid_w = config.grid_w
+        self.tt = config.tt
+        self.hh = config.hh
+        self.ww = config.ww
+        self.channels = config.channels
+        
+        grid_cells = self.grid_t * self.grid_h * self.grid_w
+        assert (config.channels % grid_cells) == 0
+        
+        self.embedding = Embedding(
+            config.v, config.channels//grid_cells)
+        
+    def forward(self, x):
+        x = self.embedding(x)
+        *_, b, c = x.shape
+        x = x.view(self.t, self.h, self.w, b, c)
+        if self.grid_t > 1:
+            t_parts = [x[i::self.grid_t] for i in range(self.grid_t)]
+            x = torch.cat(t_parts, dim=-1)
+        if self.grid_h > 1:
+            h_parts = [x[:,i::self.grid_h] for i in range(self.grid_h)]
+            x = torch.cat(h_parts, dim=-1)
+        if self.grid_w > 1:
+            w_parts = [x[:,:,i::self.grid_w] for i in range(self.grid_w)]
+            x = torch.cat(w_parts, dim=-1)
+        
+        x = x.view(self.tt * self.hh * self.ww, b, self.channels)
+        
+        return x
+
+class ImageBlockEmbedding(Module):
+    def __init__(self, config):
+        super(ImageBlockEmbedding, self).__init__()
+        k = (config.grid_t, config.grid_h, config.grid_w)
+        self.conv = Conv3d(3, config.channels, kernel_size=k, stride=k)
+    
+    def forward(self, x):
+        x = self.conv(x)
+        b, c, t, h, w = x.shape
+        x = x.view(b, c, t, h*w)
+        x = x.permute(2, 3, 0, 1).contiguous()
+        return x
+
 class EmbeddingBlock(Module):
     def __init__(self, config):
         super(EmbeddingBlock, self).__init__()
-        
-        self.embedding = Embedding(config.vocabulary, config.channels)
-        
         self.decoder_tokens = config.decoder_tokens
         self.randomize_decoder_embeddings = config.randomize_decoder_embeddings
+        
+        if config.input_type == 'tokens':
+            self.embedding = GridEmbedding(config)
+        elif config.input_type == 'images':
+            self.embedding = ImageBlockEmbedding(config)
+        else:
+            raise NotImplementedError
+        
         if self.randomize_decoder_embeddings:
             num_decoder_embeddings = 1
         else:
             num_decoder_embeddings = self.decoder_tokens
-        
         self.decoder_embedding = Embedding(
             num_decoder_embeddings, config.channels)
         
-        # TODO: make the positional encoding happen conditionally when/if we
-        # try the Transformer-XL thing.
-        
-        self.learned_positional_encoding = config.learned_positional_encoding
         print_verbose(config.verbose, 'making positional encoding')
         
-        if self.learned_positional_encoding:
-            if config.positional_encoding_dimensions == 'multi':
-                p = torch.zeros(
-                    config.sequence_length,
-                    config.map_height * config.map_width,
-                    1,
-                    config.channels)
-            elif config.positional_encoding_dimensions == 'single':
-                num_tokens = (
-                    config.sequence_length *
-                    config.map_height *
-                    config.map_width
-                )
-                p = torch.zeros(num_tokens, 1, config.channels)
-                    
-            else:
-                raise NotImplementedError
-            
+        num_data_tokens = config.tt * config.hh * config.ww
+        if config.learned_positional_encoding:
+            p = torch.zeros(num_data_tokens, 1, config.channels)
             self.positional_encoding = NoWeightDecayParameter(p)
         else:
-            if config.positional_encoding_dimensions == 'multi':
-                p = positional_encoding(
-                    config.channels,
-                    config.sequence_length,
-                    config.map_height * config.map_width,
-                ).unsqueeze(2)
-            elif config.positional_encoding_dimensions == 'single':
-                num_tokens = (
-                    config.sequence_length *
-                    config.map_height *
-                    config.map_width
-                )
-                p = positional_encoding(
-                    config.channels, num_tokens).unsqueeze(1)
-            else:
-                raise NotImplementedError
-            
+            p = positional_encoding(config.channels, num_data_tokens, 1)
             self.register_buffer('positional_encoding', p)
         
         print_verbose(config.verbose, 'finished making positional encoding')
         
         self.dropout = Dropout(config.embedding_dropout)
     
-    def forward(self, x):
-        x = self.embedding(x)
-        s, hw, b, c = x.shape
-        x = x + self.positional_encoding.view(s, hw, 1, c)
-        x = x.view(s*hw, b, c)
+    def forward(self, d):
+        d = self.embedding(d)
+        *thw, b, c = d.shape
+        thw = reduce(lambda a,b:a*b, thw, 1)
+        d = d.view(thw, b, c)
+        d = d + self.positional_encoding
         
         if self.randomize_decoder_embeddings:
-            #d = self.decoder_embedding.weight.view(1, 1, c)
-            #d = d.expand(self.decoder_tokens, b, c)
-            #d = d + torch.randn(self.decoder_tokens, b, c, device=x.device)
-            d = torch.randn(self.decoder_tokens, b, c, device=x.device)
+            raise NotImplementedError
         else:
-            d = self.decoder_embedding.weight.view(self.decoder_tokens, 1, c)
-            d = d.expand(self.decoder_tokens, b, c)
+            s = self.decoder_embedding.weight.view(self.decoder_tokens, 1, c)
+            s = s.expand(self.decoder_tokens, b, c)
         
-        x = torch.cat((d, x), dim=0)
-        #s, b, c = x.shape
-        #x = x + self.p2[:s]
+        x = torch.cat((s, d), dim=0)
+        
+        '''
+        if self.randomize_decoder_embeddings:
+            #s = self.decoder_embedding.weight.view(1, 1, c)
+            #s = s.expand(self.decoder_tokens, b, c)
+            #s = s + torch.randn(self.decoder_tokens, b, c, device=x.device)
+            s = torch.randn(self.decoder_tokens, b, c, device=x.device)
+        else:
+            #s = self.decoder_embedding.weight.view(self.decoder_tokens, 1, c)
+            s = self.decoder_embedding.weight.view(1,1,c)
+            s = s.expand(self.decoder_tokens, b, c)
+        x = torch.cat((s, d), dim=0)
+        '''
         
         x = self.dropout(x)
         
         return x
+
+
+# Blocks =======================================================================
+
+def make_block(config):
+    if config.block_type == 'gpt':
+        return Block(config)
+    elif config.block_type == 'time_only':
+        return TimeOnlyBlock(config)
+    elif config.block_type == 'time_then_space':
+        return TimeThenSpaceBlock(config)
+    elif config.block_type == 'slot':
+        return SlotBlock(config)
+    elif config.block_type == 'pblock':
+        return PBlock(config)
+    elif config.block_type == 'multi_pblock':
+        return MultiPBlock(config)
+    else:
+        raise NotImplementedError
 
 class Block(Module):
     def __init__(self, config):
@@ -245,6 +309,45 @@ class Block(Module):
     
     def forward(self, x):
         x = x + self.attention_residual(x)
+        x = x + self.projection_residual(x)
+        
+        return x
+
+class TimeOnlyBlock(Block):
+    def __init__(self, config):
+        super(TimeOnlyBlock, self).__init__(config)
+        self.spatial_tokens = config.hh * config.ww
+    
+    def forward(self, x):
+        thw, b, c = x.shape
+        x = x.view(-1, self.spatial_tokens*b, c)
+        x = super(TimeOnlyBlock, self).forward(x)
+        x = x.view(thw, b, c)
+        
+        return x
+
+class TimeThenSpaceBlock(Block):
+    def __init__(self, config):
+        super(TimeThenSpaceBlock, self).__init__(config)
+        self.spatial_tokens = config.hh * config.ww
+        
+        self.spatial_attention_residual = Sequential(
+            LayerNorm(config.channels),
+            make_attention_module(config),
+        )
+    
+    def forward(self, x):
+        thw, b, c = x.shape
+        hw = self.spatial_tokens
+        t = thw//hw
+        x = x.view(t, hw*b, c)
+        x = x + self.attention_residual(x)
+        
+        x = x.view(t, hw, b, c)
+        x = x.permute(1, 0, 2, 3).contiguous().view(hw, t*b, c)
+        x = x + self.spatial_attention_residual(x)
+        
+        x = x.view(hw, t, b, c).permute(1, 0, 2, 3).contiguous().view(thw, b, c)
         x = x + self.projection_residual(x)
         
         return x
@@ -285,8 +388,79 @@ class SlotBlock(Module):
         
         return x
 
+class PBlock(Module):
+    def __init__(self, config):
+        super(PBlock, self).__init__()
+        self.decoder_tokens = config.decoder_tokens
+        
+        self.cross_layernorm = LayerNorm(config.channels)
+        self.cross_attention = MultiheadAttention(
+            config.channels, config.num_heads, config.attention_dropout)
+        
+        self.self_attention_residual = Sequential(
+            LayerNorm(config.channels),
+            FixedMaskMultiheadAttention(
+                None,
+                config.channels,
+                config.num_heads,
+                config.attention_dropout
+            ),
+        )
+        
+        self.projection_residual = Sequential(
+            LayerNorm(config.channels),
+            Linear(config.channels, config.residual_channels),
+            make_nonlinearity(config),
+            Linear(config.residual_channels, config.channels),
+            Dropout(config.residual_dropout),
+        )
+    
+    def forward(self, x):
+        s = x[:self.decoder_tokens]
+        d = x[self.decoder_tokens:]
+        
+        rs = self.cross_layernorm(s)
+        #rd = self.cross_layernorm(d)
+        rd = d
+        r = self.cross_attention(rs, rd, rd)[0]
+        s = s + r
+        
+        s = s + self.self_attention_residual(s)
+        
+        s = s + self.projection_residual(s)
+        
+        x = torch.cat((s,d), dim=0)
+        return x
+
+class MultiPBlock(Module):
+    def __init__(self, config):
+        super(MultiPBlock, self).__init__()
+        self.decoder_tokens = config.decoder_tokens
+        
+        self.pblock = PBlock(config)
+        block_config = TransformerConfig(
+            t = self.decoder_tokens,
+            h = 1,
+            w = 1,
+            channels = config.channels,
+            residual_channels = config.residual_channels,
+            num_heads = config.num_heads,
+        )
+        self.blocks = Sequential(*[Block(block_config) for _ in range(3)])
+    
+    def forward(self, x):
+        x = self.pblock(x)
+        s = x[:self.decoder_tokens]
+        d = x[self.decoder_tokens:]
+        s = self.blocks(s)
+        x = torch.cat((s,d), dim=0)
+        
+        return x
 
 # TODO: Gated block from Stabilizing Transformers For Reinforcement Learning
+
+
+# Read head ====================================================================
 
 class ReadHead(Module):
     def __init__(self, config):
@@ -307,21 +481,19 @@ class ReadHead(Module):
         
         return x
 
-class TokenMapSequenceEncoder(Module):
+
+# Transformer ==================================================================
+
+class Transformer(Module):
     def __init__(self, config):
-        super(TokenMapSequenceEncoder, self).__init__()
+        super(Transformer, self).__init__()
         
-        print_verbose(config.verbose, 'building transformer embedding block')
-        self.embedding = EmbeddingBlock(config)
-        
-        print_verbose(config.verbose, 'building transformer main blocks')
+        #self.embedding = EmbeddingBlock(config)
+        self.embedding = make_embedding_block(config)
         self.blocks = Sequential(
             *[make_block(config) for _ in range(config.num_blocks)])
-        
-        print_verbose(config.verbose, 'building transformer read head')
         self.read_head = ReadHead(config)
         
-        print_verbose(config.verbose, 'initializing weights')
         if config.init_weights:
             self.apply(self._init_weights)
     
@@ -341,58 +513,3 @@ class TokenMapSequenceEncoder(Module):
         elif isinstance(module, LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.)
-    
-    def configure_optimizer(self, train_config):
-        # again mostly from minGPT
-        decay_names = set()
-        no_decay_names = set()
-        decay_params = []
-        no_decay_params = []
-        decay_modules = (Linear,)
-        no_decay_modules = (LayerNorm, Embedding)
-        for module_name, module in self.named_modules():
-            is_decay_module = isinstance(module, decay_modules)
-            is_no_decay_module = isinstance(module, no_decay_modules)
-            for param_name, param in module.named_parameters():
-                full_param_name = (
-                    '%s.%s'%(module_name, param_name)
-                    if module_name else param_name
-                )
-                
-                if isinstance(param, NoWeightDecayParameter):
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-                    print('caught: %s'%full_param_name)
-                elif param_name.endswith('bias'):
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-                elif param_name.endswith('weight') and is_decay_module:
-                    decay_names.add(full_param_name)
-                    decay_params.append(param)
-                elif param_name.endswith('weight') and is_no_decay_module:
-                    no_decay_names.add(full_param_name)
-                    no_decay_params.append(param)
-        
-        #if self.embedding.learned_positional_encoding:
-        #    no_decay_names.add('embedding.position_encoding')
-        #    no_decay_params.append(self.embedding.positional_encoding)
-        
-        param_intersection = decay_names & no_decay_names
-        param_union = decay_names | no_decay_names
-        assert len(param_intersection) == 0
-        assert len(param_union) == len(decay_names) + len(no_decay_names)
-        
-        optimizer_groups = [
-            {'params': decay_params,
-             'weight_decay':train_config.weight_decay,
-            },
-            {'params': no_decay_params,
-             'weight_decay':0.,
-            },
-        ]
-        optimizer = AdamW(
-            optimizer_groups,
-            lr=train_config.learning_rate,
-            betas=train_config.betas,
-        )
-        return optimizer

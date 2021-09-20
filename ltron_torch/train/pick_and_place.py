@@ -18,13 +18,13 @@ from ltron.visualization.drawing import (
 from ltron.hierarchy import len_hierarchy
 from ltron.dataset.paths import get_dataset_paths
 
-#from ltron_torch.models.transformer_models import ImageSequenceEncoder
+from ltron_torch.gym_tensor import default_image_transform
 from ltron_torch.models.transformer import (
-    TokenMapSequenceEncoder,
+    Transformer,
     TransformerConfig,
-    TrainConfig,
 )
 from ltron_torch.models.transformer_masks import neighborhood
+from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
 import ltron_torch.models.dvae as dvae
 
 def extract_path_indices(path, num_indices):
@@ -56,6 +56,57 @@ def shorten_cache_data():
         path:cached_data['snaps'][path] for path in short_paths}
     
     numpy.savez_compressed('./dvae_small_cache.npz', new_data)
+
+class ImageDataset(Dataset):
+    def __init__(self, dataset_name, split):
+        subset = 1000
+        paths = get_dataset_paths(dataset_name, split, subset=subset)
+        self.frame_order = []
+        for i in range(len_hierarchy(paths)):
+            for j in range(7):
+                self.frame_order.append(paths['color_x'][i].replace(
+                    '_0000.png', '_%04i.png'%j))
+        
+        cached_data = numpy.load(
+            '../dvae_small_cache.npz', allow_pickle=True)['arr_0'].item()
+        self.data = cached_data
+        
+    def __len__(self):
+        return len(self.frame_order)
+    
+    def __getitem__(self, index):
+        x_path = self.frame_order[index]
+        q_path = x_path.replace(
+            'color_x_', 'color_y_')[:-9] + '.png'
+        x = default_image_transform(Image.open(x_path))
+        q = default_image_transform(Image.open(x_path))
+        
+        x_snaps = torch.zeros((8,3), dtype=torch.long)
+        q_snaps = torch.zeros((8,3), dtype=torch.long)
+        
+        for i, snap in enumerate((
+            (1,5),
+            (1,6),
+            (1,7),
+            (1,8),
+            (2,1),
+            (2,2),
+            (3,1),
+            (3,2),
+        )):
+            if snap in self.data['snaps'][x_path]:
+                yy, xx = self.data['snaps'][x_path][snap]
+                x_snaps[i] = torch.LongTensor([yy,xx,1])
+            else:
+                x_snaps[i] = torch.LongTensor([0,0,0])
+            
+            if snap in self.data['snaps'][q_path]:
+                yy, xx = self.data['snaps'][q_path][snap]
+                q_snaps[i] = torch.LongTensor([yy,xx,1])
+            else:
+                q_snaps[i] = torch.LongTensor([0,0,0])
+        
+        return x, q, x_snaps, q_snaps, x_path, q_path
 
 class CachedDataset(Dataset):
     def __init__(self, dataset_name, split):
@@ -155,11 +206,11 @@ class DensePickModel(torch.nn.Module):
         #)
         config = TransformerConfig(
             decoder_channels = 9,
-            num_layers=6,
+            num_blocks=6,
             channels=512,
             num_heads=8,
         )
-        self.decoder = TokenMapSequenceEncoder(config)
+        self.decoder = Transformer(config)
     
     def forward(self, x):
         return self.decoder(x)
@@ -401,14 +452,14 @@ def train_sparse_pick(
         decode_input = False,
         
         decoder_channels = 2,
-        num_layers=6,
+        num_blocks=6,
         channels=512,
         num_heads=8,
     )
-    model = TokenMapSequenceEncoder(config).cuda()
+    model = Transformer(config).cuda()
     
-    train_config = TrainConfig()
-    optimizer = model.configure_optimizer(train_config)
+    optimizer_config = OptimizerConfig()
+    optimizer = adamw_optimizer(model, optimizer_config)
     
     running_loss = 0.
     for epoch in range(1, num_epochs+1):
@@ -507,47 +558,63 @@ def train_sparse_pick(
 # Sparse Pick And Place ========================================================
 
 def train_sparse_pick_and_place(
+    input_type='tokens',
     num_epochs=100,
 ):
+    
     print('making dataset')
-    train_dataset = CachedDataset(
-        'conditional_snap_two_frames',
-        'train',
-    )
+    print('TESTING ON TRAIN SET')
+    if input_type == 'tokens':
+        train_dataset = CachedDataset(
+            'conditional_snap_two_frames',
+            'train',
+        )
+        test_dataset = CachedDataset(
+            'conditional_snap_two_frames',
+            'train',
+        )
+    elif input_type == 'images':
+        train_dataset = ImageDataset(
+            'conditional_snap_two_frames',
+            'train',
+        )
+        test_dataset = ImageDataset(
+            'conditional_snap_two_frames',
+            'train',
+        )
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=2,
         shuffle=True,
-        num_workers=8,
+        num_workers=0,
     )
     
-    test_dataset = CachedDataset(
-        'conditional_snap_two_frames',
-        'train',
-    )
     test_loader = DataLoader(
         test_dataset,
         batch_size=2,
         shuffle=False,
-        num_workers=8,
+        num_workers=0,
     )
     
     print('making model')
     config = TransformerConfig(
-        sequence_length = 2,
+        t = 2,
         decoder_tokens = 8,
         decode_input = False,
         
+        input_type = input_type,
+        
         decoder_channels = 4,
-        num_layers=6,
+        num_blocks=6,
         channels=256,
         num_heads=8,
         residual_channels=256,
     )
-    model = TokenMapSequenceEncoder(config).cuda()
+    model = Transformer(config).cuda()
     
-    train_config = TrainConfig()
-    optimizer = model.configure_optimizer(train_config)
+    optimizer_config = OptimizerConfig()
+    optimizer = adamw_optimizer(model, optimizer_config)
     
     running_loss = 0.
     for epoch in range(1, num_epochs+1):
@@ -559,10 +626,13 @@ def train_sparse_pick_and_place(
             x = x.cuda()
             q = q.cuda()
             
-            b, h, w = x.shape
-            x = x.view(b, h*w).permute(1,0)
-            q = q.view(b, h*w).permute(1,0)
-            qx = torch.stack((q,x), dim=0)
+            if input_type == 'tokens':
+                b, h, w = x.shape
+                x = x.view(b, h*w).permute(1,0)
+                q = q.view(b, h*w).permute(1,0)
+                qx = torch.stack((q,x), dim=0)
+            elif input_type == 'images':
+                qx = torch.stack((q, x), dim=-3)
             
             qx = model(qx)
             
@@ -599,10 +669,14 @@ def train_sparse_pick_and_place(
                 x = x.cuda()
                 q = q.cuda()
                 
-                b, h, w = x.shape
-                x = x.view(b, h*w).permute(1,0)
-                q = q.view(b, h*w).permute(1,0)
-                qx = torch.stack((q,x), dim=0)
+                if input_type == 'tokens':
+                    b, h, w = x.shape
+                    x = x.view(b, h*w).permute(1,0)
+                    q = q.view(b, h*w).permute(1,0)
+                    qx = torch.stack((q,x), dim=0)
+                elif input_type == 'images':
+                    qx = torch.stack((q, x), dim=-3)
+                    b, c, t, h, w = qx.shape
                 
                 qx = model(qx)
                 
@@ -672,4 +746,4 @@ if __name__ == '__main__':
     #visualize()
     #train_dense_pick()
     #train_sparse_pick()
-    train_sparse_pick_and_place()
+    train_sparse_pick_and_place(input_type='images')

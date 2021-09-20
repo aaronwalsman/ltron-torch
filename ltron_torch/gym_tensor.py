@@ -19,6 +19,15 @@ default_image_transform = transforms.Compose([
     transforms.Normalize(mean=default_mean, std=default_std),
 ])
 
+tensor_mean = torch.FloatTensor(default_mean)
+tensor_std = torch.FloatTensor(default_std)
+
+default_tile_transform = transforms.Compose([
+    #lambda x : torch.FloatTensor(x)/255.,
+    lambda x : x / 255.,
+    lambda x : (x - tensor_mean.view(1,1,1,3)) / tensor_std.view(1,1,1,3)
+])
+
 def default_image_untransform(x):
     device = x.device
     mean = torch.FloatTensor(default_mean).unsqueeze(-1).unsqueeze(-1)
