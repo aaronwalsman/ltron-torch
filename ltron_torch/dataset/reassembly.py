@@ -72,6 +72,7 @@ def generate_offline_dataset(dataset_config):
         while True:
             rollout_storage.start_new_seqs(terminal)
             labels = expert(observation, terminal, reward)
+                
             rollout_storage.append_batch(
                 observation=observation,
                 label=stack_numpy_hierarchies(*labels),
