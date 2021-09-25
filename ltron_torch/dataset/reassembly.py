@@ -71,7 +71,9 @@ def generate_offline_dataset(dataset_config):
     with progress:
         while True:
             rollout_storage.start_new_seqs(terminal)
-            labels = expert(observation, terminal, reward)
+            seq_ids = rollout_storage.batch_seq_ids
+            frame_ids = rollout_storage.get_current_seq_lens()
+            labels = expert(observation, terminal, reward, seq_ids, frame_ids)
                 
             rollout_storage.append_batch(
                 observation=observation,
