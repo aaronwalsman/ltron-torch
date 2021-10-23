@@ -10,7 +10,7 @@ import tqdm
 import ltron.settings as settings
 from ltron.exceptions import LtronException
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
-from ltron.gym.ltron_env import async_ltron, sync_ltron
+from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
 from ltron.gym.envs.reassembly_env import (
     reassembly_env, reassembly_template_action)
 from ltron.gym.rollout_storage import RolloutStorage
