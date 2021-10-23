@@ -7,7 +7,6 @@ from torch.distributions import Categorical
 
 from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.dataset.paths import get_dataset_info
-from ltron.gym.reassembly_env import handspace_reassembly_template_action
 from ltron.hierarchy import index_hierarchy
 from ltron.bricks.brick_type import BrickType
 
@@ -82,7 +81,7 @@ class ReassemblyExpert:
     def generate_order(self, obs):
         #return [4,3,2,1] # TMP 000001
         #return [4,3,1,2] # TMP 000002
-        
+        pass
     
     def select_from_pos_neg_maps(self, pos_map, neg_map):
         pos_y, pos_x = numpy.where(pos_map)
@@ -136,7 +135,7 @@ class ReassemblyExpert:
             action['reassembly']['end'] = 1
             return action
     
-    def __call__(self, observation, terminal, reward):
+    def __call_new__(self, observation, terminal, reward):
         # What mode are we in?
         
         # If disassembly, disassemble.
@@ -159,8 +158,9 @@ class ReassemblyExpert:
         # possible to move one of the bricks into place such that it's on a
         # correct assembly path (one that doesn't cause collision problems for
         # later bricks)?  If so do it.  If not, start removing stuff.
+        pass
     
-    def __call_old__(self, observation, terminal, reward):
+    def __call__(self, observation, terminal, reward):
         
         actions = []
         for i, t in enumerate(terminal):
@@ -580,7 +580,7 @@ def build_reassembly_model(config):
         decode_input=False,
         decoder_tokens=1,
         decoder_channels=
-            6 + # mode
+            8 + # mode
             # disassemble
             2 + # polarity
             2 + # direction
@@ -679,7 +679,7 @@ def observations_to_tensors(train_config, observation, pad):
 def unpack_logits(logits, num_classes, num_colors):
     
     mode_logits = {}
-    modes = 6 # disassemble, insert, pick/place, rotate, start reassembly, end
+    modes = 8 # remove, insert, pick/place, r1, r2, r3, start reassembly, end
     mode_logits['mode'] = logits[:,:,0:modes]
     
     disassemble_channels = 2+2+64+64
@@ -734,11 +734,11 @@ def sample_or_max(logits, mode):
 
 
 def logits_to_actions(logits, num_classes, num_colors, mode='sample'):
+    # OUT OF DATE
     s, b = logits.shape[:2]
     logits = unpack_logits(logits, num_classes, num_colors)
     
-    action_mode = sample_or_max(logits['mode'].view(-1,6), mode).cpu().numpy()
-    print(action_mode)
+    action_mode = sample_or_max(logits['mode'].view(-1,8), mode).cpu().numpy()
     
     disassemble_polarity = sample_or_max(
         logits['disassemble_polarity'].view(-1,2), mode).cpu().numpy()

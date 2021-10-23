@@ -14,7 +14,7 @@ from torch.distributions import Categorical
 from PIL import Image
 
 from ltron.dataset.paths import get_dataset_info
-from ltron.gym.reassembly_env import handspace_reassembly_template_action
+from ltron.gym.envs.reassembly_env import reassembly_template_action
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.hierarchy import (
@@ -91,11 +91,11 @@ class StudentForcingReassemblyConfig(Config):
 
 class TeacherForcingReassemblyConfig(Config):
     epochs=10
-    batch_size=16
+    batch_size=4
     num_envs=16
     loader_workers=8
     test_rollout_steps_per_epoch=256
-    max_episode_length=32
+    max_episode_length=64
     
     workspace_image_width=256
     workspace_image_height=256
@@ -414,11 +414,11 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         b = pad.shape[0]
         
         # convert observations to model tensors --------------------------------
-        observation = batch['observation']
+        observations = batch['observations']
         (tile_x, tile_i, tile_pad,
          token_x, token_i, token_pad,
          decoder_i, decoder_pad) = observations_to_tensors(
-            train_config, observation, pad)
+            train_config, observations, pad)
         
         # compute logits -------------------------------------------------------
         action_logits, d_pad = model(
@@ -435,13 +435,15 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
             action_logits, train_config.num_classes, train_config.num_colors)
         
         # compute losses -------------------------------------------------------
-        labels = batch['label']
+        labels = batch['actions']
         loss = 0
         loss = loss + mode_loss(action_logits, labels, decoder_pad)
         loss = loss + disassembly_loss(action_logits, labels, decoder_pad)
         loss = loss + insert_brick_loss(action_logits, labels, decoder_pad)
         loss = loss + pick_and_place_loss(action_logits, labels, decoder_pad)
         #loss = loss + rotate_loss(action_logits, labels, decoder_pad)
+        log.add_scalar('train/loss', loss, clock[0])
+        clock[0] += 1
         
         # optimize ---------------------------------------------------------
         loss.backward()
@@ -454,8 +456,8 @@ def test_epoch(train_config, epoch, test_env, model, log, clock):
     if frequency is not None and epoch % frequency == 0:
         episodes = rollout_epoch(
             train_config, test_env, model, 'test', log, clock)
-        for seq in range(episodes.num_seqs()):
-            print(episodes.get_seq(seq)['reward'])
+        #for seq in range(episodes.num_seqs()):
+        #    print(episodes.get_seq(seq)['reward'])
         
         return episodes
     
@@ -575,6 +577,8 @@ def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
 def mode_loss(action_logits, labels, decoder_pad):
     mode_logits = action_logits['mode']
     s,b = mode_logits.shape[:2]
+    #import pdb
+    #pdb.set_trace()
     mode_labels = torch.LongTensor(
         labels['disassembly']['activate'].astype(numpy.long) *
         numpy.ones((s, b), dtype=numpy.long) * 0 +
@@ -585,53 +589,68 @@ def mode_loss(action_logits, labels, decoder_pad):
         labels['pick_and_place']['activate'].astype(numpy.long) *
         numpy.ones((s, b), dtype=numpy.long) * 2 +
         # ----
-        labels['rotate']['activate'].astype(numpy.long) *
+        (labels['rotate'] == 1).astype(numpy.long) *
         numpy.ones((s, b), dtype=numpy.long) * 3 +
         # ----
-        labels['reassembly']['start'].astype(numpy.long) *
+        (labels['rotate'] == 2).astype(numpy.long) *
         numpy.ones((s, b), dtype=numpy.long) * 4 +
         # ----
+        (labels['rotate'] == 3).astype(numpy.long) *
+        numpy.ones((s, b), dtype=numpy.long) * 5 +
+        # ----
+        labels['reassembly']['start'].astype(numpy.long) *
+        numpy.ones((s, b), dtype=numpy.long) * 6 +
+        # ----
         labels['reassembly']['end'].astype(numpy.long) *
-        numpy.ones((s, b), dtype=numpy.long) * 5
+        numpy.ones((s, b), dtype=numpy.long) * 7
     ).cuda()
     mode_labels = mode_labels.view(-1)
     mode_loss = torch.nn.functional.cross_entropy(
-        mode_logits.view(-1,6), mode_labels.view(-1))
+        mode_logits.view(-1,8), mode_labels.view(-1))
     
     return mode_loss
 
 
 def disassembly_loss(action_logits, labels, decoder_pad):
-    labels = labels['disassembly']
-    activate = labels['activate']
+    #labels = labels['disassembly']
+    cursor_labels = labels['workspace_cursor']
+    activate = labels['disassembly']['activate']
     s, b = activate.shape
     if numpy.any(activate):
         polarity_logits = action_logits['disassemble_polarity'].view(-1,2)
-        polarity_labels = torch.LongTensor(labels['polarity']).cuda()
+        #polarity_labels = torch.LongTensor(labels['polarity']).cuda()
+        polarity_labels = torch.LongTensor(cursor_labels['polarity']).cuda()
         polarity_loss = torch.nn.functional.cross_entropy(
             polarity_logits, polarity_labels.view(-1),
             reduction='none')
         
-        direction_logits = action_logits['disassemble_direction'].view(-1,2)
-        direction_labels = torch.LongTensor(labels['direction']).cuda()
-        direction_loss = torch.nn.functional.cross_entropy(
-            direction_logits, direction_labels.view(-1),
-            reduction='none')
+        #direction_logits = action_logits['disassemble_direction'].view(-1,2)
+        #direction_labels = torch.LongTensor(labels['direction']).cuda()
+        #direction_loss = torch.nn.functional.cross_entropy(
+        #    direction_logits, direction_labels.view(-1),
+        #    reduction='none')
         
         pick_y_logits = action_logits['disassemble_pick_y'].view(-1,64)
-        pick_y_labels = torch.LongTensor(labels['pick'][:,:,0]).cuda()
+        #pick_y_labels = torch.LongTensor(labels['pick'][:,:,0]).cuda()
+        pick_y_labels = torch.LongTensor(
+            cursor_labels['position'][:,:,0]).cuda()
         pick_y_loss = torch.nn.functional.cross_entropy(
             pick_y_logits, pick_y_labels.view(-1),
             reduction='none')
         
         pick_x_logits = action_logits['disassemble_pick_x'].view(-1,64)
-        pick_x_labels = torch.LongTensor(labels['pick'][:,:,1]).cuda()
+        #pick_x_labels = torch.LongTensor(labels['pick'][:,:,1]).cuda()
+        pick_x_labels = torch.LongTensor(
+            cursor_labels['position'][:,:,1]).cuda()
         pick_x_loss = torch.nn.functional.cross_entropy(
             pick_x_logits, pick_x_labels.view(-1),
             reduction='none')
         
         disassembly_loss = (
-            polarity_loss + direction_loss + pick_y_loss + pick_x_loss
+            polarity_loss +
+            #direction_loss +
+            pick_y_loss +
+            pick_x_loss
         )
         disassembly_loss = disassembly_loss.view(s, b)
         disassembly_loss = disassembly_loss * ~make_padding_mask(
@@ -676,42 +695,54 @@ def insert_brick_loss(action_logits, labels, decoder_pad):
 
 
 def pick_and_place_loss(action_logits, labels, decoder_pad):
-    labels = labels['pick_and_place']
-    activate = labels['activate']
+    #labels = labels['pick_and_place']
+    p_labels = labels['pick_and_place']
+    h_cursor_labels = labels['handspace_cursor']
+    w_cursor_labels = labels['workspace_cursor']
+    activate = labels['pick_and_place']['activate']
     s, b = activate.shape
     if numpy.any(activate):
         polarity_logits = action_logits['pick_and_place_polarity'].view(-1,2)
-        polarity_labels = torch.LongTensor(labels['polarity']).cuda()
+        #polarity_labels = torch.LongTensor(labels['polarity']).cuda()
+        polarity_labels = torch.LongTensor(h_cursor_labels['polarity']).cuda()
         polarity_loss = torch.nn.functional.cross_entropy(
             polarity_logits, polarity_labels.view(-1),
             reduction='none')
         
         at_origin_logits = action_logits['pick_and_place_at_origin'].view(-1,2)
-        at_origin_labels = torch.LongTensor(labels['place_at_origin']).cuda()
+        at_origin_labels = torch.LongTensor(p_labels['place_at_origin']).cuda()
         at_origin_loss = torch.nn.functional.cross_entropy(
             at_origin_logits, at_origin_labels.view(-1),
             reduction='none')
         
         pick_y_logits = action_logits['pick_and_place_pick_y'].view(-1,24)
-        pick_y_labels = torch.LongTensor(labels['pick'][:,:,0]).cuda()
+        #pick_y_labels = torch.LongTensor(labels['pick'][:,:,0]).cuda()
+        pick_y_labels = torch.LongTensor(
+            h_cursor_labels['position'][:,:,0]).cuda()
         pick_y_loss = torch.nn.functional.cross_entropy(
             pick_y_logits, pick_y_labels.view(-1),
             reduction='none')
         
         pick_x_logits = action_logits['pick_and_place_pick_x'].view(-1,24)
-        pick_x_labels = torch.LongTensor(labels['pick'][:,:,1]).cuda()
+        #pick_x_labels = torch.LongTensor(labels['pick'][:,:,1]).cuda()
+        pick_x_labels = torch.LongTensor(
+            h_cursor_labels['position'][:,:,1]).cuda()
         pick_x_loss = torch.nn.functional.cross_entropy(
             pick_x_logits, pick_x_labels.view(-1),
             reduction='none')
         
         place_y_logits = action_logits['pick_and_place_place_y'].view(-1,64)
-        place_y_labels = torch.LongTensor(labels['place'][:,:,0]).cuda()
+        #place_y_labels = torch.LongTensor(labels['place'][:,:,0]).cuda()
+        place_y_labels = torch.LongTensor(
+            w_cursor_labels['position'][:,:,0]).cuda()
         place_y_loss = torch.nn.functional.cross_entropy(
             place_y_logits, place_y_labels.view(-1),
             reduction='none')
         
         place_x_logits = action_logits['pick_and_place_place_x'].view(-1,64)
-        place_x_labels = torch.LongTensor(labels['place'][:,:,1]).cuda()
+        #place_x_labels = torch.LongTensor(labels['place'][:,:,1]).cuda()
+        place_x_labels = torch.LongTensor(
+            w_cursor_labels['position'][:,:,1]).cuda()
         place_x_loss = torch.nn.functional.cross_entropy(
             place_x_logits, place_x_labels.view(-1),
             reduction='none')

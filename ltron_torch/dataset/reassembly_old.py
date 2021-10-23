@@ -73,11 +73,13 @@ def generate_offline_dataset(dataset_config):
             rollout_storage.start_new_seqs(terminal)
             seq_ids = rollout_storage.batch_seq_ids
             frame_ids = rollout_storage.get_current_seq_lens()
-            labels = expert(observation, terminal, reward, seq_ids, frame_ids)
-                
+            labels, statusses = expert(
+                observation, terminal, reward, seq_ids, frame_ids)
+            
             rollout_storage.append_batch(
                 observation=observation,
                 label=stack_numpy_hierarchies(*labels),
+                status=stack_numpy_hierarchies(*statusses),
             )
             observation, reward, terminal, info = train_env.step(labels)
             progress.update(numpy.sum(terminal))
@@ -86,7 +88,10 @@ def generate_offline_dataset(dataset_config):
     
     print('-'*80)
     print('Saving sequences')
-    rollout_storage.save(dataset_config.save_path, finished_only=True)
+    good_seqs = [i for i in range(rollout_storage.num_seqs())
+        if numpy.all(rollout_storage.get_seq(i)['status']['status'])]
+    rollout_storage.save(
+        dataset_config.save_path, finished_only=True, seq_ids=good_seqs)
 
 
 # dataset ======================================================================

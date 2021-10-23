@@ -2,7 +2,6 @@ import random
 
 import numpy
 
-from ltron.gym.reassembly_env import handspace_reassembly_template_action
 from ltron.hierarchy import index_hierarchy
 
 def make_reassembly_labels(seq):
