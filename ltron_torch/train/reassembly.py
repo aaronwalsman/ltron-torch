@@ -37,7 +37,7 @@ from ltron_torch.models.reassembly import (
     build_reassembly_model,
     build_optimizer,
     observations_to_tensors,
-    unpack_logits,
+    #unpack_logits,
     logits_to_actions,
 )
 
@@ -373,6 +373,7 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
             # step -------------------------------------------------------------
             observation, reward, terminal, info = env.step(actions)
             
+            '''
             # make labels ------------------------------------------------------
             for i, t in enumerate(terminal):
                 if t or step == steps-1:
@@ -380,6 +381,7 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                     labels = make_reassembly_labels(
                         observation_storage.get_seq(seq_id))
                     label_lists[i].extend(labels)
+            '''
             
             # storage ----------------------------------------------------------
             action_reward_storage.append_batch(
@@ -387,6 +389,7 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                 reward=reward,
             )
     
+    '''
     print('- '*40)
     print('Formatting Labels')
     # This is a goofy, hopefully temporary workaround for not having the
@@ -401,8 +404,9 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
         
         label_storage.start_new_seqs(terminal)
         label_storage.append_batch(label=frame_labels)
+    '''
     
-    return observation_storage | action_reward_storage | label_storage
+    return observation_storage | action_reward_storage # | label_storage
 
 
 def train_pass(train_config, model, optimizer, loader, log, clock):
@@ -421,7 +425,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
             train_config, observations, pad)
         
         # compute logits -------------------------------------------------------
-        action_logits, d_pad = model(
+        logits, d_pad = model(
             tile_x=tile_x,
             tile_i=tile_i,
             tile_pad=tile_pad,
@@ -431,17 +435,25 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
             decoder_i=decoder_i,
             decoder_pad=decoder_pad,
         )
-        action_logits = unpack_logits(
-            action_logits, train_config.num_classes, train_config.num_colors)
+        
+        #action_logits = unpack_logits(
+        #    action_logits, train_config.num_classes, train_config.num_colors)
         
         # compute losses -------------------------------------------------------
+        s, b = logits['disassembly'].shape[:2]
+        mask = ~make_padding_mask(d_pad, (s,b)).cuda()
         labels = batch['actions']
+        
         loss = 0
-        loss = loss + mode_loss(action_logits, labels, decoder_pad)
-        loss = loss + disassembly_loss(action_logits, labels, decoder_pad)
-        loss = loss + insert_brick_loss(action_logits, labels, decoder_pad)
-        loss = loss + pick_and_place_loss(action_logits, labels, decoder_pad)
-        #loss = loss + rotate_loss(action_logits, labels, decoder_pad)
+        loss = loss + viewpoint_loss('workspace', logits, labels, mask)
+        loss = loss + viewpoint_loss('handspace', logits, labels, mask)
+        loss = loss + cursor_loss('workspace', logits, labels, mask)
+        loss = loss + cursor_loss('handspace', logits, labels, mask)
+        loss = loss + disassembly_loss(logits, labels, mask)
+        loss = loss + insert_brick_loss(logits, labels, mask)
+        loss = loss + pick_and_place_loss(logits, labels, mask)
+        loss = loss + rotate_loss(logits, labels, mask)
+        loss = loss + reassembly_loss(logits, labels, mask)
         log.add_scalar('train/loss', loss, clock[0])
         clock[0] += 1
         
@@ -458,6 +470,14 @@ def test_epoch(train_config, epoch, test_env, model, log, clock):
             train_config, test_env, model, 'test', log, clock)
         #for seq in range(episodes.num_seqs()):
         #    print(episodes.get_seq(seq)['reward'])
+        
+        avg_terminal_reward = 0.
+        for seq_id in episodes.finished_seqs:
+            seq = episodes.get_seq(seq_id)
+            avg_terminal_reward += seq['reward'][-1]
+        avg_terminal_reward /= episodes.num_finished_seqs()
+        
+        print('Reward: %f'%avg_terminal_reward)
         
         return episodes
     
@@ -498,8 +518,9 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                 joined_image[:,:ww] = workspace_frame
                 joined_image[wh-hh:,ww:] = handspace_frame
                 
+                '''
                 def mode_string(action):
-                    if action['disassembly']['activate']:
+                    if action['disassembly']:
                         return 'Disassembly'
                     elif action['insert_brick']['class_id'] != 0:
                         return 'Insert Brick [%i] [%i]'%(
@@ -514,6 +535,23 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                         return 'StartReassembly'
                     elif action['reassembly']['end']:
                         return 'EndEpisode'
+                '''
+                def action_string(action):
+                    result = []
+                    if action['disassembly']:
+                        result.append('Disassembly')
+                    if action['insert_brick']['class_id'] != 0:
+                        result.append('Insert Brick [%i] [%i]'%(
+                            action['insert_brick']['class_id'],
+                            action['insert_brick']['color_id'],
+                        ))
+                    if action['pick_and_place'] == 1:
+                        result.append('PickAndPlaceCursor')
+                    if action['pick_and_place'] == 2:
+                        result.append('PickAndPlaceOrigin')
+                    if action['rotate']:
+                        result.append('Rotate [%i]'%action['rotate'])
+                    return '\n'.join(result)
                 
                 def draw_workspace_dot(position, color):
                     y, x = position
@@ -525,20 +563,20 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                     joined_image[yy+y*4:yy+(y+1)*4, ww+x*4:ww+(x+1)*4] = color
                 
                 def draw_pick_and_place(action, color):
-                    if action['disassembly']['activate']:
-                        pick = action['disassembly']['pick']
+                    if action['disassembly']:
+                        pick = action['workspace_cursor']['position']
                         draw_workspace_dot(pick, color)
                     
-                    if action['pick_and_place']['activate']:
-                        pick = action['pick_and_place']['pick']
+                    if action['pick_and_place']:
+                        pick = action['handspace_cursor']['position']
                         draw_handspace_dot(pick, color)
-                        place = action['pick_and_place']['place']
+                        place = action['workspace_cursor']['position']
                         draw_workspace_dot(place, color)
                 
                 lines = []
                 frame_action = index_hierarchy(seq['action'], frame_id)
-                frame_label = index_hierarchy(seq['label'], frame_id)
-                lines.append('Model: %s'%mode_string(frame_action))
+                #frame_label = index_hierarchy(seq['label'], frame_id)
+                lines.append('Model:\n' + action_string(frame_action) + '\n')
                 #lines.append('Label: %s'%mode_string(frame_label))
                 lines.append('Reward: %f'%seq['reward'][frame_id])
                 joined_image = write_text(joined_image, '\n'.join(lines))
@@ -573,8 +611,97 @@ def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
 
 
 # loss functions ===============================================================
+def masked_cross_entropy(logits, labels, mask):
+    d = logits.shape[2]
+    loss = torch.nn.functional.cross_entropy(
+        logits.view(-1, d), labels.view(-1), reduction='none')
+    loss = loss * mask.view(-1)
+    loss = torch.sum(loss) / loss.numel()
+    return loss
 
-def mode_loss(action_logits, labels, decoder_pad):
+def viewpoint_loss(name, logits, labels, mask):
+    component_name = '%s_viewpoint'%name
+    logits = logits[component_name]
+    labels = torch.LongTensor(labels[component_name]).cuda()
+    return masked_cross_entropy(logits, labels, mask)
+    
+def cursor_loss(name, logits, labels, mask):
+    loss = 0
+    component_name = '%s_cursor'%name
+    
+    activate_logits = logits[component_name + '_activate']
+    activate_labels = torch.LongTensor(
+        labels[component_name]['activate']).cuda()
+    loss = loss + masked_cross_entropy(activate_logits, activate_labels, mask)
+    
+    activate_mask = mask * activate_labels
+    for i, n in (0, 'y'), (1, 'x'):
+        position_logits = logits[component_name + '_' + n]
+        position_labels = torch.LongTensor(
+            labels[component_name]['position'][:,:,i]).cuda()
+        loss = loss + masked_cross_entropy(
+            position_logits, position_labels, activate_mask)
+    
+    polarity_logits = logits[component_name + '_p']
+    polarity_labels = torch.LongTensor(
+            labels[component_name]['polarity']).cuda()
+    loss = loss + masked_cross_entropy(
+        polarity_logits, polarity_labels, activate_mask)
+    
+    return loss
+
+def disassembly_loss(logits, labels, mask):
+    disassembly_logits = logits['disassembly']
+    disassembly_labels = torch.LongTensor(labels['disassembly']).cuda()
+    return masked_cross_entropy(disassembly_logits, disassembly_labels, mask)
+
+def insert_brick_loss(logits, labels, mask):
+    labels = labels['insert_brick']
+    s, b = labels['class_id'].shape[:2]
+    num_classes = logits['insert_brick_class'].shape[-1]
+    num_colors = logits['insert_brick_color'].shape[-1]
+    
+    class_id_logits = logits['insert_brick_class']
+    class_id_labels = torch.LongTensor(labels['class_id']).cuda()
+    class_id_loss = masked_cross_entropy(class_id_logits, class_id_labels, mask)
+    #class_id_loss = torch.nn.functional.cross_entropy(
+    #    class_id_logits, class_id_labels.view(-1), reduction='none')
+    
+    color_id_logits = logits['insert_brick_color']
+    color_id_labels = torch.LongTensor(labels['color_id']).cuda()
+    color_id_loss = masked_cross_entropy(color_id_logits, color_id_labels, mask)
+    #color_id_loss = torch.nn.functional.cross_entropy(
+    #    color_id_logits, color_id_labels.view(-1), reduction='none')
+    
+    #insert_brick_loss = class_id_loss + color_id_loss
+    #insert_brick_loss = insert_brick_loss.view(s, b)
+    #insert_brick_loss = insert_brick_loss * ~make_padding_mask(
+    #    decoder_pad, (s,b)).cuda()
+    #insert_brick_loss = (
+    #    torch.sum(insert_brick_loss) / insert_brick_loss.numel())
+    
+    #return insert_brick_loss
+    return class_id_loss + color_id_loss
+
+def pick_and_place_loss(logits, labels, mask):
+    pick_and_place_logits = logits['pick_and_place']
+    pick_and_place_labels = torch.LongTensor(labels['pick_and_place']).cuda()
+    #print(pick_and_place_labels)
+    #print(pick_and_place_logits)
+    return masked_cross_entropy(
+        pick_and_place_logits, pick_and_place_labels, mask)
+
+def rotate_loss(logits, labels, mask):
+    rotate_logits = logits['rotate']
+    rotate_labels = torch.LongTensor(labels['rotate']).cuda()
+    return masked_cross_entropy(rotate_logits, rotate_labels, mask)
+
+def reassembly_loss(logits, labels, mask):
+    reassembly_logits = logits['reassembly']
+    reassembly_labels = torch.LongTensor(labels['reassembly']).cuda()
+    return masked_cross_entropy(reassembly_logits, reassembly_labels, mask)
+
+def old_mode_loss(action_logits, labels, decoder_pad):
     mode_logits = action_logits['mode']
     s,b = mode_logits.shape[:2]
     #import pdb
@@ -603,6 +730,7 @@ def mode_loss(action_logits, labels, decoder_pad):
         # ----
         labels['reassembly']['end'].astype(numpy.long) *
         numpy.ones((s, b), dtype=numpy.long) * 7
+        
     ).cuda()
     mode_labels = mode_labels.view(-1)
     mode_loss = torch.nn.functional.cross_entropy(
@@ -611,7 +739,7 @@ def mode_loss(action_logits, labels, decoder_pad):
     return mode_loss
 
 
-def disassembly_loss(action_logits, labels, decoder_pad):
+def old_disassembly_loss(action_logits, labels, decoder_pad):
     #labels = labels['disassembly']
     cursor_labels = labels['workspace_cursor']
     activate = labels['disassembly']['activate']
@@ -664,7 +792,7 @@ def disassembly_loss(action_logits, labels, decoder_pad):
     return disassembly_loss
 
 
-def insert_brick_loss(action_logits, labels, decoder_pad):
+def old_insert_brick_loss(action_logits, labels, decoder_pad):
     labels = labels['insert_brick']
     s, b = labels['class_id'].shape[:2]
     num_classes = action_logits['insert_brick_class_id'].shape[-1]
@@ -694,7 +822,7 @@ def insert_brick_loss(action_logits, labels, decoder_pad):
     return insert_brick_loss
 
 
-def pick_and_place_loss(action_logits, labels, decoder_pad):
+def old_pick_and_place_loss(action_logits, labels, decoder_pad):
     #labels = labels['pick_and_place']
     p_labels = labels['pick_and_place']
     h_cursor_labels = labels['handspace_cursor']
@@ -768,5 +896,5 @@ def pick_and_place_loss(action_logits, labels, decoder_pad):
     return pick_and_place_loss
 
 
-def rotate_loss(action_logits, labels, decoder_pad):
+def old_rotate_loss(action_logits, labels, decoder_pad):
     return 0.

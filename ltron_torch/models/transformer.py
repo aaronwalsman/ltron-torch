@@ -17,6 +17,7 @@ from ltron_torch.models.multihead_attention import (
     SpatialMultiheadAttention,
 )
 from ltron_torch.models.positional_encoding import sinusoid_positional_encoding
+from ltron_torch.models.multihead_decoder import MultiheadDecoder
 import ltron_torch.models.transformer_masks as transformer_masks
 
 
@@ -468,9 +469,14 @@ class ReadHead(Module):
         self.decoder_tokens = config.decoder_tokens
         self.decode_input = config.decode_input
         
+        if isinstance(config.decoder_channels, int):
+            decoder = Linear(config.channels, config.decoder_channels)
+        else:
+            decoder = MultiheadDecoder(config.channels, config.decoder_channels)
+        
         self.head = torch.nn.Sequential(
             #LayerNorm(config.channels),
-            Linear(config.channels, config.decoder_channels),
+            decoder,
         )
     
     def forward(self, x):

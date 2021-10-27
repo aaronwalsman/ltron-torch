@@ -9,6 +9,7 @@ from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.dataset.paths import get_dataset_info
 from ltron.hierarchy import index_hierarchy
 from ltron.bricks.brick_type import BrickType
+from ltron.gym.envs.reassembly_env import reassembly_template_action
 
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
@@ -559,6 +560,61 @@ class ReassemblyExpert:
 
 # build functions ==============================================================
 
+def explicit_decoder(config):
+    return (
+        # viewpoint
+        f'workspace_viewpoint:8,'
+        f'handspace_viewpoint:8,'
+        
+        # cursor
+        f'workspace_cursor_activate:2,'
+        f'workspace_cursor_y:{config.workspace_map_height},'
+        f'workspace_cursor_x:{config.workspace_map_width},'
+        f'workspace_cursor_p:2,'
+        f'handspace_cursor_activate:2,'
+        f'handspace_cursor_y:{config.handspace_map_height},'
+        f'handspace_cursor_x:{config.handspace_map_width},'
+        f'handspace_cursor_p:2,'
+        
+        # insert brick
+        f'insert_brick_class:{config.num_classes},'
+        f'insert_brick_color:{config.num_colors},'
+        
+        # disassembly
+        f'disassembly:2,'
+        
+        # pick and place
+        f'pick_and_place:3,'
+        
+        # rotate
+        f'rotate:4,'
+        
+        # reassembly
+        f'reassembly:3,'
+    )
+
+def mode_decoder(config):
+    return (
+        f'mode:8,'
+        f'insert_brick_class:{config.num_classes},'
+        f'insert_brick_color:{config.num_colors},'
+        f'disassemble_polarity:2,'
+        f'disassemble_pick_y:{config.workspace_map_height},'
+        f'disassemble_pick_x:{config.workspace_map_width},'
+        f'pick_and_place_polarity:2,'
+        f'pick_and_place_at_origin:2,'
+        f'pick_and_place_pick_y:{config.handspace_map_height},'
+        f'pick_and_place_pick_x:{config.handspace_map_width},'
+        f'pick_and_place_place_y:{config.workspace_map_height},'
+        f'pick_and_place_place_x:{config.workspace_map_width},'
+        f'rotate_polarity:2,'
+        f'rotate_pick_y:{config.workspace_map_height},'
+        f'rotate_pick_x:{config.workspace_map_width},'
+        f'workspace_viewpoint:7,'
+        f'handspace_viewpoint:7,'
+    )
+    
+
 def build_reassembly_model(config):
     print('-'*80)
     print('Building reassembly model')
@@ -579,28 +635,29 @@ def build_reassembly_model(config):
 
         decode_input=False,
         decoder_tokens=1,
-        decoder_channels=
-            8 + # mode
-            # disassemble
-            2 + # polarity
-            2 + # direction
-            config.workspace_map_height +
-            config.workspace_map_width +
-            # insert
-            config.num_classes +
-            config.num_colors +
-            # pick and place
-            2 + # polarity
-            2 + # at origin
-            config.handspace_map_height +
-            config.handspace_map_width +
-            config.workspace_map_height +
-            config.workspace_map_width +
-            # rotate
-            2 + # polarity
-            2 + # direction
-            config.workspace_map_height +
-            config.workspace_map_width,
+        decoder_channels=explicit_decoder(config)
+        #decoder_channels=
+        #    8 + # mode
+        #    # disassemble
+        #    2 + # polarity
+        #    2 + # direction
+        #    config.workspace_map_height +
+        #    config.workspace_map_width +
+        #    # insert
+        #    config.num_classes +
+        #    config.num_colors +
+        #    # pick and place
+        #    2 + # polarity
+        #    2 + # at origin
+        #    config.handspace_map_height +
+        #    config.handspace_map_width +
+        #    config.workspace_map_height +
+        #    config.workspace_map_width +
+        #    # rotate
+        #    2 + # polarity
+        #    2 + # direction
+        #    config.workspace_map_height +
+        #    config.workspace_map_width,
     )
     return CompressedTransformer(model_config).cuda()
 
@@ -633,7 +690,15 @@ def observations_to_tensors(train_config, observation, pad):
     wi = numpy.insert(wi, (0,3,3), -1, axis=-1)
     wi[:,:,0] = 0
     b = wx.shape[1]
-
+    
+    if wx.shape[0] > 1000:
+        from splendor.image import save_image
+        for i in range(observation['workspace_color_render'].shape[0]):
+            save_image(
+                observation['workspace_color_render'][i,0], './tmp_%04i.png'%i)
+        #import pdb
+        #pdb.set_trace()
+    
     hx, hi, h_pad = batch_deduplicate_tiled_seqs(
         observation['handspace_color_render'], pad, tw, th,
         background=102,
@@ -675,7 +740,7 @@ def observations_to_tensors(train_config, observation, pad):
         decoder_i, decoder_pad,
     )
 
-
+'''
 def unpack_logits(logits, num_classes, num_colors):
     
     mode_logits = {}
@@ -687,7 +752,7 @@ def unpack_logits(logits, num_classes, num_colors):
     disassemble_stop = disassemble_start + disassemble_channels
     disassemble_logits = logits[:,:,disassemble_start:disassemble_stop]
     mode_logits['disassemble_polarity'] = disassemble_logits[:,:,:2]
-    mode_logits['disassemble_direction'] = disassemble_logits[:,:,2:4]
+    #mode_logits['disassemble_direction'] = disassemble_logits[:,:,2:4]
     mode_logits['disassemble_pick_y'] = disassemble_logits[:,:,4:4+64]
     mode_logits['disassemble_pick_x'] = disassemble_logits[:,:,4+64:4+128]
     
@@ -721,7 +786,7 @@ def unpack_logits(logits, num_classes, num_colors):
     mode_logits['rotate_pick_y'] = rotate_logits[:,:,4+64:4+128]
     
     return mode_logits
-
+'''
 
 def sample_or_max(logits, mode):
     if mode == 'sample':
@@ -734,12 +799,76 @@ def sample_or_max(logits, mode):
 
 
 def logits_to_actions(logits, num_classes, num_colors, mode='sample'):
-    # OUT OF DATE
-    s, b = logits.shape[:2]
-    logits = unpack_logits(logits, num_classes, num_colors)
     
-    action_mode = sample_or_max(logits['mode'].view(-1,8), mode).cpu().numpy()
+    s, b = logits['disassembly'].shape[:2]
+    #logits = unpack_logits(logits, num_classes, num_colors)
     
+    #action_mode = sample_or_max(logits['mode'].view(-1,8), mode).cpu().numpy()
+    
+    workspace_viewpoint = sample_or_max(
+        logits['workspace_viewpoint'].view(-1,8), mode).cpu().numpy()
+    
+    handspace_viewpoint = sample_or_max(
+        logits['handspace_viewpoint'].view(-1,8), mode).cpu().numpy()
+    
+    cursor = {}
+    for space in ('workspace', 'handspace'):
+        cursor[space] = {}
+        for yxpa in 'y', 'x', 'p', 'activate':
+            logit_name = '%s_cursor_%s'%(space, yxpa)
+            d = logits[logit_name].shape[-1]
+            cursor[space][yxpa] = sample_or_max(
+                logits[logit_name].view(-1, d), mode).cpu().numpy()
+    
+    disassembly = sample_or_max(
+        logits['disassembly'].view(-1,2), mode).cpu().numpy()
+    
+    insert_class = sample_or_max(
+        logits['insert_brick_class'].view(-1, num_classes), mode).cpu().numpy()
+    
+    insert_color = sample_or_max(
+        logits['insert_brick_color'].view(-1, num_colors), mode).cpu().numpy()
+    
+    pick_and_place = sample_or_max(
+        logits['pick_and_place'].view(-1,3), mode).cpu().numpy()
+    
+    rotate = sample_or_max(
+        logits['rotate'].view(-1,4), mode).cpu().numpy()
+    
+    reassembly = sample_or_max(
+        logits['reassembly'].view(-1,3), mode).cpu().numpy()
+    
+    # assemble actions
+    actions = []
+    for i in range(b):
+        action = reassembly_template_action()
+        action['workspace_viewpoint'] = workspace_viewpoint[i]
+        action['handspace_viewpoint'] = handspace_viewpoint[i]
+        
+        for space in 'workspace', 'handspace':
+            component_name = '%s_cursor'%space
+            action[component_name] = {
+                'activate' : cursor[space]['activate'][i],
+                'position' : numpy.array([
+                    cursor[space]['y'][i], cursor[space]['x'][i]]),
+                'polarity' : cursor[space]['p']
+            }
+        
+        action['disassembly'] = disassembly[i]
+        
+        action['insert_brick'] = {
+            'class_id' : insert_class[i],
+            'color_id' : insert_color[i],
+        }
+        action['pick_and_place'] = pick_and_place[i]
+        action['rotate'] = rotate[i]
+        action['reassembly'] = reassembly[i]
+        
+        actions.append(action)
+    
+    return actions
+
+def old_logits_to_actions(logits, num_classes, num_colors, mode='sample'):
     disassemble_polarity = sample_or_max(
         logits['disassemble_polarity'].view(-1,2), mode).cpu().numpy()
     

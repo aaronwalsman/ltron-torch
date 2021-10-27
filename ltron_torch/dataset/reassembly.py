@@ -154,7 +154,7 @@ def generate_offline_dataset(dataset_config):
         
         # switch to reassembly -------------------------------------------------
         action = reassembly_template_action()
-        action['reassembly']['start'] = True
+        action['reassembly'] = 1
         action_seq.append(action)
         _, reward, terminal, info = env.step(action)
         
@@ -194,7 +194,7 @@ def generate_offline_dataset(dataset_config):
         
         # make the final action ------------------------------------------------
         action = reassembly_template_action()
-        action['reassembly']['end'] = True
+        action['reassembly'] = 2
         action_seq.append(action)
         
         iterate.set_description('Complete: %i/%i'%(complete_seqs, i+1))
@@ -210,7 +210,7 @@ def generate_offline_dataset(dataset_config):
 
 class SeqDataset(Dataset):
     def __init__(self, dataset, split, subset):
-        dataset_paths = get_dataset_paths(dataset, split)
+        dataset_paths = get_dataset_paths(dataset, split, subset=subset)
         self.rollout_paths = dataset_paths['rollouts']
     
     def __len__(self):
@@ -218,6 +218,7 @@ class SeqDataset(Dataset):
     
     def __getitem__(self, i):
         path = self.rollout_paths[i]
+        #print(path)
         data = numpy.load(path, allow_pickle=True)['rollout'].item()
         #data['observations'] = stack_numpy_hierarchies(*data['observations'])
         #data['actions'] = stack_numpy_hierarchies(*data['actions'])
