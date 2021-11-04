@@ -1,6 +1,8 @@
 import torch
 from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 
+#from opt_einsum import contract
+
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 
@@ -54,6 +56,7 @@ class CompressedCausalAttention(Module):
         
         # compute attention
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
+        #qk = contract('sbhc,tbhc->stbh', q, k)
         temperature = 1. / self.cc ** 0.5
         a = qk * temperature
         a = a.masked_fill(content_mask.view(s, t, b, 1), float('-inf'))
@@ -62,6 +65,7 @@ class CompressedCausalAttention(Module):
         
         # compute forward projection
         x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
+        #x = contract('stbh,tbhc->sbhc', p, v).reshape(s,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
         

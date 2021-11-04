@@ -1,5 +1,7 @@
 from torch.nn import Module, ModuleDict, Linear
 
+raise Exception('DEPRECATED')
+
 class MultiheadDecoder(Module):
     def __init__(self, in_channels, heads):
         super(MultiheadDecoder, self).__init__()

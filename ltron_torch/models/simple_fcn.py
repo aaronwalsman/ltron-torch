@@ -1,4 +1,5 @@
 import torch
+from torch.nn.functional import avg_pool2d
 
 #from ltron_torch.models.simple_backbone import SimpleBackbone
 import ltron_torch.models.resnet as resnet
@@ -43,6 +44,7 @@ class SimpleFCN(torch.nn.Module):
         encoder,
         encoder_channels,
         decoder_channels,
+        global_heads = None,
         dense_heads = None,
     ):
         super(SimpleFCN, self).__init__()
@@ -51,20 +53,30 @@ class SimpleFCN(torch.nn.Module):
             encoder_channels=encoder_channels,
             decoder_channels=decoder_channels,
         )
+        self.global_heads = global_heads
         self.dense_heads = dense_heads
     
     def forward(self, x):
+        out = []
         xn = self.encoder(x)
-        x = self.decoder(*xn)
+        if self.global_heads is not None:
+            xg = xn[0]
+            b, c, h, w = xg.shape
+            xg = avg_pool2d(xg, kernel_size=(h,w)).view(b,c)
+            xg = self.global_heads(xg)
+            out.append(xg)
         
+        x = self.decoder(*xn)
         if self.dense_heads is not None:
             x = self.dense_heads(x)
+        out.append(x)
         
-        return x
+        return tuple(out)
 
 def named_resnet_fcn(
     name,
     decoder_channels,
+    global_heads=None,
     dense_heads=None,
     pretrained=False
 ):
@@ -75,6 +87,7 @@ def named_resnet_fcn(
         encoder,
         encoder_channels,
         decoder_channels,
+        global_heads=global_heads,
         dense_heads=dense_heads,
     )
 

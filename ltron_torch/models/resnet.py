@@ -1,8 +1,6 @@
 import torch
 import torchvision.models.resnet
 
-#import ltron_torch.models.spatial as spatial
-
 class ResnetBackbone(torch.nn.Module):
     def __init__(self, resnet, *output_layers):
         super(ResnetBackbone, self).__init__()
@@ -56,22 +54,3 @@ def named_encoder_channels(name):
         return (2048, 1024, 512, 256)
     else:
         raise NotImplementedError
-
-'''
-def make_spatial_attention_resnet(resnet, shape, do_spatial_embedding=True):
-    device = resnet.fc.weight.device
-    backbone = ResnetBackbone(resnet)
-    in_channels = resnet.conv1.in_channels
-    x = torch.zeros(
-            1, in_channels, shape[0], shape[1]).to(resnet.conv1.weight.device)
-    with torch.no_grad():
-        x = backbone(x)
-        _, channels, h, w = x.shape
-    
-    layers = []
-    if do_spatial_embedding:
-        layers.append(
-                spatial.AddSpatialEmbedding((h,w), channels).to(device))
-    layers.append(spatial.SpatialAttention2D(channels).to(device))
-    resnet.avgpool = torch.nn.Sequential(*layers)
-'''

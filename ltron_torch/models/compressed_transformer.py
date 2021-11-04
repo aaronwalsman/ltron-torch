@@ -20,8 +20,7 @@ from ltron_torch.models.positional_encoding import (
     FactoredPositionalEncoding,
     PositionalEncoding,
 )
-from ltron_torch.models.multihead_decoder import MultiheadDecoder
-import ltron_torch.models.transformer_masks as transformer_masks
+from ltron_torch.models.heads import LinearMultiheadDecoder
 
 
 # Config =======================================================================
@@ -162,13 +161,20 @@ class Block(Module):
         super(Block, self).__init__()
         
         self.attention_norm = LayerNorm(config.channels)
+        
         self.attention = CompressedCausalAttention(
             config.channels,
             config.num_heads,
             attention_dropout = config.attention_dropout,
             content_dropout = config.content_dropout,
         )
-        
+        '''
+        self.attention = MultiheadAttention(
+            config.channels,
+            config.num_heads,
+            dropout=config.attention_dropout,
+        )
+        '''
         self.projection_residual = Sequential(
             LayerNorm(config.channels),
             Linear(config.channels, config.residual_channels),
@@ -180,8 +186,14 @@ class Block(Module):
     def forward(self, x, pe, causal_mask, pad, terminal=None):
         if isinstance(pe, torch.Tensor):
             pe = self.attention_norm(pe)
+        ####
         x = x + self.attention(
             self.attention_norm(x), pe, causal_mask, pad, terminal)
+        ####
+        #xn = self.attention_norm(x)
+        #a, _ = self.attention(xn, xn, xn)
+        #x = x + a
+        ####
         x = x + self.projection_residual(x)
         
         return x
@@ -195,10 +207,11 @@ class ReadHead(Module):
         self.decoder_tokens = config.decoder_tokens
         self.decode_input = config.decode_input
         
-        if isinstance(config.decoder_channels, int):
-            decoder = Linear(config.channels, config.decoder_channels)
-        else:
-            decoder = MultiheadDecoder(config.channels, config.decoder_channels)
+        #if isinstance(config.decoder_channels, int):
+        #    decoder = Linear(config.channels, config.decoder_channels)
+        #else:
+        decoder = LinearMultiheadDecoder(
+            config.channels, config.decoder_channels)
         
         self.head = torch.nn.Sequential(
             #LayerNorm(config.channels),

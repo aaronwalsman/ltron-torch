@@ -28,6 +28,7 @@ from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
+from ltron_torch.train.optimizer import adamw_optimizer
 from ltron_torch.dataset.reassembly import (
     build_train_env,
     build_test_env,
@@ -35,8 +36,10 @@ from ltron_torch.dataset.reassembly import (
 )
 from ltron_torch.models.reassembly import (
     build_reassembly_model,
-    build_optimizer,
+    build_resnet_disassembly_model,
+    #build_optimizer,
     observations_to_tensors,
+    observations_to_resnet_tensors,
     #unpack_logits,
     logits_to_actions,
 )
@@ -52,6 +55,8 @@ class StudentForcingReassemblyConfig(Config):
     train_rollout_steps_per_epoch=4096
     test_rollout_steps_per_epoch=256
     max_episode_length=32
+    
+    disassembly_score=1.
     
     workspace_image_width=256
     workspace_image_height=256
@@ -69,6 +74,7 @@ class StudentForcingReassemblyConfig(Config):
     train_subset=None
     test_split='simple_single'
     test_subset=None
+    skip_reassembly=False
     
     test_frequency=None
     checkpoint_frequency=10
@@ -97,6 +103,14 @@ class TeacherForcingReassemblyConfig(Config):
     test_rollout_steps_per_epoch=256
     max_episode_length=64
     
+    skip_reassembly=False
+    
+    learning_rate=3e-4
+    weight_decay=0.1
+    betas=(0.9, 0.95)
+    
+    disassembly_score=1.
+    
     workspace_image_width=256
     workspace_image_height=256
     workspace_map_width=64
@@ -107,6 +121,9 @@ class TeacherForcingReassemblyConfig(Config):
     handspace_map_height=24
     tile_width=16
     tile_height=16
+    
+    randomize_viewpoint=True
+    randomize_colors=True
     
     dataset='random_six'
     train_split='simple_single_seq'
@@ -141,7 +158,8 @@ def train_student_forcing_reassembly(train_config):
     clock = [0]
     
     model = build_reassembly_model(train_config)
-    optimizer = build_optimizer(train_config, model)
+    #optimizer = build_optimizer(train_config, model)
+    optimizer = adamw_optimizer(model, train_config)
     train_env = build_train_env(train_config)
     test_env = None
     
@@ -179,7 +197,8 @@ def train_teacher_forcing_reassembly(train_config):
     train_start = time.time()
     
     model = build_reassembly_model(train_config)
-    optimizer = build_optimizer(train_config, model)
+    #optimizer = build_optimizer(train_config, model)
+    optimizer = adamw_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
     
@@ -200,6 +219,76 @@ def train_teacher_forcing_reassembly(train_config):
     train_end = time.time()
     print('='*80)
     print('Train elapsed: %.02f seconds'%(train_end-train_start))
+
+
+def train_transformer_teacher_forcing_disassembly(train_config):
+    
+    print('='*80)
+    print('Setup')
+    print('-'*80)
+    print('Log')
+    log = SummaryWriter()
+    clock = [0]
+    train_start = time.time()
+    
+    train_config.skip_reassembly=True
+    
+    model = build_reassembly_model(train_config)
+    #optimizer = build_optimizer(train_config, model)
+    optimizer = adamw_optimizer(model, train_config)
+    train_loader = build_seq_train_loader(train_config)
+    test_env = build_test_env(train_config)
+    
+    for epoch in range(1, train_config.epochs+1):
+        epoch_start = time.time()
+        print('='*80)
+        print('Epoch: %i'%epoch)
+        
+        train_pass(
+            train_config, model, optimizer, train_loader, log, clock)
+        save_checkpoint(train_config, epoch, model, optimizer, log, clock)
+        episodes = test_transformer_disassembly_epoch(
+            train_config, epoch, test_env, model, log, clock)
+        visualize_episodes(train_config, epoch, episodes, log, clock)
+        
+        train_end = time.time()
+        print('='*80)
+        print('Train elapsed: %0.02f sections'%(train_end-train_start))
+
+
+def train_resnet_teacher_forcing_disassembly(train_config):
+    
+    print('='*80)
+    print('Setup')
+    print('-'*80)
+    print('Log')
+    log = SummaryWriter()
+    clock = [0]
+    train_start = time.time()
+    
+    train_config.skip_reassembly=True
+    
+    model = build_resnet_disassembly_model(train_config)
+    #optimizer = build_optimizer(train_config, model)
+    optimizer = adamw_optimizer(model, train_config)
+    train_loader = build_seq_train_loader(train_config)
+    test_env = build_test_env(train_config)
+    
+    for epoch in range(1, train_config.epochs+1):
+        epoch_start = time.time()
+        print('='*80)
+        print('Epoch: %i'%epoch)
+        
+        train_resnet_pass(
+            train_config, model, optimizer, train_loader, log, clock)
+        save_checkpoint(train_config, epoch, model, optimizer, log, clock)
+        episodes = test_resnet_epoch(
+            train_config, epoch, test_env, model, log, clock)
+        visualize_episodes(train_config, epoch, episodes, log, clock)
+        
+        train_end = time.time()
+        print('='*80)
+        print('Train elapsed: %0.02f seconds'%(train_end-train_start))
 
 
 # train subfunctions ===========================================================
@@ -409,6 +498,168 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
     return observation_storage | action_reward_storage # | label_storage
 
 
+def rollout_resnet_epoch(train_config, env, model, train_mode, log, clock):
+    print('-'*80)
+    print('Rolling out episodes')
+    
+    # initialize storage for observations, actions and rewards
+    observation_storage = RolloutStorage(train_config.num_envs)
+    action_reward_storage = RolloutStorage(train_config.num_envs)
+    label_lists = [[] for _ in range(train_config.num_envs)]
+    terminal_lists = []
+    
+    # tell the model to keep track of rollout memory
+    model.eval()
+    
+    # use the train mode to determine the number of steps and rollout mode
+    if train_mode == 'train':
+        steps = train_config.train_batch_rollout_steps_per_epoch
+        rollout_mode = 'sample'
+    elif train_mode == 'test':
+        steps = train_config.test_batch_rollout_steps_per_epoch
+        rollout_mode = 'max'
+    
+    # reset and get first observation
+    b = train_config.num_envs
+    wh = train_config.workspace_image_height
+    ww = train_config.workspace_image_width
+    hh = train_config.handspace_image_height
+    hw = train_config.handspace_image_width
+    th = train_config.tile_height
+    tw = train_config.tile_width
+    
+    # reset
+    observation = env.reset()
+    terminal = numpy.ones(train_config.num_envs, dtype=numpy.bool)
+    reward = numpy.zeros(train_config.num_envs)
+    
+    with torch.no_grad():
+        for step in tqdm.tqdm(range(steps)):
+            # prep -------------------------------------------------------------
+            # start new sequences if necessary
+            action_reward_storage.start_new_seqs(terminal)
+            observation_storage.start_new_seqs(terminal)
+            terminal_lists.append(terminal)
+            
+            # get sequence lengths before adding the new observation
+            seq_lengths = numpy.array(
+                observation_storage.get_current_seq_lens())
+                
+            # add latest observation to storage
+            observation_storage.append_batch(observation=observation)
+            
+            # move tiles to torch and cuda
+            b = env.num_envs
+            pad = numpy.ones(b, dtype=numpy.long)
+            observations = stack_numpy_hierarchies(observation)
+            x = observations_to_resnet_tensors(train_config, observations, pad)
+            x = x.cuda()
+            
+            # compute actions --------------------------------------------------
+            xg, xd = model(x)
+            s, b, c, h, w = xd.shape
+            
+            # build actions
+            global_distribution = Categorical(logits=xg.view(-1, 9))
+            mode_action = global_distribution.sample().cpu().numpy()
+            actions = []
+            for i in range(b):
+                action = reassembly_template_action()
+                if mode_action[i] == 0:
+                    location_logits = xd[:,i,0,:,:].view(h*w)
+                    location_distribution = Categorical(logits=location_logits)
+                    location = location_distribution.sample().cpu().numpy()
+                    y = location // w
+                    x = location % w
+                    
+                    polarity_logits = xd[:,i,1:,y,x].view(2)
+                    polarity_distribution = Categorical(logits=polarity_logits)
+                    p = polarity_distribution.sample().cpu().numpy()
+                    #import pdb
+                    #pdb.set_trace()
+                    action['workspace_cursor']['activate'] = 1
+                    action['workspace_cursor']['position'] = numpy.array([y,x])
+                    action['workspace_cursor']['polarity'] = p
+                    action['disassembly'] = 1
+                    
+                elif mode_action[i] == 8:
+                    action['reassembly'] = 1
+                
+                else:
+                    action['workspace_viewpoint'] = mode_action[i]
+                
+                actions.append(action)
+            
+            # step -------------------------------------------------------------
+            observation, reward, terminal, info = env.step(actions)
+            
+            # storage ----------------------------------------------------------
+            action_reward_storage.append_batch(
+                action=stack_numpy_hierarchies(*actions),
+                reward=reward,
+            )
+    
+    return observation_storage | action_reward_storage # | label_storage
+
+
+def train_resnet_pass(train_config, model, optimizer, loader, log, clock):
+    
+    model.train()
+    
+    for batch, pad in tqdm.tqdm(loader):
+        
+        # convert observations to model tensors --------------------------------
+        observations = batch['observations']
+        x = observations_to_resnet_tensors(train_config, observations, pad)
+        x = x.cuda()
+        
+        # forward --------------------------------------------------------------
+        xg, xd = model(x)
+        s, b, c, h, w = xd.shape
+        
+        # loss -----------------------------------------------------------------
+        loss_mask = ~make_padding_mask(torch.LongTensor(pad), (s,b)).cuda()
+        
+        viewpoint_label = batch['actions']['workspace_viewpoint']
+        end_label = (batch['actions']['reassembly'] == 1) * 8
+        camera_label = torch.LongTensor(viewpoint_label + end_label).cuda()
+        camera_loss = torch.nn.functional.cross_entropy(
+            xg.view(-1,9), camera_label.view(-1), reduction='none').view(s,b)
+        camera_loss = camera_loss * loss_mask
+        camera_loss = torch.sum(camera_loss) / (s*b)
+        log.add_scalar('train/camera_loss', camera_loss, clock[0])
+        
+        position_logits = xd[:,:,0].view(s*b, h*w)
+        raw_position = batch['actions']['workspace_cursor']['position']
+        position_target = torch.LongTensor(raw_position).cuda()
+        position_target = position_target[:,:,0] * w + position_target[:,:,1]
+        position_target = position_target.view(-1)
+        position_loss = torch.nn.functional.cross_entropy(
+            position_logits, position_target, reduction='none').view(s,b)
+        position_mask = loss_mask * (camera_label == 0)
+        position_loss = position_loss * position_mask
+        position_loss = torch.sum(position_loss) / (s*b)
+        log.add_scalar('train/position_loss', position_loss, clock[0])
+        
+        polarity_logits = xd[:,:,1:].view(s*b, 2, h, w)
+        y = raw_position[:,:,0].reshape(-1)
+        x = raw_position[:,:,1].reshape(-1)
+        polarity_logits = polarity_logits[range(s*b), :, y, x]
+        polarity_target = torch.LongTensor(
+            batch['actions']['workspace_cursor']['polarity']).view(-1).cuda()
+        polarity_loss = torch.nn.functional.cross_entropy(
+            polarity_logits, polarity_target, reduction='none').view(s,b)
+        polarity_loss = polarity_loss * position_mask
+        polarity_loss = torch.sum(polarity_loss) / (s*b)
+        log.add_scalar('train/polarity_loss', polarity_loss, clock[0])
+        
+        loss = camera_loss + position_loss + polarity_loss
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        
+        clock[0] += 1
+
 def train_pass(train_config, model, optimizer, loader, log, clock):
     
     model.train()
@@ -462,6 +713,39 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         optimizer.step()
         optimizer.zero_grad()
 
+
+def test_resnet_epoch(train_config, epoch, test_env, model, log, clock):
+    frequency = train_config.test_frequency
+    if frequency is not None and epoch % frequency == 0:
+        episodes = rollout_resnet_epoch(
+            train_config, test_env, model, 'test', log, clock)
+        
+        avg_terminal_reward = 0.
+        for seq_id in episodes.finished_seqs:
+            seq = episodes.get_seq(seq_id)
+            avg_terminal_reward += seq['reward'][-1]
+        
+        if episodes.num_finished_seqs():
+            avg_terminal_reward /= episodes.num_finished_seqs()
+        
+        print('Average Terminal Reward: %f'%avg_terminal_reward)
+        log.add_scalar('val/term_reward', avg_terminal_reward, clock[0])
+        
+        avg_reward = 0.
+        entries = 0
+        for seq_id in range(episodes.num_seqs()):
+            seq = episodes.get_seq(seq_id)
+            avg_reward += numpy.sum(seq['reward'])
+            entries += seq['reward'].shape[0]
+        
+        avg_reward /= entries
+        print('Average Reward: %f'%avg_reward)
+        log.add_scalar('val/reward', avg_reward, clock[0])
+        
+        return episodes
+    
+    else:
+        return None
 
 def test_epoch(train_config, epoch, test_env, model, log, clock):
     frequency = train_config.test_frequency
@@ -562,9 +846,14 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                     yy = wh - hh
                     joined_image[yy+y*4:yy+(y+1)*4, ww+x*4:ww+(x+1)*4] = color
                 
-                def draw_pick_and_place(action, color):
+                def draw_pick_and_place(action):
                     if action['disassembly']:
                         pick = action['workspace_cursor']['position']
+                        polarity = action['workspace_cursor']['polarity']
+                        if polarity:
+                            color = (0,0,255)
+                        else:
+                            color = (255,0,0)
                         draw_workspace_dot(pick, color)
                     
                     if action['pick_and_place']:
@@ -580,7 +869,7 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                 #lines.append('Label: %s'%mode_string(frame_label))
                 lines.append('Reward: %f'%seq['reward'][frame_id])
                 joined_image = write_text(joined_image, '\n'.join(lines))
-                draw_pick_and_place(frame_action, (255,0,0))
+                draw_pick_and_place(frame_action)
                 #draw_pick_and_place(frame_label, (0,255,0))
                 
                 frame_path = os.path.join(
@@ -602,7 +891,7 @@ def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
         model_path = os.path.join(
             checkpoint_directory, 'model_%04i.pt'%epoch)
         print('Saving model to: %s'%model_path)
-        torch.save(optimizer.state_dict(), model_path)
+        torch.save(model.state_dict(), model_path)
         
         optimizer_path = os.path.join(
             checkpoint_directory, 'optimizer_%04i.pt'%epoch)

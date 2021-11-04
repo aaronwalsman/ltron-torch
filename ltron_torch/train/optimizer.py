@@ -2,16 +2,12 @@ from torch.nn import Linear, LayerNorm, Embedding
 from torch.optim import AdamW
 
 from ltron_torch.models.parameter import NoWeightDecayParameter
+from ltron_torch.config import Config
 
-class OptimizerConfig:
+class OptimizerConfig(Config):
     learning_rate = 3e-4
     weight_decay = 0.1
     betas = (0.9, 0.95)
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            assert hasattr(self, key)
-            setattr(self, key, value)
 
 def adamw_optimizer(model, config):
     # mostly from minGPT

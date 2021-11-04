@@ -15,6 +15,7 @@ from ltron.gym.envs.reassembly_env import (
     reassembly_env, reassembly_template_action)
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
+    index_hierarchy,
     stack_numpy_hierarchies,
     auto_pad_stack_numpy_hierarchies,
 )
@@ -46,7 +47,12 @@ class ReassemblyDatasetConfig(Config):
     handspace_map_width=24
     handspace_map_height=24
     
+    randomize_viewpoint=True,
+    randomize_colors=True,
+    
     max_episode_length=32
+    
+    disassembly_score=0.
     
     error_handling='record'
 
@@ -75,7 +81,7 @@ def generate_offline_dataset(dataset_config):
         settings.collections[dataset_config.collection], 'rollouts')
     
     print('-'*80)
-    print('Planning plans')
+    print('Planning plans %i-%i'%(dataset_config.start, dataset_config.end))
     num_paths = len(dataset_paths['mpd'])
     if dataset_config.end is None:
         end = num_paths
@@ -92,10 +98,12 @@ def generate_offline_dataset(dataset_config):
             rank=i,
             size=num_paths,
             max_episode_length=512,
-            randomize_colors=False,
+            disassembly_score=dataset_config.disassembly_score,
             check_collisions=True,
             print_traceback=True,
             dataset_reset_mode='single_pass',
+            randomize_viewpoint=dataset_config.randomize_viewpoint,
+            randomize_colors=dataset_config.randomize_colors,
             train=True,
         )
         
@@ -197,7 +205,8 @@ def generate_offline_dataset(dataset_config):
         action['reassembly'] = 2
         action_seq.append(action)
         
-        iterate.set_description('Complete: %i/%i'%(complete_seqs, i+1))
+        total = i+1 - dataset_config.start
+        iterate.set_description('Complete: %i/%i'%(complete_seqs, total))
         
         observation_seq = stack_numpy_hierarchies(*observation_seq)
         action_seq = stack_numpy_hierarchies(*action_seq)
@@ -209,9 +218,10 @@ def generate_offline_dataset(dataset_config):
 # dataset ======================================================================
 
 class SeqDataset(Dataset):
-    def __init__(self, dataset, split, subset):
+    def __init__(self, dataset, split, subset, skip_reassembly=False):
         dataset_paths = get_dataset_paths(dataset, split, subset=subset)
         self.rollout_paths = dataset_paths['rollouts']
+        self.skip_reassembly = skip_reassembly
     
     def __len__(self):
         return len(self.rollout_paths)
@@ -220,6 +230,10 @@ class SeqDataset(Dataset):
         path = self.rollout_paths[i]
         #print(path)
         data = numpy.load(path, allow_pickle=True)['rollout'].item()
+        if self.skip_reassembly:
+            i = numpy.where(data['actions']['reassembly'])[0]
+            if len(i):
+                data = index_hierarchy(data, slice(0, i[0]+1))
         #data['observations'] = stack_numpy_hierarchies(*data['observations'])
         #data['actions'] = stack_numpy_hierarchies(*data['actions'])
         return data
@@ -252,9 +266,12 @@ def build_train_env(dataset_config):
         handspace_map_width=dataset_config.handspace_map_width,
         handspace_map_height=dataset_config.handspace_map_height,
         max_episode_length=dataset_config.max_episode_length,
+        disassembly_score=dataset_config.disassembly_score,
+        skip_disassembly=dataset_config.skip_disassembly,
         train=True,
-        check_collisions=False, # TMP
-        randomize_viewpoint=False,
+        check_collisions=True,
+        randomize_viewpoint=dataset_config.randomize_viewpoint,
+        randomize_colors=dataset_config.randomize_viewpoint,
     )
     
     return train_env
@@ -278,9 +295,12 @@ def build_test_env(dataset_config):
         handspace_map_width=dataset_config.handspace_map_width,
         handspace_map_height=dataset_config.handspace_map_height,
         max_episode_length=dataset_config.max_episode_length,
+        disassembly_score=dataset_config.disassembly_score,
+        skip_reassembly=dataset_config.skip_reassembly,
         train=True,
-        check_collisions=False, # TMP
-        randomize_viewpoint=False,
+        check_collisions=True,
+        randomize_viewpoint=dataset_config.randomize_viewpoint,
+        randomize_colors=dataset_config.randomize_viewpoint,
     )
     
     return test_env
@@ -293,6 +313,7 @@ def build_seq_train_loader(config):
         config.dataset,
         config.train_split,
         config.train_subset,
+        config.skip_reassembly,
     )
     
     loader = DataLoader(
