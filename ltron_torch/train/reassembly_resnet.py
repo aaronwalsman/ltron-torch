@@ -107,8 +107,8 @@ def train_disassembly_behavior_cloning(train_config):
     
     train_config.skip_reassembly=True
     
-    #model = build_resnet_model(train_config)
-    model = build_lstm_model(train_config)
+    model = build_resnet_model(train_config)
+    #model = build_lstm_model(train_config)
     optimizer = adamw_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
@@ -251,10 +251,12 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         # convert observations to model tensors --------------------------------
         observations = batch['observations']
         xw, xh = observations_to_tensors(train_config, observations, pad)
-        xw, xh = xw.cuda(), xh.cuda()
+        #xw, xh = xw.cuda(), xh.cuda()
+        xw = xw.cuda()
         
         # forward --------------------------------------------------------------
-        xg, xd = model(xw, xh)
+        #xg, xd = model(xw, xh)
+        xg, xd = model(xw)
         s, b, c, h, w = xd.shape
         
         # loss -----------------------------------------------------------------
