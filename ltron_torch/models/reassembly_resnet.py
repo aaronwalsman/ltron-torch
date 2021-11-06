@@ -44,11 +44,14 @@ def build_model(config):
 
 def observations_to_tensors(train_config, observation, pad):
     
-    frames = observation['workspace_color_render']
-    s, b, h, w, c = frames.shape
-    frames = frames.reshape(s*b, h, w, c)
-    frames = [default_image_transform(frame) for frame in frames]
-    frames = torch.stack(frames)
-    frames = frames.view(s, b, c, h, w)
+    output = []
+    for component in 'workspace_color_render', 'handspace_color_render':
+        frames = observation[component]
+        s, b, h, w, c = frames.shape
+        frames = frames.reshape(s*b, h, w, c)
+        frames = [default_image_transform(frame) for frame in frames]
+        frames = torch.stack(frames)
+        frames = frames.view(s, b, c, h, w)
+        output.append(frames)
     
-    return frames
+    return tuple(output)

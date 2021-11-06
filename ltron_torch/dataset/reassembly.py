@@ -33,6 +33,7 @@ class ReassemblyDatasetConfig(Config):
     dataset='random_six'
     collection='random_six'
     train_split='simple_single'
+    rollout_directory='rollouts'
     train_subset=None
     start = 0
     end = None
@@ -78,16 +79,22 @@ def generate_offline_dataset(dataset_config):
     #reward = numpy.zeros(dataset_config.num_envs)
     
     rollout_path = os.path.join(
-        settings.collections[dataset_config.collection], 'rollouts')
+        settings.collections[dataset_config.collection],
+        dataset_config.rollout_directory,
+    )
     
-    print('-'*80)
-    print('Planning plans %i-%i'%(dataset_config.start, dataset_config.end))
     num_paths = len(dataset_paths['mpd'])
     if dataset_config.end is None:
         end = num_paths
     else:
         end = dataset_config.end
-    iterate = tqdm.tqdm(range(dataset_config.start, end))
+    if dataset_config.start is None:
+        start = 0
+    else:
+        start = dataset_config.start
+    print('-'*80)
+    print('Planning plans %i-%i'%(start, end))
+    iterate = tqdm.tqdm(range(start, end))
     complete_seqs = 0
     problems = {}
     for i in iterate:
@@ -104,6 +111,7 @@ def generate_offline_dataset(dataset_config):
             dataset_reset_mode='single_pass',
             randomize_viewpoint=dataset_config.randomize_viewpoint,
             randomize_colors=dataset_config.randomize_colors,
+            include_score=False,
             train=True,
         )
         
@@ -211,7 +219,12 @@ def generate_offline_dataset(dataset_config):
         observation_seq = stack_numpy_hierarchies(*observation_seq)
         action_seq = stack_numpy_hierarchies(*action_seq)
         
-        path = os.path.join(rollout_path, 'rollout_%06i.npz'%i)
+        
+        #path = os.path.join(rollout_path, 'rollout_%06i.npz'%i)
+        file_name = os.path.basename(dataset_paths['mpd'][i])
+        file_name = file_name.replace('.mpd', '_1.npz')
+        file_name = file_name.replace('.ldr', '_1.npz')
+        path = os.path.join(rollout_path, file_name)
         rollout = {'observations':observation_seq, 'actions':action_seq}
         numpy.savez_compressed(path, rollout=rollout)
 
@@ -321,6 +334,7 @@ def build_seq_train_loader(config):
         batch_size=config.batch_size,
         num_workers=config.loader_workers,
         collate_fn=seq_data_collate,
+        shuffle=True,
     )
     
     return loader

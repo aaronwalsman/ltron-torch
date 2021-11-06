@@ -35,10 +35,10 @@ from ltron_torch.dataset.reassembly import (
     build_seq_train_loader,
 )
 from ltron_torch.models.reassembly_resnet import (
-    build_model,
+    build_model as build_resnet_model,
     observations_to_tensors,
 )
-
+from ltron_torch.models.reassembly_lstm import build_model as build_lstm_model
 
 # config definitions ===========================================================
 
@@ -107,7 +107,8 @@ def train_disassembly_behavior_cloning(train_config):
     
     train_config.skip_reassembly=True
     
-    model = build_model(train_config)
+    #model = build_resnet_model(train_config)
+    model = build_lstm_model(train_config)
     optimizer = adamw_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
@@ -181,7 +182,7 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
             # add latest observation to storage
             observation_storage.append_batch(observation=observation)
             
-            # move tiles to torch and cuda
+            # move observations to torch and cuda
             b = env.num_envs
             pad = numpy.ones(b, dtype=numpy.long)
             observations = stack_numpy_hierarchies(observation)
@@ -222,6 +223,11 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                 
                 actions.append(action)
             
+            location_p = torch.softmax(
+                xd[:,:,0].view(b, h*w), dim=-1).view(b, h, w)
+            polarity_p = torch.softmax(
+                xd[:,:,1:].view(b, 2, h*w), dim=-2).view(b, 2, h, w)
+            
             # step -------------------------------------------------------------
             observation, reward, terminal, info = env.step(actions)
             
@@ -229,6 +235,8 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
             action_reward_storage.append_batch(
                 action=stack_numpy_hierarchies(*actions),
                 reward=reward,
+                location_p = location_p.detach().cpu().numpy(),
+                polarity_p = polarity_p.detach().cpu().numpy(),
             )
     
     return observation_storage | action_reward_storage # | label_storage
@@ -242,11 +250,11 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         # convert observations to model tensors --------------------------------
         observations = batch['observations']
-        x = observations_to_tensors(train_config, observations, pad)
-        x = x.cuda()
+        xw, xh = observations_to_tensors(train_config, observations, pad)
+        xw, xh = xw.cuda(), xh.cuda()
         
         # forward --------------------------------------------------------------
-        xg, xd = model(x)
+        xg, xd = model(xw, xh)
         s, b, c, h, w = xd.shape
         
         # loss -----------------------------------------------------------------
@@ -377,14 +385,21 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                         result.append('Rotate [%i]'%action['rotate'])
                     return '\n'.join(result)
                 
-                def draw_workspace_dot(position, color):
+                def draw_workspace_dot(position, color, alpha=1.0):
                     y, x = position
-                    joined_image[y*4:(y+1)*4, x*4:(x+1)*4] = color
+                    joined_image[y*4:(y+1)*4, x*4:(x+1)*4] = (
+                        color * alpha +
+                        joined_image[y*4:(y+1)*4, x*4:(x+1)*4] * (1. - alpha)
+                    )
                 
                 def draw_handspace_dot(position, color):
                     y, x = position
                     yy = wh - hh
-                    joined_image[yy+y*4:yy+(y+1)*4, ww+x*4:ww+(x+1)*4] = color
+                    joined_image[yy+y*4:yy+(y+1)*4, ww+x*4:ww+(x+1)*4] = (
+                        color * alpha +
+                        joined_image[yy+y*4:yy+(y+1)*4, ww+x*4:ww+(x+1)*4] *
+                            (1. - alpha)
+                    )
                 
                 def draw_pick_and_place(action):
                     if action['disassembly']:
@@ -407,7 +422,17 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                 lines.append('Model:\n' + action_string(frame_action) + '\n')
                 lines.append('Reward: %f'%seq['reward'][frame_id])
                 joined_image = write_text(joined_image, '\n'.join(lines))
-                draw_pick_and_place(frame_action)
+                #draw_pick_and_place(frame_action)
+                
+                for y in range(64):
+                    for x in range(64):
+                        pyx = seq['location_p'][frame_id, y, x]
+                        pp = seq['polarity_p'][frame_id, :, y, x]
+                        color = (
+                            pp[0] * numpy.array([255,0,0]) +
+                            pp[1] * numpy.array([0,0,255])
+                        )
+                        draw_workspace_dot((y, x), color, pyx*5.)
                 
                 frame_path = os.path.join(
                     seq_path,
