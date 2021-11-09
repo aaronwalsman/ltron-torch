@@ -1,5 +1,6 @@
 import torch
 import torchvision.models.resnet
+from torch.nn import BatchNorm1d, BatchNorm2d, BatchNorm3d
 
 class ResnetBackbone(torch.nn.Module):
     def __init__(self, resnet, *output_layers, frozen=False):
@@ -36,8 +37,8 @@ class ResnetBackbone(torch.nn.Module):
     def train(self, mode=True):
         super(ResnetBackbone, self).train(mode)
         if self.frozen:
-            for m in self.modules:
-                if isinstance(m, BatchNorm1d, BatchNorm2d, BatchNorm3d):
+            for m in self.modules():
+                if isinstance(m, (BatchNorm1d, BatchNorm2d, BatchNorm3d)):
                     m.eval()
 
 def replace_fc(resnet, num_classes):
