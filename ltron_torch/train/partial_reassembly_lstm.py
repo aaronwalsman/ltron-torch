@@ -118,6 +118,22 @@ def train_partial_reassembly_behavior_cloning(train_config):
     behavior_cloning(
         train_config, model, optimizer, train_loader, test_env, interface)
 
+
+def train_full_reassembly_behavior_cloning(train_config):
+    print('='*80)
+    print('Full Reassembly Setup')
+    # make everything
+    model = build_lstm_model(train_config)
+    optimizer = adamw_optimizer(model, train_config)
+    train_loader = build_seq_train_loader(train_config)
+    test_env = build_test_env(train_config)
+    interface = ReassemblyLSTMInterface(train_config)
+    
+    # run behavior cloning
+    behavior_cloning(
+        train_config, model, optimizer, train_loader, test_env, interface)
+    
+
 def train_partial_reassembly_behavior_cloning_old(train_config):
     
     print('='*80)
