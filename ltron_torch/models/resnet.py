@@ -3,13 +3,19 @@ import torchvision.models.resnet
 from torch.nn import BatchNorm1d, BatchNorm2d, BatchNorm3d
 
 class ResnetBackbone(torch.nn.Module):
-    def __init__(self, resnet, *output_layers, frozen=False):
+    def __init__(self,
+        resnet,
+        *output_layers,
+        frozen_weights=False,
+        frozen_batchnorm=False,
+    ):
         super(ResnetBackbone, self).__init__()
         self.resnet = resnet
         del(self.resnet.fc) # remove the fc layer to free up memory
         self.output_layers = output_layers
-        self.frozen = frozen
-        if self.frozen:
+        self.frozen_weights = frozen_weights
+        self.frozen_batchnorm = frozen_batchnorm
+        if self.frozen_weights:
             for p in self.parameters():
                 p.requires_grad = False
     
@@ -36,7 +42,7 @@ class ResnetBackbone(torch.nn.Module):
     
     def train(self, mode=True):
         super(ResnetBackbone, self).train(mode)
-        if self.frozen:
+        if self.frozen_batchnorm:
             for m in self.modules():
                 if isinstance(m, (BatchNorm1d, BatchNorm2d, BatchNorm3d)):
                     m.eval()
@@ -55,9 +61,9 @@ def replace_conv1(resnet, input_channels):
             padding=(3,3),
             bias=False).to(conv1.weight.device)
 
-def named_backbone(name, *output_layers, frozen=False, pretrained=False):
+def named_backbone(name, *output_layers, pretrained=False, **kwargs):
     resnet = getattr(torchvision.models.resnet, name)(pretrained=pretrained)
-    return ResnetBackbone(resnet, *output_layers, frozen=frozen)
+    return ResnetBackbone(resnet, *output_layers, **kwargs)
 
 def named_encoder_channels(name):
     if '18' in name or '34' in name:

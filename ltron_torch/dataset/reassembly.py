@@ -17,6 +17,7 @@ from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
     index_hierarchy,
     stack_numpy_hierarchies,
+    concatenate_numpy_hierarchies,
     auto_pad_stack_numpy_hierarchies,
 )
 from ltron.planner.plannerd import Roadmap, RoadmapPlanner
@@ -231,10 +232,18 @@ def generate_offline_dataset(dataset_config):
 # dataset ======================================================================
 
 class SeqDataset(Dataset):
-    def __init__(self, dataset, split, subset, skip_reassembly=False):
+    def __init__(
+        self,
+        dataset,
+        split,
+        subset,
+        skip_reassembly=False,
+        insert_only=False,
+    ):
         dataset_paths = get_dataset_paths(dataset, split, subset=subset)
         self.rollout_paths = dataset_paths['rollouts']
         self.skip_reassembly = skip_reassembly
+        self.insert_only = insert_only
     
     def __len__(self):
         return len(self.rollout_paths)
@@ -247,13 +256,34 @@ class SeqDataset(Dataset):
             i = numpy.where(data['actions']['reassembly'])[0]
             if len(i):
                 data = index_hierarchy(data, slice(0, i[0]+1))
-        #data['observations'] = stack_numpy_hierarchies(*data['observations'])
-        #data['actions'] = stack_numpy_hierarchies(*data['actions'])
+        if self.insert_only:
+            # get all disassembly actions
+            i = numpy.where(data['actions']['reassembly'])[0]
+            disassembly_data = index_hierarchy(data, slice(0, i[0]+1))
+            
+            # get all insert actions
+            # but modify them to have blank workspace observations and
+            # appropriate handspace observations
+            j = numpy.where(data['actions']['insert_brick']['class_id'])
+            insert_data = index_hierarchy(data, j)
+            insert_data['observations']['workspace_color_render'][:] = 102
+            hand_frames = data['observations']['handspace_color_render']
+            insert_data['observations']['handspace_color_render'][0] = 102
+            insert_data['observations']['handspace_color_render'][1:] = (
+                hand_frames[j[0][:-1] + 1])
+            
+            # get the final reassembly action
+            # and modify it as above
+            final_data = index_hierarchy(data, [i[1]])
+            final_data['observations']['workspace_color_render'][:] = 102
+            final_data['observations']['handspace_color_render'][0] = (
+                hand_frames[[j[0][-1] + 1]])
+            data = concatenate_numpy_hierarchies(
+                disassembly_data, insert_data, final_data)
+        
         return data
 
 def seq_data_collate(seqs):
-    #import pdb
-    #pdb.set_trace()
     seqs, pad = auto_pad_stack_numpy_hierarchies(
         *seqs, pad_axis=0, stack_axis=1)
     return seqs, pad
@@ -327,6 +357,7 @@ def build_seq_train_loader(config):
         config.train_split,
         config.train_subset,
         config.skip_reassembly,
+        config.insert_only,
     )
     
     loader = DataLoader(

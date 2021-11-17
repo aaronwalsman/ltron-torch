@@ -226,53 +226,13 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                 hy, hx, hpol = sample_yxp(xhd[:,i], hh, hw)
                 hyx = numpy.array([hy, hx])
                 
-                '''
-                # sample workspace position and polarity
-                workspace_location_logits = xwd[:,i,0,:,:].view(wh*ww)
-                workspace_location_distribution = Categorical(
-                    logits=workspace_location_logits)
-                workspace_location = (
-                    workspace_location_distribution.sample().cpu().numpy())
-                wy = location // ww
-                wx = location % ww
-                
-                workspace_polarity_logits = xwd[:,i,1:,wy,wx].view(2)
-                workspace_polarity_distribution = Categorical(
-                    logits=workspace_polarity_logits)
-                wp = workspace_polarity_distribution.sample().cpu().numpy()
-                
-                # sample handspace position and polarity
-                handspace_location_logits = xhd[:,i,0,:,:].view(hh*hw)
-                handspace_location_distribution = Categorical(
-                    logits=handspace_location_logits)
-                handspace_location = (
-                    handspace_location_distribution.sample().cpu().numpy())
-                hy = location // hw
-                hx = location % hw
-                
-                handspace_polarity_logits = xhd[:,i,1:,hy,hx].view(2)
-                handspace_polarity_distribution = Categorical(
-                    logits=handspace_polarity_logits)
-                hp = handspace_polarity_distribution.sample().cpu().numpy()
-                '''
                 if mode_action[i] == 0:
-                    '''
-                    location_logits = xwd[:,i,0,:,:].view(h*w)
-                    location_distribution = Categorical(logits=location_logits)
-                    location = location_distribution.sample().cpu().numpy()
-                    y = location // w
-                    x = location % w
-                    
-                    polarity_logits = xwd[:,i,1:,y,x].view(2)
-                    polarity_distribution = Categorical(logits=polarity_logits)
-                    p = polarity_distribution.sample().cpu().numpy()
-                    '''
                     action['workspace_cursor']['activate'] = 1
                     action['workspace_cursor']['position'] = wyx
                     action['workspace_cursor']['polarity'] = wpol
                     action['disassembly'] = 1
                 
-                elif mode_action[i] == >=1 and mode_action[i] <=2:
+                elif mode_action[i] >=1 and mode_action[i] <=2:
                     action['workspace_cursor']['activate'] = 1
                     action['workspace_cursor']['position'] = wyx
                     action['workspace_cursor']['polarity'] = wpol
@@ -302,9 +262,6 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                 elif mode_action[i] == 22:
                     action['insert_brick']['class_id'] = class_action[i]
                     action['insert_brick']['color_id'] = color_action[i]
-                
-                #else:
-                #    action['workspace_viewpoint'] = mode_action[i]
                 
                 actions.append(action)
             
@@ -350,17 +307,6 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         # loss -----------------------------------------------------------------
         loss_mask = ~make_padding_mask(torch.LongTensor(pad), (s,b)).cuda()
         
-        '''
-        viewpoint_label = batch['actions']['workspace_viewpoint']
-        end_label = (batch['actions']['reassembly'] == 1) * 8
-        camera_label = torch.LongTensor(viewpoint_label + end_label).cuda()
-        camera_loss = torch.nn.functional.cross_entropy(
-            xg.view(-1,9), camera_label.view(-1), reduction='none').view(s,b)
-        camera_loss = camera_loss * loss_mask
-        camera_loss = torch.sum(camera_loss) / (s*b)
-        log.add_scalar('train/camera_loss', camera_loss, clock[0])
-        '''
-        
         global_label = torch.zeros(s, b, dtype=torch.long)
         for j in range(b):
             for i in range(pad[j]):
@@ -368,24 +314,25 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
                     global_label[i,j] = 0
                     continue
                 elif batch['actions']['pick_and_place'][i,j]:
-                    global_label[i,j] = batch['actions']['pick_and_place'][i,j]
+                    pick_and_place = batch['actions']['pick_and_place'][i,j]
+                    global_label[i,j] = pick_and_place
                     continue
                 elif batch['actions']['rotate'][i,j]:
-                    global_label[i,j] = batch['actions']['rotate'][i,j] + 1
+                    global_label[i,j] = batch['actions']['rotate'][i,j] + 2
                     continue
                 elif batch['actions']['workspace_viewpoint'][i,j]:
                     global_label[i,j] = (
-                        batch['actions']['workspace_viewpoint'][i,j] + 4)
+                        batch['actions']['workspace_viewpoint'][i,j] + 5)
                     continue
                 elif batch['actions']['handspace_viewpoint'][i,j]:
                     global_label[i,j] = (
-                        batch['actions']['handspace_viewpoint'][i,j]+11)
+                        batch['actions']['handspace_viewpoint'][i,j] + 12)
                     continue
                 elif batch['actions']['reassembly'][i,j]:
-                    global_label[i,j] = batch['actions']['reassembly'][i,j]+18
+                    global_label[i,j] = batch['actions']['reassembly'][i,j] + 19
                     continue
                 elif batch['actions']['insert_brick']['class_id'][i,j]:
-                    global_label[i,j] = 21
+                    global_label[i,j] = 22
                     continue
                 else:
                     import pdb
@@ -427,12 +374,11 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
                 position_logits, position_target, reduction='none').view(s,b)
             if space == 'workspace':
                 global_mask = (
-                    (global_label == 0) |
-                    (global_label == 1) | 
-                    (global_label == 2)
+                    (global_label <= 1) |
+                    ((global_label >= 3) & (global_label <= 5))
                 )
             elif space == 'handspace':
-                global_mask = (global_label == 1)
+                global_mask = (global_label == 1) | (global_label == 2)
             position_mask = loss_mask * global_mask.cuda()
             position_loss = position_loss * position_mask
             position_loss = torch.sum(position_loss) / (s*b)
@@ -449,32 +395,6 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
             polarity_loss = torch.sum(polarity_loss) / (s*b)
             
             return position_loss, polarity_loss
-        
-        '''
-        position_logits = xwd[:,:,0].view(s*b, h*w)
-        raw_position = batch['actions']['workspace_cursor']['position']
-        position_target = torch.LongTensor(raw_position).cuda()
-        position_target = position_target[:,:,0] * w + position_target[:,:,1]
-        position_target = position_target.view(-1)
-        position_loss = torch.nn.functional.cross_entropy(
-            position_logits, position_target, reduction='none').view(s,b)
-        position_mask = loss_mask * (camera_label == 0)
-        position_loss = position_loss * position_mask
-        position_loss = torch.sum(position_loss) / (s*b)
-        log.add_scalar('train/position_loss', position_loss, clock[0])
-        
-        polarity_logits = xwd[:,:,1:].view(s*b, 2, h, w)
-        y = raw_position[:,:,0].reshape(-1)
-        x = raw_position[:,:,1].reshape(-1)
-        polarity_logits = polarity_logits[range(s*b), :, y, x]
-        polarity_target = torch.LongTensor(
-            batch['actions']['workspace_cursor']['polarity']).view(-1).cuda()
-        polarity_loss = torch.nn.functional.cross_entropy(
-            polarity_logits, polarity_target, reduction='none').view(s,b)
-        polarity_loss = polarity_loss * position_mask
-        polarity_loss = torch.sum(polarity_loss) / (s*b)
-        log.add_scalar('train/polarity_loss', polarity_loss, clock[0])
-        '''
         
         wyx_loss, wp_loss = position_polarity_loss(xwd, 'workspace')
         log.add_scalar('train/workspace_position_loss', wyx_loss, clock[0])

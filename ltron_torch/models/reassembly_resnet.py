@@ -1,57 +1,40 @@
-import random
-
-import numpy
-
 import torch
-from torch.distributions import Categorical
+from torch.nn import Module
 
-from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.dataset.paths import get_dataset_info
-from ltron.hierarchy import index_hierarchy
-from ltron.bricks.brick_type import BrickType
-from ltron.gym.envs.reassembly_env import reassembly_template_action
 
-from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
-from ltron_torch.gym_tensor import (
-    gym_space_to_tensors, default_tile_transform, default_image_transform)
-from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
-from ltron_torch.models.compressed_transformer import (
-    CompressedTransformer, CompressedTransformerConfig)
 from ltron_torch.models.sequence_fcn import (
     named_resnet_independent_sequence_fcn)
 from ltron_torch.models.heads import (
     LinearMultiheadDecoder, Conv2dMultiheadDecoder)
 
 
-# build functions ==============================================================
+# class ========================================================================
+class ReassemblyResnet(Module):
+    def __init__(self, config):
+        super(ReassemblyResnet, self).__init__()
+        modes = 23
+        dataset_info = get_dataset_info(config.dataset)
+        num_classes = max(dataset_info['class_ids'].values())+1
+        num_colors = max(dataset_info['color_ids'].values())+1
+        
+        self.fcn = named_resnet_independent_sequence_fcn(
+            'resnet50',
+            256,
+            global_heads = LinearMultiheadDecoder(
+                2048, {'mode':modes, 'class':num_classes, 'color':num_colors}),
+            dense_heads = Conv2dMultiheadDecoder(256, 2, kernel_size=1)
+        )
+    
+    def forward(self, x_work, x_hand, x_r):
+        global_x, workspace_x = self.fcn(x_work)
+        global_x['workspace'] = workspace_x
+        return global_x
 
+# build functions ==============================================================
 def build_model(config):
     print('-'*80)
     print('Building resnet disassembly model')
-    global_heads = 9
-    dense_heads = 3
-    model = named_resnet_independent_sequence_fcn(
-        'resnet50',
-        256,
-        global_heads = LinearMultiheadDecoder(2048, global_heads),
-        dense_heads = Conv2dMultiheadDecoder(256, dense_heads, kernel_size=1)
-    )
-    
-    return model.cuda()
-
+    return ReassemblyResnet(config).cuda()
 
 # input and output utilities ===================================================
-
-def observations_to_tensors(train_config, observation, pad):
-    
-    output = []
-    for component in 'workspace_color_render', 'handspace_color_render':
-        frames = observation[component]
-        s, b, h, w, c = frames.shape
-        frames = frames.reshape(s*b, h, w, c)
-        frames = [default_image_transform(frame) for frame in frames]
-        frames = torch.stack(frames)
-        frames = frames.view(s, b, c, h, w)
-        output.append(frames)
-    
-    return tuple(output)
