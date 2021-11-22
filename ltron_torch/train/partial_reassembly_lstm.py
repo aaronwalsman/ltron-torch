@@ -10,6 +10,7 @@ import tqdm
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical
+from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 
 from PIL import Image
 
@@ -37,7 +38,10 @@ from ltron_torch.dataset.reassembly import (
 from ltron_torch.models.reassembly_resnet import (
     build_model as build_resnet_model,
 )
-from ltron_torch.models.reassembly_lstm import build_model as build_lstm_model
+from ltron_torch.models.reassembly_lstm import (
+    build_model as build_lstm_model,
+    observations_to_tensors,
+)
 from ltron_torch.envs.reassembly_lstm_interface import ReassemblyLSTMInterface
 from ltron_torch.train.behavior_cloning import behavior_cloning
 
@@ -80,6 +84,8 @@ class BehaviorCloningReassemblyConfig(Config):
     test_split='simple_single'
     test_subset=None
     
+    resnet_name='resnet50'
+    
     test_frequency=1
     checkpoint_frequency=10
     visualization_frequency=1
@@ -94,15 +100,15 @@ class BehaviorCloningReassemblyConfig(Config):
             self.test_rollout_steps_per_epoch // self.num_envs
         )
 
-
 # train functions ==============================================================
 
-def train_disassembly_behavior_cloning(train_config):
+def train_partial_reassembly_behavior_cloning(train_config):
     print('='*80)
-    print('Disassembly Behavior Cloning Setup')
+    print('Partial Reassembly Setup')
     # make everything
-    train_config.skip_reassembly=True
-    model = build_resnet_model(train_config)
+    train_config.insert_only = True
+    #train_config.skip_reassembly = True
+    model = build_lstm_model(train_config)
     optimizer = adamw_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
@@ -112,7 +118,23 @@ def train_disassembly_behavior_cloning(train_config):
     behavior_cloning(
         train_config, model, optimizer, train_loader, test_env, interface)
 
-def train_disassembly_behavior_cloning_old(train_config):
+
+def train_full_reassembly_behavior_cloning(train_config):
+    print('='*80)
+    print('Full Reassembly Setup')
+    # make everything
+    model = build_lstm_model(train_config)
+    optimizer = adamw_optimizer(model, train_config)
+    train_loader = build_seq_train_loader(train_config)
+    test_env = build_test_env(train_config)
+    interface = ReassemblyLSTMInterface(train_config)
+    
+    # run behavior cloning
+    behavior_cloning(
+        train_config, model, optimizer, train_loader, test_env, interface)
+    
+
+def train_partial_reassembly_behavior_cloning_old(train_config):
     
     print('='*80)
     print('Setup')
@@ -122,10 +144,8 @@ def train_disassembly_behavior_cloning_old(train_config):
     clock = [0]
     train_start = time.time()
     
-    train_config.skip_reassembly=True
-    
-    model = build_resnet_model(train_config)
-    #model = build_lstm_model(train_config)
+    #model = build_resnet_model(train_config)
+    model = build_lstm_model(train_config)
     optimizer = adamw_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
@@ -185,6 +205,8 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
     reward = numpy.zeros(train_config.num_envs)
     
     with torch.no_grad():
+        hp = torch.zeros(1, b, 512).cuda()
+        cp = torch.zeros(1, b, 512).cuda()
         for step in tqdm.tqdm(range(steps)):
             # prep -------------------------------------------------------------
             # start new sequences if necessary
@@ -203,50 +225,95 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
             b = env.num_envs
             pad = numpy.ones(b, dtype=numpy.long)
             observations = stack_numpy_hierarchies(observation)
-            x = observations_to_tensors(train_config, observations, pad)
-            x = x.cuda()
+            xw, xh, r = observations_to_tensors(train_config, observations, pad)
+            xw, xh, r = xw.cuda(), xh.cuda(), r.cuda()
             
             # compute actions --------------------------------------------------
-            xg, xd = model(x)
-            s, b, c, h, w = xd.shape
+            (xg, xb, xc), xwd, xhd, (hp, cp) = model(xw, xh, r, (hp, cp))
+            s, b, c, wh, ww = xwd.shape
+            hh, hw = xhd.shape[-2:]
             
             # build actions
-            global_distribution = Categorical(logits=xg.view(-1, 9))
+            global_distribution = Categorical(logits=xg.view(s*b, 23))
             mode_action = global_distribution.sample().cpu().numpy()
+            class_distribution = Categorical(logits=xb.view(s*b, -1))
+            class_action = class_distribution.sample().cpu().numpy()
+            color_distribution = Categorical(logits=xc.view(s*b, -1))
+            color_action = color_distribution.sample().cpu().numpy()
             actions = []
             for i in range(b):
                 action = reassembly_template_action()
-                if mode_action[i] == 0:
-                    location_logits = xd[:,i,0,:,:].view(h*w)
+                
+                def sample_yxp(logits, h, w):
+                    import pdb
+                    pdb.set_trace()
+                    location_logits = logits[:,0].view(h*w)
                     location_distribution = Categorical(logits=location_logits)
                     location = location_distribution.sample().cpu().numpy()
                     y = location // w
                     x = location % w
                     
-                    polarity_logits = xd[:,i,1:,y,x].view(2)
+                    polarity_logits = logits[:,1:,y,x].view(2)
                     polarity_distribution = Categorical(logits=polarity_logits)
                     p = polarity_distribution.sample().cpu().numpy()
+                    return y, x, p
                     
+                wy, wx, wpol = sample_yxp(xwd[:,i], wh, ww)
+                wyx = numpy.array([wy, wx])
+                hy, hx, hpol = sample_yxp(xhd[:,i], hh, hw)
+                hyx = numpy.array([hy, hx])
+                
+                if mode_action[i] == 0:
                     action['workspace_cursor']['activate'] = 1
-                    action['workspace_cursor']['position'] = numpy.array([y,x])
-                    action['workspace_cursor']['polarity'] = p
+                    action['workspace_cursor']['position'] = wyx
+                    action['workspace_cursor']['polarity'] = wpol
                     action['disassembly'] = 1
+                
+                elif mode_action[i] >=1 and mode_action[i] <=2:
+                    action['workspace_cursor']['activate'] = 1
+                    action['workspace_cursor']['position'] = wyx
+                    action['workspace_cursor']['polarity'] = wpol
+                    action['handspace_cursor']['activate'] = 1
+                    action['handspace_cursor']['position'] = hyx
+                    action['handspace_cursor']['polarity'] = hpol
+                    action['pick_and_place'] = mode_action[i]
+                
+                elif mode_action[i] >= 3 and mode_action[i] <= 5:
+                    action['workspace_cursor']['activate'] = 1
+                    action['workspace_cursor']['position'] = wyx
+                    action['workspace_cursor']['polarity'] = wpol
+                    action['rotate'] = mode_action[i] -2
                     
-                elif mode_action[i] == 8:
+                elif mode_action[i] >= 6 and mode_action[i] <= 12:
+                    action['workspace_viewpoint'] = mode_action[i] - 5
+                
+                elif mode_action[i] >= 13 and mode_action[i] <= 19:
+                    action['handspace_viewpoint'] = mode_action[i] - 12
+                
+                elif mode_action[i] == 20:
                     action['reassembly'] = 1
                 
-                else:
-                    action['workspace_viewpoint'] = mode_action[i]
+                elif mode_action[i] == 21:
+                    action['reassembly'] = 2
+                
+                elif mode_action[i] == 22:
+                    action['insert_brick']['class_id'] = class_action[i]
+                    action['insert_brick']['color_id'] = color_action[i]
                 
                 actions.append(action)
             
             location_p = torch.softmax(
-                xd[:,:,0].view(b, h*w), dim=-1).view(b, h, w)
+                xwd[:,:,0].view(b, wh*ww), dim=-1).view(b, wh, ww)
             polarity_p = torch.softmax(
-                xd[:,:,1:].view(b, 2, h*w), dim=-2).view(b, 2, h, w)
+                xwd[:,:,1:].view(b, 2, wh*ww), dim=-2).view(b, 2, wh, ww)
             
             # step -------------------------------------------------------------
             observation, reward, terminal, info = env.step(actions)
+            
+            for i, t in enumerate(terminal):
+                if t:
+                    hp[:,i] = 0
+                    cp[:,i] = 0
             
             # storage ----------------------------------------------------------
             action_reward_storage.append_batch(
@@ -267,52 +334,143 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         # convert observations to model tensors --------------------------------
         observations = batch['observations']
-        xw, xh = observations_to_tensors(train_config, observations, pad)
-        #xw, xh = xw.cuda(), xh.cuda()
-        xw = xw.cuda()
+        xw, xh, r = observations_to_tensors(train_config, observations, pad)
+        xw, xh, r = xw.cuda(), xh.cuda(), r.cuda()
         
         # forward --------------------------------------------------------------
-        #xg, xd = model(xw, xh)
-        xg, xd = model(xw)
-        s, b, c, h, w = xd.shape
+        (xg, xb, xc), xwd, xhd, hcn = model(xw, xh, r)
+        s, b, c, h, w = xwd.shape
         
         # loss -----------------------------------------------------------------
         loss_mask = ~make_padding_mask(torch.LongTensor(pad), (s,b)).cuda()
         
-        viewpoint_label = batch['actions']['workspace_viewpoint']
-        end_label = (batch['actions']['reassembly'] == 1) * 8
-        camera_label = torch.LongTensor(viewpoint_label + end_label).cuda()
-        camera_loss = torch.nn.functional.cross_entropy(
-            xg.view(-1,9), camera_label.view(-1), reduction='none').view(s,b)
-        camera_loss = camera_loss * loss_mask
-        camera_loss = torch.sum(camera_loss) / (s*b)
-        log.add_scalar('train/camera_loss', camera_loss, clock[0])
+        global_label = torch.zeros(s, b, dtype=torch.long)
+        for j in range(b):
+            for i in range(pad[j]):
+                if batch['actions']['disassembly'][i,j]:
+                    global_label[i,j] = 0
+                    continue
+                elif batch['actions']['pick_and_place'][i,j]:
+                    pick_and_place = batch['actions']['pick_and_place'][i,j]
+                    global_label[i,j] = pick_and_place
+                    continue
+                elif batch['actions']['rotate'][i,j]:
+                    global_label[i,j] = batch['actions']['rotate'][i,j] + 2
+                    continue
+                elif batch['actions']['workspace_viewpoint'][i,j]:
+                    global_label[i,j] = (
+                        batch['actions']['workspace_viewpoint'][i,j] + 5)
+                    continue
+                elif batch['actions']['handspace_viewpoint'][i,j]:
+                    global_label[i,j] = (
+                        batch['actions']['handspace_viewpoint'][i,j] + 12)
+                    continue
+                elif batch['actions']['reassembly'][i,j]:
+                    global_label[i,j] = batch['actions']['reassembly'][i,j] + 19
+                    continue
+                elif batch['actions']['insert_brick']['class_id'][i,j]:
+                    global_label[i,j] = 22
+                    continue
+                else:
+                    import pdb
+                    pdb.set_trace()
         
-        position_logits = xd[:,:,0].view(s*b, h*w)
-        raw_position = batch['actions']['workspace_cursor']['position']
-        position_target = torch.LongTensor(raw_position).cuda()
-        position_target = position_target[:,:,0] * w + position_target[:,:,1]
-        position_target = position_target.view(-1)
-        position_loss = torch.nn.functional.cross_entropy(
-            position_logits, position_target, reduction='none').view(s,b)
-        position_mask = loss_mask * (camera_label == 0)
-        position_loss = position_loss * position_mask
-        position_loss = torch.sum(position_loss) / (s*b)
-        log.add_scalar('train/position_loss', position_loss, clock[0])
+        global_loss = cross_entropy(
+            xg.view(-1,23),
+            global_label.view(-1).cuda(),
+            reduction='none',
+        ).view(s,b)
+        global_loss = global_loss * loss_mask
+        global_loss = torch.sum(global_loss) / (s*b)
+        log.add_scalar('train/global_loss', global_loss, clock[0])
         
-        polarity_logits = xd[:,:,1:].view(s*b, 2, h, w)
-        y = raw_position[:,:,0].reshape(-1)
-        x = raw_position[:,:,1].reshape(-1)
-        polarity_logits = polarity_logits[range(s*b), :, y, x]
-        polarity_target = torch.LongTensor(
-            batch['actions']['workspace_cursor']['polarity']).view(-1).cuda()
-        polarity_loss = torch.nn.functional.cross_entropy(
-            polarity_logits, polarity_target, reduction='none').view(s,b)
-        polarity_loss = polarity_loss * position_mask
-        polarity_loss = torch.sum(polarity_loss) / (s*b)
-        log.add_scalar('train/polarity_loss', polarity_loss, clock[0])
+        class_label = torch.LongTensor(
+            batch['actions']['insert_brick']['class_id']).cuda()
+        class_loss = cross_entropy(
+            xb.view(s*b, -1), class_label.view(-1), reduction='none')
+        class_loss = class_loss * (class_label.view(-1) != 0)
+        class_loss = torch.sum(class_loss) / (s*b)
+        log.add_scalar('train/class_loss', class_loss, clock[0])
         
-        loss = camera_loss + position_loss + polarity_loss
+        color_label = torch.LongTensor(
+            batch['actions']['insert_brick']['color_id']).cuda()
+        color_loss = cross_entropy(
+            xc.view(s*b, -1), color_label.view(-1), reduction='none')
+        color_loss = color_loss * (class_label.view(-1) != 0)
+        color_loss = torch.sum(color_loss) / (s*b)
+        log.add_scalar('train/color_loss', color_loss, clock[0])
+        
+        def position_polarity_loss(logits, space):
+            h, w = logits.shape[-2:]
+            
+            position = torch.LongTensor(
+                batch['actions']['%s_cursor'%space]['position']).view(s*b, 2)
+            if False:
+                position_logits = logits[:,:,0].view(s*b, h, w)
+                position_target = torch.zeros_like(position_logits)
+                position_target[range(s*b), position[:,0], position[:,1]] = 1
+                weight = (w * h) // 1
+                position_loss = binary_cross_entropy_with_logits(
+                    position_logits,
+                    position_target,
+                    pos_weight=torch.FloatTensor([weight]).cuda(),
+                    reduction='none',
+                )
+                position_loss = position_loss.view(s, b, h*w)
+                position_loss = torch.mean(position_loss, axis=-1)
+             
+            else:
+                position_logits = logits[:,:,0].view(s*b, h*w)
+                #raw_position = batch['actions']['%s_cursor'%space]['position']
+                position_target = (position[:,0]*w + position[:,1]).cuda()
+                position_target = position_target.view(-1)
+                position_loss = cross_entropy(
+                    position_logits, position_target, reduction='none')
+                position_loss = position_loss.view(s,b)
+            
+            if space == 'workspace':
+                global_mask = (
+                    (global_label <= 1) |
+                    ((global_label >= 3) & (global_label <= 5))
+                )
+            elif space == 'handspace':
+                global_mask = (global_label == 1) | (global_label == 2)
+            position_mask = loss_mask * global_mask.cuda()
+            position_loss = position_loss * position_mask
+            position_loss = torch.sum(position_loss) / (s*b)
+            
+            polarity_logits = logits[:,:,1:].view(s*b, 2, h, w)
+            y = position[:,0].reshape(-1)
+            x = position[:,1].reshape(-1)
+            polarity_logits = polarity_logits[range(s*b), :, y, x]
+            polarity_target = torch.LongTensor(
+                batch['actions']['%s_cursor'%space]['polarity']).view(-1).cuda()
+            polarity_loss = cross_entropy(
+                polarity_logits, polarity_target, reduction='none').view(s,b)
+            polarity_loss = polarity_loss * position_mask
+            polarity_loss = torch.sum(polarity_loss) / (s*b)
+            
+            # LOG
+            p = torch.softmax(position_logits.view(s*b, -1), axis=-1)
+            p = p.view(s*b, h, w)
+            correct_p = p[range(s*b), position[:,0], position[:,1]].view(s,b)
+            correct_p = correct_p * position_mask
+            pp = torch.sum(correct_p) / torch.sum(position_mask)
+            log.add_scalar('train/%s_position_correct'%space, pp, clock[0])
+            
+            return position_loss, polarity_loss
+        
+        wyx_loss, wp_loss = position_polarity_loss(xwd, 'workspace')
+        log.add_scalar('train/workspace_position_loss', wyx_loss, clock[0])
+        log.add_scalar('train/workspace_polarity_loss', wp_loss, clock[0])
+        hyx_loss, hp_loss = position_polarity_loss(xhd, 'handspace')
+        log.add_scalar('train/handspace_position_loss', hyx_loss, clock[0])
+        log.add_scalar('train/handspace_polarity_loss', hp_loss, clock[0])
+        
+        loss = (
+            global_loss + class_loss + color_loss +
+            wyx_loss + wp_loss + hyx_loss + hp_loss
+        )
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
