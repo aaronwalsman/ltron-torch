@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import random
 import time
 import os
 
@@ -28,8 +27,7 @@ from ltron.visualization.drawing import write_text
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
-from ltron_torch.train.reassembly_labels import make_reassembly_labels
-from ltron_torch.train.optimizer import adamw_optimizer
+from ltron_torch.train.optimizer import build_optimizer
 from ltron_torch.dataset.reassembly import (
     build_train_env,
     build_test_env,
@@ -104,12 +102,10 @@ class BehaviorCloningReassemblyConfig(Config):
 
 def train_partial_reassembly_behavior_cloning(train_config):
     print('='*80)
-    print('Partial Reassembly Setup')
-    # make everything
+    print('Break and Count Setup')
     train_config.insert_only = True
-    #train_config.skip_reassembly = True
     model = build_lstm_model(train_config)
-    optimizer = adamw_optimizer(model, train_config)
+    optimizer = build_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
     interface = ReassemblyLSTMInterface(train_config)
@@ -124,7 +120,7 @@ def train_full_reassembly_behavior_cloning(train_config):
     print('Full Reassembly Setup')
     # make everything
     model = build_lstm_model(train_config)
-    optimizer = adamw_optimizer(model, train_config)
+    optimizer = build_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
     interface = ReassemblyLSTMInterface(train_config)

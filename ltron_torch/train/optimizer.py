@@ -5,17 +5,18 @@ from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.config import Config
 
 class OptimizerConfig(Config):
+    mode = 'adamw'
     learning_rate = 3e-4
     weight_decay = 0.1
     betas = (0.9, 0.95)
 
-def adamw_optimizer(model, config):
-    # mostly from minGPT
+def build_optimizer(model, config):
+    
     decay_names = set()
     no_decay_names = set()
     decay_params = []
     no_decay_params = []
-    decay_modules = (Linear,)
+    decay_modules = (Linear, Conv2d)
     no_decay_modules = (LayerNorm, Embedding)
     for module_name, module in model.named_modules():
         is_decay_module = isinstance(module, decay_modules)
@@ -38,6 +39,8 @@ def adamw_optimizer(model, config):
             elif param_name.endswith('weight') and is_no_decay_module:
                 no_decay_names.add(full_param_name)
                 no_decay_params.append(param)
+            else:
+                raise Exception('Something bad happened')
 
     param_intersection = decay_names & no_decay_names
     param_union = decay_names | no_decay_names
@@ -52,9 +55,18 @@ def adamw_optimizer(model, config):
          'weight_decay':0.,
         },
     ]
-    optimizer = AdamW(
-        optimizer_groups,
-        lr=config.learning_rate,
-        betas=config.betas,
-    )
+    
+    if config.optimizer == 'adam':
+        optimizer = Adam(
+            optimizer_groups,
+            lr=config.learning_rate,
+            betas=config.betas,
+        )
+    elif config.optimizer == 'adamw':
+        optimizer = AdamW(
+            optimizer_groups,
+            lr=config.learning_rate,
+            betas=config.betas,
+        )
+    
     return optimizer

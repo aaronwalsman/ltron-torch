@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from ltron_torch.train.reassembly_lstm import (
+from ltron_torch.train.break_and_make_bc_lstm import (
     BehaviorCloningReassemblyConfig, train_reassembly_behavior_cloning)
 
 if __name__ == '__main__':
