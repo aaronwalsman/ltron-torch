@@ -9,14 +9,12 @@ import tqdm
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions import Categorical
-from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 
 from PIL import Image
 
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.envs.reassembly_env import reassembly_template_action
 from ltron.gym.rollout_storage import RolloutStorage
-from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.hierarchy import (
     stack_numpy_hierarchies,
     len_hierarchy,
@@ -24,9 +22,8 @@ from ltron.hierarchy import (
 )
 from ltron.visualization.drawing import write_text
 
-from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
+from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.config import Config
-from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.optimizer import build_optimizer
 from ltron_torch.dataset.reassembly import (
     build_train_env,
@@ -40,8 +37,6 @@ from ltron_torch.models.reassembly_lstm import (
     build_model as build_lstm_model,
     observations_to_tensors,
 )
-from ltron_torch.envs.reassembly_lstm_interface import ReassemblyLSTMInterface
-from ltron_torch.train.behavior_cloning import behavior_cloning
 
 # config definitions ===========================================================
 
@@ -54,7 +49,6 @@ class BehaviorCloningReassemblyConfig(Config):
     max_episode_length=64
     
     skip_reassembly=False
-    insert_only=False
     
     learning_rate=3e-4
     weight_decay=0.1
@@ -82,8 +76,6 @@ class BehaviorCloningReassemblyConfig(Config):
     test_split='simple_single'
     test_subset=None
     
-    resnet_name='resnet50'
-    
     test_frequency=1
     checkpoint_frequency=10
     visualization_frequency=1
@@ -98,39 +90,10 @@ class BehaviorCloningReassemblyConfig(Config):
             self.test_rollout_steps_per_epoch // self.num_envs
         )
 
+
 # train functions ==============================================================
 
-def train_partial_reassembly_behavior_cloning(train_config):
-    print('='*80)
-    print('Break and Count Setup')
-    train_config.insert_only = True
-    model = build_lstm_model(train_config)
-    optimizer = build_optimizer(model, train_config)
-    train_loader = build_seq_train_loader(train_config)
-    test_env = build_test_env(train_config)
-    interface = ReassemblyLSTMInterface(train_config)
-    
-    # run behavior cloning
-    behavior_cloning(
-        train_config, model, optimizer, train_loader, test_env, interface)
-
-
-def train_full_reassembly_behavior_cloning(train_config):
-    print('='*80)
-    print('Full Reassembly Setup')
-    # make everything
-    model = build_lstm_model(train_config)
-    optimizer = build_optimizer(model, train_config)
-    train_loader = build_seq_train_loader(train_config)
-    test_env = build_test_env(train_config)
-    interface = ReassemblyLSTMInterface(train_config)
-    
-    # run behavior cloning
-    behavior_cloning(
-        train_config, model, optimizer, train_loader, test_env, interface)
-    
-
-def train_partial_reassembly_behavior_cloning_old(train_config):
+def train_break_and_make_bc_lstm(train_config):
     
     print('='*80)
     print('Setup')
@@ -140,9 +103,8 @@ def train_partial_reassembly_behavior_cloning_old(train_config):
     clock = [0]
     train_start = time.time()
     
-    #model = build_resnet_model(train_config)
     model = build_lstm_model(train_config)
-    optimizer = adamw_optimizer(model, train_config)
+    optimizer = build_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
     
@@ -241,8 +203,6 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                 action = reassembly_template_action()
                 
                 def sample_yxp(logits, h, w):
-                    import pdb
-                    pdb.set_trace()
                     location_logits = logits[:,0].view(h*w)
                     location_distribution = Categorical(logits=location_logits)
                     location = location_distribution.sample().cpu().numpy()
@@ -371,7 +331,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
                     import pdb
                     pdb.set_trace()
         
-        global_loss = cross_entropy(
+        global_loss = torch.nn.functional.cross_entropy(
             xg.view(-1,23),
             global_label.view(-1).cuda(),
             reduction='none',
@@ -382,7 +342,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         class_label = torch.LongTensor(
             batch['actions']['insert_brick']['class_id']).cuda()
-        class_loss = cross_entropy(
+        class_loss = torch.nn.functional.cross_entropy(
             xb.view(s*b, -1), class_label.view(-1), reduction='none')
         class_loss = class_loss * (class_label.view(-1) != 0)
         class_loss = torch.sum(class_loss) / (s*b)
@@ -390,7 +350,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         color_label = torch.LongTensor(
             batch['actions']['insert_brick']['color_id']).cuda()
-        color_loss = cross_entropy(
+        color_loss = torch.nn.functional.cross_entropy(
             xc.view(s*b, -1), color_label.view(-1), reduction='none')
         color_loss = color_loss * (class_label.view(-1) != 0)
         color_loss = torch.sum(color_loss) / (s*b)
@@ -398,32 +358,13 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         def position_polarity_loss(logits, space):
             h, w = logits.shape[-2:]
-            
-            position = torch.LongTensor(
-                batch['actions']['%s_cursor'%space]['position']).view(s*b, 2)
-            if False:
-                position_logits = logits[:,:,0].view(s*b, h, w)
-                position_target = torch.zeros_like(position_logits)
-                position_target[range(s*b), position[:,0], position[:,1]] = 1
-                weight = (w * h) // 1
-                position_loss = binary_cross_entropy_with_logits(
-                    position_logits,
-                    position_target,
-                    pos_weight=torch.FloatTensor([weight]).cuda(),
-                    reduction='none',
-                )
-                position_loss = position_loss.view(s, b, h*w)
-                position_loss = torch.mean(position_loss, axis=-1)
-             
-            else:
-                position_logits = logits[:,:,0].view(s*b, h*w)
-                #raw_position = batch['actions']['%s_cursor'%space]['position']
-                position_target = (position[:,0]*w + position[:,1]).cuda()
-                position_target = position_target.view(-1)
-                position_loss = cross_entropy(
-                    position_logits, position_target, reduction='none')
-                position_loss = position_loss.view(s,b)
-            
+            position_logits = logits[:,:,0].view(s*b, h*w)
+            raw_position = batch['actions']['%s_cursor'%space]['position']
+            position_target = torch.LongTensor(raw_position).cuda()
+            position_target = position_target[:,:,0]*w + position_target[:,:,1]
+            position_target = position_target.view(-1)
+            position_loss = torch.nn.functional.cross_entropy(
+                position_logits, position_target, reduction='none').view(s,b)
             if space == 'workspace':
                 global_mask = (
                     (global_label <= 1) |
@@ -436,23 +377,15 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
             position_loss = torch.sum(position_loss) / (s*b)
             
             polarity_logits = logits[:,:,1:].view(s*b, 2, h, w)
-            y = position[:,0].reshape(-1)
-            x = position[:,1].reshape(-1)
+            y = raw_position[:,:,0].reshape(-1)
+            x = raw_position[:,:,1].reshape(-1)
             polarity_logits = polarity_logits[range(s*b), :, y, x]
             polarity_target = torch.LongTensor(
                 batch['actions']['%s_cursor'%space]['polarity']).view(-1).cuda()
-            polarity_loss = cross_entropy(
+            polarity_loss = torch.nn.functional.cross_entropy(
                 polarity_logits, polarity_target, reduction='none').view(s,b)
             polarity_loss = polarity_loss * position_mask
             polarity_loss = torch.sum(polarity_loss) / (s*b)
-            
-            # LOG
-            p = torch.softmax(position_logits.view(s*b, -1), axis=-1)
-            p = p.view(s*b, h, w)
-            correct_p = p[range(s*b), position[:,0], position[:,1]].view(s,b)
-            correct_p = correct_p * position_mask
-            pp = torch.sum(correct_p) / torch.sum(position_mask)
-            log.add_scalar('train/%s_position_correct'%space, pp, clock[0])
             
             return position_loss, polarity_loss
         
