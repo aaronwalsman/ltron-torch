@@ -12,8 +12,9 @@ class SimpleBlock(torch.nn.Module):
     
     def forward(self, x, skip=None):
         x = torch.nn.functional.interpolate(x, scale_factor=2, mode='nearest')
-        skip = self.skip_conv(skip)
-        x = x + skip
+        if skip is not None:
+            skip = self.skip_conv(skip)
+            x = x + skip
         return x
 
 class SimpleDecoder(torch.nn.Module):
