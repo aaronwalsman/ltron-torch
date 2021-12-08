@@ -21,6 +21,7 @@ from ltron_torch.models.simple_fcn import SimpleDecoder
 def build_model(config):
     print('-'*80)
     print('Building lstm reassembly model')
+    # THIS SHOULD ALL BE WRAPPED INTO THE CLASS BELOW
     # (14 camera + 2 reset + 1 dis + 2 pnp + 3 rotate + 1 insert)
     mode_actions = 23
     dataset_info = get_dataset_info(config.dataset)
@@ -30,7 +31,7 @@ def build_model(config):
         512, {'mode':mode_actions, 'class':num_classes, 'color':num_colors})
     dense_workspace_heads = Conv2dMultiheadDecoder(256, 2, kernel_size=1)
     dense_handspace_heads = Conv2dMultiheadDecoder(256, 2, kernel_size=1)
-    model = LSTMModel(
+    model = BreakAndMakeLSTM(
         global_heads=global_heads,
         dense_workspace_heads=dense_workspace_heads,
         dense_handspace_heads=dense_handspace_heads,
@@ -42,6 +43,7 @@ def build_model(config):
 
 # input and output utilities ===================================================
 
+'''
 def observations_to_tensors(train_config, observation, pad):
 
     output = []
@@ -58,8 +60,9 @@ def observations_to_tensors(train_config, observation, pad):
     output.append(reassembling)
     
     return tuple(output)
+'''
 
-class LSTMModel(Module):
+class BreakAndMakeLSTM(Module):
     def __init__(self,
         global_heads,
         dense_workspace_heads,
@@ -79,7 +82,7 @@ class LSTMModel(Module):
     ):
         
         # intiialization and storage
-        super(LSTMModel, self).__init__()
+        super(BreakAndMakeLSTM, self).__init__()
         self.lstm_hidden_channels = lstm_hidden_channels
         self.global_heads = global_heads
         self.dense_workspace_heads = dense_workspace_heads

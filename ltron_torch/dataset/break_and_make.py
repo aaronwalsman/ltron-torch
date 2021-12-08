@@ -11,8 +11,7 @@ import ltron.settings as settings
 from ltron.exceptions import LtronException
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
-from ltron.gym.envs.reassembly_env import (
-    reassembly_env, reassembly_template_action)
+from ltron.gym.envs.break_and_make_env import break_and_make_env
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
     index_hierarchy,
@@ -20,7 +19,7 @@ from ltron.hierarchy import (
     concatenate_numpy_hierarchies,
     auto_pad_stack_numpy_hierarchies,
 )
-from ltron.planner.plannerd import Roadmap, RoadmapPlanner
+from ltron.plan.plannerd import Roadmap, RoadmapPlanner
 from ltron.bricks.brick_scene import BrickScene
 
 from ltron_torch.config import Config
@@ -28,7 +27,7 @@ from ltron_torch.config import Config
 
 # config =======================================================================
 
-class ReassemblyDatasetConfig(Config):
+class BreakAndMakeDatasetConfig(Config):
     num_seqs=16
     num_envs=1
     dataset='random_six'
@@ -53,8 +52,6 @@ class ReassemblyDatasetConfig(Config):
     randomize_colors=True,
     
     max_episode_length=32
-    
-    disassembly_score=0.
     
     error_handling='record'
 
@@ -99,14 +96,21 @@ def generate_offline_dataset(dataset_config):
     complete_seqs = 0
     problems = {}
     for i in iterate:
-        env = reassembly_env(
+        env = break_and_make_env(
             dataset=dataset_config.dataset,
             split=dataset_config.train_split,
             subset=dataset_config.train_subset,
             rank=i,
             size=num_paths,
+            workspace_image_width=dataset_config.workspace_image_width,
+            workspace_image_height=dataset_config.workspace_image_height,
+            handspace_image_width=dataset_config.handspace_image_width,
+            handspace_image_height=dataset_config.handspace_image_height,
+            workspace_map_width=dataset_config.workspace_map_width,
+            workspace_map_height=dataset_config.workspace_map_height,
+            handspace_map_width=dataset_config.handspace_map_width,
+            handspace_map_height=dataset_config.handspace_map_height,
             max_episode_length=512,
-            disassembly_score=dataset_config.disassembly_score,
             check_collisions=True,
             print_traceback=True,
             dataset_reset_mode='single_pass',
@@ -119,37 +123,37 @@ def generate_offline_dataset(dataset_config):
         observation_seq = []
         action_seq = []
         
-        # get the full config and state ----------------------------------------
+        # get the full assembly and state --------------------------------------
         start_observation = env.reset()
-        full_config = start_observation['workspace_config']['config']
+        full_assembly = start_observation['workspace_assembly']
         full_state = env.get_state()
         
-        # build the disassembly goal (empty) config ----------------------------
-        max_instances = full_config['class'].shape[0]
-        max_edges = full_config['edges'].shape[1]
-        empty_config = {
+        # build the break goal (empty) assembly --------------------------------
+        max_instances = full_assembly['class'].shape[0]
+        max_edges = full_assembly['edges'].shape[1]
+        empty_assembly = {
             'class' : numpy.zeros(max_instances, dtype=numpy.long),
             'color' : numpy.zeros(max_instances, dtype=numpy.long),
             'pose' : numpy.zeros((max_instances, 4, 4)),
             'edges' : numpy.zeros((4, max_edges), dtype=numpy.long),
         }
         
-        # disassemble ----------------------------------------------------------
-        disassembly_roadmap = Roadmap(env, empty_config, class_ids, color_ids)
-        disassembly_planner = RoadmapPlanner(disassembly_roadmap, full_state)
+        # break ----------------------------------------------------------------
+        break_roadmap = Roadmap(env, empty_assembly, class_ids, color_ids)
+        break_planner = RoadmapPlanner(break_roadmap, full_state)
         
         def dump_scene(basename):
             scene = BrickScene()
             class_ids = env.components['workspace_scene'].class_ids
             color_ids = env.components['workspace_scene'].color_ids
-            scene.set_configuration(full_config, class_ids, color_ids)
+            scene.set_assembly(full_assembly, class_ids, color_ids)
             if not isinstance(basename, str):
                 basename = basename.__class__.__name__
             scene.export_ldraw('./%s_%06i.mpd'%(basename, i))
         
         try:
-            found_disassembly = disassembly_planner.plan(timeout=2)
-            disassembly_path = disassembly_planner.greedy_path()
+            found_break = break_planner.plan(timeout=2)
+            break_path = break_planner.greedy_path()
         except Exception as e:
             if dataset_config.error_handling == 'record':
                 dump_scene(e)
@@ -162,29 +166,28 @@ def generate_offline_dataset(dataset_config):
             elif dataset_config.error_handling == 'continue':
                 continue
         
-        # get the disassembly observations and actions -------------------------
-        (disassembly_observations,
-         disassembly_actions) = disassembly_roadmap.get_observation_action_seq(
-            disassembly_path)
-        observation_seq.extend(disassembly_observations)
-        action_seq.extend(disassembly_actions)
+        # get the break observations and actions -------------------------------
+        (break_observations,
+         break_actions) = break_roadmap.get_observation_action_seq(break_path)
+        observation_seq.extend(break_observations)
+        action_seq.extend(break_actions)
         
-        # switch to reassembly -------------------------------------------------
-        action = reassembly_template_action()
-        action['reassembly'] = 1
+        # switch to make phase -------------------------------------------------
+        action = env.no_op_action()
+        action['phase_switch'] = 1
         action_seq.append(action)
         _, reward, terminal, info = env.step(action)
         
         empty_state = env.get_state()
         
-        # reassemble -----------------------------------------------------------
-        reassembly_roadmap = Roadmap(env, full_config, class_ids, color_ids)
-        reassembly_planner = RoadmapPlanner(reassembly_roadmap, empty_state)
+        # make -----------------------------------------------------------------
+        make_roadmap = Roadmap(env, full_assembly, class_ids, color_ids)
+        make_planner = RoadmapPlanner(make_roadmap, empty_state)
         
         try:
-            found_reassembly = reassembly_planner.plan(timeout=2)
-            if found_reassembly:
-                reassembly_path = reassembly_planner.greedy_path()
+            found_make = make_planner.plan(timeout=2)
+            if found_make:
+                make_path = make_planner.greedy_path()
             else:
                 dump_scene('no_path_found')
                 continue
@@ -202,16 +205,15 @@ def generate_offline_dataset(dataset_config):
         
         complete_seqs += 1
         
-        # get the reassembly observations and actions --------------------------
-        (reassembly_observations,
-         reassembly_actions) = reassembly_roadmap.get_observation_action_seq(
-            reassembly_path)
-        observation_seq.extend(reassembly_observations)
-        action_seq.extend(reassembly_actions)
+        # get the make observations and actions --------------------------------
+        (make_observations,
+         make_actions) = make_roadmap.get_observation_action_seq(make_path)
+        observation_seq.extend(make_observations)
+        action_seq.extend(make_actions)
         
         # make the final action ------------------------------------------------
-        action = reassembly_template_action()
-        action['reassembly'] = 2
+        action = env.no_op_action()
+        action['phase_switch'] = 2
         action_seq.append(action)
         
         total = i+1 - dataset_config.start
@@ -231,35 +233,34 @@ def generate_offline_dataset(dataset_config):
 
 # dataset ======================================================================
 
-class SeqDataset(Dataset):
+class BreakAndMakeSequenceDataset(Dataset):
     def __init__(
         self,
         dataset,
         split,
         subset,
-        skip_reassembly=False,
-        insert_only=False,
+        task='break_and_make',
     ):
         dataset_paths = get_dataset_paths(dataset, split, subset=subset)
         self.rollout_paths = dataset_paths['rollouts']
-        self.skip_reassembly = skip_reassembly
-        self.insert_only = insert_only
+        self.task = task
     
     def __len__(self):
         return len(self.rollout_paths)
     
     def __getitem__(self, i):
         path = self.rollout_paths[i]
-        #print(path)
         data = numpy.load(path, allow_pickle=True)['rollout'].item()
-        if self.skip_reassembly:
-            i = numpy.where(data['actions']['reassembly'])[0]
+        
+        if self.task == 'break_only':
+            i = numpy.where(data['actions']['phase_switch'])[0]
             if len(i):
                 data = index_hierarchy(data, slice(0, i[0]+1))
-        if self.insert_only:
-            # get all disassembly actions
-            i = numpy.where(data['actions']['reassembly'])[0]
-            disassembly_data = index_hierarchy(data, slice(0, i[0]+1))
+        
+        elif self.task == 'break_and_count':
+            # get all break actions
+            i = numpy.where(data['actions']['phase_switch'])[0]
+            break_data = index_hierarchy(data, slice(0, i[0]+1))
             
             # get all insert actions
             # but modify them to have blank workspace observations and
@@ -272,18 +273,18 @@ class SeqDataset(Dataset):
             insert_data['observations']['handspace_color_render'][1:] = (
                 hand_frames[j[0][:-1] + 1])
             
-            # get the final reassembly action
+            # get the final phase switch action
             # and modify it as above
             final_data = index_hierarchy(data, [i[1]])
             final_data['observations']['workspace_color_render'][:] = 102
             final_data['observations']['handspace_color_render'][0] = (
                 hand_frames[[j[0][-1] + 1]])
             data = concatenate_numpy_hierarchies(
-                disassembly_data, insert_data, final_data)
+                break_data, insert_data, final_data)
         
         return data
 
-def seq_data_collate(seqs):
+def break_and_make_data_collate(seqs):
     seqs, pad = auto_pad_stack_numpy_hierarchies(
         *seqs, pad_axis=0, stack_axis=1)
     return seqs, pad
@@ -296,7 +297,8 @@ def build_train_env(dataset_config):
     print('Building train env')
     train_env = async_ltron(
         dataset_config.num_envs,
-        reassembly_env,
+        break_and_make_env,
+        task=dataset_config.task,
         dataset=dataset_config.dataset,
         split=dataset_config.train_split,
         subset=dataset_config.train_subset,
@@ -309,8 +311,6 @@ def build_train_env(dataset_config):
         handspace_map_width=dataset_config.handspace_map_width,
         handspace_map_height=dataset_config.handspace_map_height,
         max_episode_length=dataset_config.max_episode_length,
-        disassembly_score=dataset_config.disassembly_score,
-        skip_disassembly=dataset_config.skip_disassembly,
         train=True,
         check_collisions=True,
         randomize_viewpoint=dataset_config.randomize_viewpoint,
@@ -325,7 +325,8 @@ def build_test_env(dataset_config):
     print('Building test env')
     test_env = async_ltron(
         dataset_config.num_envs,
-        reassembly_env,
+        break_and_make_env,
+        task=dataset_config.task,
         dataset=dataset_config.dataset,
         split=dataset_config.test_split,
         subset=dataset_config.test_subset,
@@ -338,8 +339,6 @@ def build_test_env(dataset_config):
         handspace_map_width=dataset_config.handspace_map_width,
         handspace_map_height=dataset_config.handspace_map_height,
         max_episode_length=dataset_config.max_episode_length,
-        disassembly_score=dataset_config.disassembly_score,
-        skip_reassembly=dataset_config.skip_reassembly,
         train=True,
         check_collisions=True,
         randomize_viewpoint=dataset_config.randomize_viewpoint,
@@ -351,20 +350,19 @@ def build_test_env(dataset_config):
 
 def build_seq_train_loader(config):
     print('-'*80)
-    print('Building sequence data loader')
-    dataset = SeqDataset(
+    print('Building Break And Make Data Loader')
+    dataset = BreakAndMakeSequenceDataset(
         config.dataset,
         config.train_split,
         config.train_subset,
-        config.skip_reassembly,
-        config.insert_only,
+        task=config.task,
     )
     
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         num_workers=config.loader_workers,
-        collate_fn=seq_data_collate,
+        collate_fn=break_and_make_data_collate,
         shuffle=True,
     )
     
