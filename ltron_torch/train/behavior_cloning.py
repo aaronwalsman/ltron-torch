@@ -44,7 +44,7 @@ class BehaviorCloningConfig(Config):
 # train functions ==============================================================
 
 def behavior_cloning(
-    train_config,
+    config,
     model,
     optimizer,
     train_loader,
@@ -60,17 +60,17 @@ def behavior_cloning(
     clock = [0]
     train_start = time.time()
     
-    for epoch in range(1, train_config.epochs+1):
+    for epoch in range(1, config.epochs+1):
         epoch_start = time.time()
         print('='*80)
         print('Epoch: %i'%epoch)
         
         train_pass(
-            train_config, model, optimizer, train_loader, interface, log, clock)
-        save_checkpoint(train_config, epoch, model, optimizer, log, clock)
+            config, model, optimizer, train_loader, interface, log, clock)
+        save_checkpoint(config, epoch, model, optimizer, log, clock)
         episodes = test_epoch(
-            train_config, epoch, test_env, model, interface, log, clock)
-        visualize_episodes(train_config, epoch, episodes, interface, log, clock)
+            config, epoch, test_env, model, interface, log, clock)
+        visualize_episodes(config, epoch, episodes, interface, log, clock)
         
         train_end = time.time()
         print('='*80)
@@ -80,7 +80,7 @@ def behavior_cloning(
 # train subfunctions ===========================================================
 
 def train_pass(
-    train_config,
+    config,
     model,
     optimizer,
     loader,
@@ -113,11 +113,11 @@ def train_pass(
         
         clock[0] += 1
 
-def test_epoch(train_config, epoch, test_env, model, interface, log, clock):
-    frequency = train_config.test_frequency
+def test_epoch(config, epoch, test_env, model, interface, log, clock):
+    frequency = config.test_frequency
     if frequency is not None and epoch % frequency == 0:
         episodes = rollout_epoch(
-            train_config, test_env, model, interface, 'test', log, clock)
+            config, test_env, model, interface, 'test', log, clock)
         
         avg_terminal_reward = 0.
         for seq_id in episodes.finished_seqs:
@@ -146,13 +146,13 @@ def test_epoch(train_config, epoch, test_env, model, interface, log, clock):
     else:
         return None
 
-def rollout_epoch(train_config, env, model, interface, train_mode, log, clock):
+def rollout_epoch(config, env, model, interface, train_mode, log, clock):
     print('-'*80)
     print('Rolling out episodes')
     
     # initialize storage for observations, actions and rewards
-    observation_storage = RolloutStorage(train_config.num_envs)
-    action_reward_storage = RolloutStorage(train_config.num_envs)
+    observation_storage = RolloutStorage(config.num_envs)
+    action_reward_storage = RolloutStorage(config.num_envs)
     
     # put the model in eval mode
     model.eval()
@@ -160,17 +160,17 @@ def rollout_epoch(train_config, env, model, interface, train_mode, log, clock):
     
     # use the train mode to determine the number of steps and rollout mode
     if train_mode == 'train':
-        steps = train_config.train_batch_rollout_steps_per_epoch
+        steps = config.train_batch_rollout_steps_per_epoch
         rollout_mode = 'sample'
     elif train_mode == 'test':
-        steps = train_config.test_batch_rollout_steps_per_epoch
+        steps = config.test_batch_rollout_steps_per_epoch
         rollout_mode = 'max'
-    b = train_config.num_envs
+    b = config.num_envs
     
     # reset
     observation = env.reset()
-    terminal = numpy.ones(train_config.num_envs, dtype=numpy.bool)
-    reward = numpy.zeros(train_config.num_envs)
+    terminal = numpy.ones(config.num_envs, dtype=numpy.bool)
+    reward = numpy.zeros(config.num_envs)
     
     with torch.no_grad():
         if hasattr(model, 'initialize_memory'):
@@ -221,8 +221,8 @@ def rollout_epoch(train_config, env, model, interface, train_mode, log, clock):
     
     return episodes
 
-def visualize_episodes(train_config, epoch, episodes, interface, log, clock):
-    frequency = train_config.visualization_frequency
+def visualize_episodes(config, epoch, episodes, interface, log, clock):
+    frequency = config.visualization_frequency
     if epoch % frequency == 0:
         print('-'*80)
         print('Generating Visualizations')
@@ -237,8 +237,8 @@ def visualize_episodes(train_config, epoch, episodes, interface, log, clock):
         
         interface.visualize_episodes(epoch, episodes, visualization_directory)
 
-def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
-    frequency = train_config.checkpoint_frequency
+def save_checkpoint(config, epoch, model, optimizer, log, clock):
+    frequency = config.checkpoint_frequency
     if frequency is not None and epoch % frequency == 0:
         checkpoint_directory = os.path.join(
             './checkpoint', os.path.split(log.log_dir)[-1])
