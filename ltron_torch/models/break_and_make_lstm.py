@@ -41,27 +41,6 @@ def build_model(config):
     return model.cuda()
 
 
-# input and output utilities ===================================================
-
-'''
-def observations_to_tensors(train_config, observation, pad):
-
-    output = []
-    for component in 'workspace_color_render', 'handspace_color_render':
-        frames = observation[component]
-        s, b, h, w, c = frames.shape
-        frames = frames.reshape(s*b, h, w, c)
-        frames = [default_image_transform(frame) for frame in frames]
-        frames = torch.stack(frames)
-        frames = frames.view(s, b, c, h, w)
-        output.append(frames)
-    
-    reassembling = torch.LongTensor(observation['reassembly']['reassembling'])
-    output.append(reassembling)
-    
-    return tuple(output)
-'''
-
 class BreakAndMakeLSTM(Module):
     def __init__(self,
         global_heads,

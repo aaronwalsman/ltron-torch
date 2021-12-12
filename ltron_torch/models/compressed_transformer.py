@@ -56,7 +56,7 @@ class CompressedTransformerConfig(Config):
     
     init_weights = True
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         if self.residual_channels is None:
             self.residual_channels = 4 * self.channels
 
