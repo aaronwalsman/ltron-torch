@@ -29,7 +29,7 @@ class SlotoencoderConfig(Config):
     residual_dropout = 0.1
     decoder_dropout = 0.0
     
-    def set_dependent_variables(self, **kwargs):
+    def set_dependents(self, **kwargs):
         if self.residual_channels is None:
             self.residual_channels = self.channels*4
         
