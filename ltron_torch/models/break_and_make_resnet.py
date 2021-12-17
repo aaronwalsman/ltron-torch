@@ -8,11 +8,9 @@ from ltron_torch.models.sequence_fcn import (
 from ltron_torch.models.heads import (
     LinearMultiheadDecoder, Conv2dMultiheadDecoder)
 
-
-# class ========================================================================
-class ReassemblyResnet(Module):
+class BreakAndMakeResnet(Module):
     def __init__(self, config):
-        super(ReassemblyResnet, self).__init__()
+        super(BreakAndMakeResnet, self).__init__()
         modes = 23
         dataset_info = get_dataset_info(config.dataset)
         num_classes = max(dataset_info['class_ids'].values())+1
@@ -30,11 +28,3 @@ class ReassemblyResnet(Module):
         global_x, workspace_x = self.fcn(x_work)
         global_x['workspace'] = workspace_x
         return global_x
-
-# build functions ==============================================================
-def build_model(config):
-    print('-'*80)
-    print('Building resnet disassembly model')
-    return ReassemblyResnet(config).cuda()
-
-# input and output utilities ===================================================

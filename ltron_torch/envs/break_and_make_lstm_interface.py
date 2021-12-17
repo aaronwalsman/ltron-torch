@@ -9,7 +9,7 @@ import tqdm
 
 from splendor.image import save_image
 
-from ltron.gym.envs.reassembly_env import reassembly_template_action
+from ltron.gym.envs.break_and_make_env import break_and_make_template_action
 from ltron.hierarchy import len_hierarchy, index_hierarchy
 from ltron.visualization.drawing import write_text
 from ltron.evaluation import precision_recall, f1
@@ -22,7 +22,7 @@ from ltron_torch.envs.utils import (
     categorical_or_max_2d,
 )
 
-class ReassemblyLSTMInterface:
+class BreakAndMakeLSTMInterface:
     def __init__(self, config):
         self.config = config
     
@@ -35,9 +35,9 @@ class ReassemblyLSTMInterface:
             output.append(self.format_frames(
                 observation[component], device=device))
         
-        reassembling = torch.LongTensor(
-            observation['reassembly']['reassembling']).to(device)
-        output.append(reassembling)
+        make_phase = torch.LongTensor(
+            observation['phase_switch']).to(device)
+        output.append(make_phase)
         
         return tuple(output)
     
@@ -78,8 +78,8 @@ class ReassemblyLSTMInterface:
                     y_mode[i,j] = (
                         y['handspace_viewpoint'][i,j] + 12)
                     continue
-                elif y['reassembly'][i,j]:
-                    y_mode[i,j] = y['reassembly'][i,j] + 19
+                elif y['phase_switch'][i,j]:
+                    y_mode[i,j] = y['phase_switch'][i,j] + 19
                     continue
                 elif y['insert_brick']['class_id'][i,j]:
                     y_mode[i,j] = 22
@@ -257,7 +257,7 @@ class ReassemblyLSTMInterface:
         
         actions = []
         for i in range(b):
-            action = reassembly_template_action()
+            action = break_and_make_template_action()
             mode = mode_action[0,i]
             w_yx = numpy.array([workspace_y[0,i], workspace_x[0,i]])
             w_p = workspace_p[0,i,w_yx[0], w_yx[1]]
@@ -292,10 +292,10 @@ class ReassemblyLSTMInterface:
                 action['handspace_viewpoint'] = mode - 12
 
             elif mode == 20:
-                action['reassembly'] = 1
+                action['phase_switch'] = 1
 
             elif mode == 21:
-                action['reassembly'] = 2
+                action['phase_switch'] = 2
 
             elif mode == 22:
                 action['insert_brick']['class_id'] = class_action[0,i]
@@ -349,8 +349,9 @@ class ReassemblyLSTMInterface:
                     if action['handspace_viewpoint']:
                         result.append('Handspace Viewpoint [%i]'%(
                             action['handspace_viewpoint']))
-                    if action['reassembly']:
-                        result.append('Reassembly [%i]'%action['reassembly'])
+                    if action['phase_switch']:
+                        result.append(
+                            'Phase Switch [%i]'%action['phase_switch'])
                     return '\n'.join(result)
                 
                 def draw_workspace_dot(position, color, alpha=1.0):
@@ -417,7 +418,7 @@ class ReassemblyLSTMInterface:
             seq_len = len_hierarchy(seq)
             
             starting_config = (
-                seq['observation']['initial_workspace_config']['config'])
+                seq['observation']['initial_workspace_assembly'])
             starting_class = starting_config['class'][0]
             starting_color = starting_config['color'][0]
             starting_bricks = {}

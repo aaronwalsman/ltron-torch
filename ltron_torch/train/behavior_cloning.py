@@ -14,7 +14,6 @@ from torch.utils.tensorboard import SummaryWriter
 from splendor.image import save_image
 
 from ltron.dataset.paths import get_dataset_info
-from ltron.gym.envs.reassembly_env import reassembly_template_action
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
     stack_numpy_hierarchies,
@@ -27,18 +26,7 @@ from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
-from ltron_torch.train.optimizer import adamw_optimizer
-from ltron_torch.dataset.reassembly import (
-    build_train_env,
-    build_test_env,
-    build_seq_train_loader,
-)
-from ltron_torch.models.reassembly_resnet import (
-    build_model as build_resnet_model,
-)
-from ltron_torch.models.reassembly_lstm import (
-    build_model as build_lstm_model,
-)
+from ltron_torch.train.optimizer import build_optimizer
 
 # config definitions ===========================================================
 
