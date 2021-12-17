@@ -127,7 +127,7 @@ class TrainConfig(Config):
     test_frequency=None
     checkpoint_frequency=1
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         self.batch_rollout_steps_per_epoch = (
             self.rollout_steps_per_epoch // self.num_envs
         )

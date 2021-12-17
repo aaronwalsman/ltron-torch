@@ -81,7 +81,7 @@ class BehaviorCloningReassemblyConfig(Config):
     visualization_frequency=1
     visualization_seqs=10
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         dataset_info = get_dataset_info(self.dataset)
         self.num_classes = max(dataset_info['class_ids'].values()) + 1
         self.num_colors = max(dataset_info['color_ids'].values()) + 1

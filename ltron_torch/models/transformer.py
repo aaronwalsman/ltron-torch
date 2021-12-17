@@ -5,6 +5,7 @@ from torch.nn import (
 
 from ltron_torch.config import Config
 from ltron_torch.models.memory_attention import MemoryAttention
+from ltron_torch.models.mask import padded_causal_mask
 
 class TransformerConfig(Config):
     nonlinearity = 'gelu'
@@ -29,9 +30,9 @@ def make_nonlinearity(config):
     elif config.nonlinearity == 'gelu':
         return GELU()
 
-class Block(Module):
+class TransformerBlock(Module):
     def __init__(self, config):
-        super(Block, self).__init__()
+        super(TransformerBlock, self).__init__()
         
         self.attention_norm = LayerNorm(config.channels)
         self.attention = MemoryAttention(
@@ -49,8 +50,8 @@ class Block(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self, x, mask, pad, use_memory=None):
-        x = x + self.attention(self.attention_norm(x), mask, pad, use_memory)
+    def forward(self, x, pad, mask=None, use_memory=None):
+        x = x + self.attention(self.attention_norm(x), pad, mask, use_memory)
         x = x + self.projection_residual(x)
         
         return x
@@ -64,16 +65,16 @@ class Transformer(Module):
         super(Transformer, self).__init__()
         
         self.blocks = ModuleList(
-            [Block(config) for _ in range(config.num_blocks)])
+            [TransformerBlock(config) for _ in range(config.num_blocks)])
         
         if config.init_weights:
             self.apply(init_weights)
     
     def forward(self, x, t, pad, use_memory=None):
-        causal_mask = make_causal_mask(t, pad)
+        mask = padded_causal_self_mask(t, pad)
         
         for block in self.blocks:
-            x = block(x, t, causal_mask, pad, use_memory)
+            x = block(x, pad, mask, use_memory)
         
         return x
     

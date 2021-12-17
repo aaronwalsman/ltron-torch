@@ -9,7 +9,6 @@ import tqdm
 
 from splendor.image import save_image
 
-from ltron.gym.envs.break_and_make_env import break_and_make_template_action
 from ltron.hierarchy import len_hierarchy, index_hierarchy
 from ltron.visualization.drawing import write_text
 from ltron.evaluation import precision_recall, f1
@@ -229,7 +228,7 @@ class BreakAndMakeLSTMInterface:
         
         return loss
     
-    def tensor_to_actions(self, x, mode='sample'):
+    def tensor_to_actions(self, x, env, mode='sample'):
         '''
         Convert model output tensors to gym actions
         '''
@@ -257,7 +256,7 @@ class BreakAndMakeLSTMInterface:
         
         actions = []
         for i in range(b):
-            action = break_and_make_template_action()
+            action = env.no_op_action()
             mode = mode_action[0,i]
             w_yx = numpy.array([workspace_y[0,i], workspace_x[0,i]])
             w_p = workspace_p[0,i,w_yx[0], w_yx[1]]

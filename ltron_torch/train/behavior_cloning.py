@@ -24,7 +24,6 @@ from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.config import Config
-from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.optimizer import build_optimizer
 
@@ -90,7 +89,6 @@ def train_pass(
 ):
     
     model.train()
-    device = next(model.parameters()).device
     
     for batch, pad in tqdm.tqdm(loader):
         
@@ -98,7 +96,7 @@ def train_pass(
         actions = batch['actions']
         
         # convert observations to model tensors --------------------------------
-        x = interface.observation_to_tensors(observations, pad, device)
+        x = interface.observation_to_tensors(observations, pad)
         
         # forward --------------------------------------------------------------
         x = model(*x)
@@ -199,7 +197,7 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
                 memory = x['memory']
             else:
                 x = model(*x)
-            actions = interface.tensor_to_actions(x, mode=rollout_mode)
+            actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
             
             # step -------------------------------------------------------------
             observation, reward, terminal, info = env.step(actions)

@@ -29,7 +29,7 @@ class MemoryAttention(Module):
         attention_dropout=0.,
         content_dropout=0.,
     ):
-        super(CompressedCausalAttention, self).__init__()
+        super(MemoryAttention, self).__init__()
         
         # store values we need for later
         assert channels % heads == 0
@@ -50,7 +50,16 @@ class MemoryAttention(Module):
         self.content_linear = Linear(self.c, self.c)
         self.content_dropout = Dropout(content_dropout)
     
-    def forward(self, x, mask, pad, use_memory=None):
+    def forward(self,
+        xq, pad_q, xk=None, pad_k=None, mask=None, use_memory=None,
+    ):
+        # set defaults
+        if xk is None:
+            xk = xq
+        if pad_k is None:
+            pad_k = pad_q
+        
+        # pull shape
         s, b, c = x.shape
         
         # compute q,k,v
@@ -69,8 +78,10 @@ class MemoryAttention(Module):
         qk = torch.einsum('sbhc,tbhc->stbh', q, k)
         temperature = 1. / self.hc ** 0.5
         a = qk * temperature
-        a = a.masked_fill(mask.view(s, t, b, 1), float('-inf'))
+        if mask is not None:
+            a = a.masked_fill(mask.view(s, t, b, 1), float('-inf'))
         p = torch.softmax(a, dim=1)
+        p = torch.nan_to_num(p)
         p = self.attention_dropout(p)
         
         # compute forward projection
@@ -88,12 +99,14 @@ class MemoryAttention(Module):
         self.clear_memory_entries(~use_memory.bool())
         
         # compute new mask
-        m_mask = make_padding_mask(
-            self.memory_length, (s, torch.max(self.memory_length), b),
-            seq_dim=1, batch_dim=2)
-        m_mask, _ = cat_padded_seqs(
-            m_mask, mask, self.memory_length, pad,
-            seq_dim=1, batch_dim=2, pad_value=True)
+        if mask is not None:
+            expanded_mask = make_padding_mask(
+                self.memory_length, (s, torch.max(self.memory_length), b),
+                seq_dim=1, batch_dim=2)
+            expanded_mask, _ = cat_padded_seqs(
+                expanded_mask, mask, self.memory_length, pad,
+                seq_dim=1, batch_dim=2, pad_value=True)
+            mask = expanded_mask
         
         # concatenate k and v onto the memory
         kv = torch.cat((k, v), dim=-1)
@@ -106,7 +119,7 @@ class MemoryAttention(Module):
         mk = mkv[...,:self.hc]
         mv = mkv[...,self.hc:]
         
-        return mk, mv, m_mask
+        return mk, mv, mask
     
     def expand_memory_batchsize(self, b):
         # if the batch dimension is not large enough, expand
@@ -126,5 +139,5 @@ class MemoryAttention(Module):
         self.memory_length.fill_(0)
     
     def train(self, mode=True):
-        super(CompressedCausalAttention, self).train(mode)
+        super(MemoryAttention, self).train(mode)
         self.clear_all_memory()

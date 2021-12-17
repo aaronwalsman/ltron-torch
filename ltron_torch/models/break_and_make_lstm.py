@@ -18,7 +18,7 @@ from ltron_torch.models.simple_fcn import SimpleDecoder
 
 # build functions ==============================================================
 
-def build_model(config):
+def build_model(config, device):
     print('-'*80)
     print('Building lstm reassembly model')
     # THIS SHOULD ALL BE WRAPPED INTO THE CLASS BELOW
@@ -38,7 +38,7 @@ def build_model(config):
         resnet_name=config.resnet_name,
     )
     
-    return model.cuda()
+    return model.to(device)
 
 
 class BreakAndMakeLSTM(Module):

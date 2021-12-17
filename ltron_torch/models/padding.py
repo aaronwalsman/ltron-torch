@@ -81,7 +81,7 @@ def get_seq_range_indices(pad_start, pad_end):
 def get_batch_indices(pad):
     # get indices for the batch dimension for every element in the pad region
     batch_indices = torch.cat([
-        torch.full(p, i, dtype=torch.long, device=pad.device)
+        torch.full((p,), i, dtype=torch.long, device=pad.device)
         for i, p in enumerate(pad)
     ])
     return batch_indices
