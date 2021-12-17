@@ -79,10 +79,15 @@ def named_resnet_fcn(
     decoder_channels,
     global_heads=None,
     dense_heads=None,
-    pretrained=False
+    pretrained=False,
+    frozen_batchnorm=False,
 ):
     fcn_layers = ('layer4', 'layer3', 'layer2', 'layer1')
-    encoder = resnet.named_backbone(name, *fcn_layers, pretrained=pretrained)
+    encoder = resnet.named_backbone(
+        name,
+        *fcn_layers,
+        pretrained=pretrained,
+        frozen_batchnorm=frozen_batchnorm)
     encoder_channels = resnet.named_encoder_channels(name)
     return SimpleFCN(
         encoder,
