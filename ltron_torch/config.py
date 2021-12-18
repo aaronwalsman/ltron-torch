@@ -82,11 +82,12 @@ class Config:
         for BaseClass in inheritance:
             try:
                 method = getattr(BaseClass, 'set_dependents')
-                if method not in applied_methods:
-                    method(self)
-                    applied_methods.add(method)
             except AttributeError:
                 continue
+            
+            if method not in applied_methods:
+                method(self)
+                applied_methods.add(method)
         
         self.kwargs = kwargs
     
