@@ -2,7 +2,6 @@ from ltron_torch.dataset.rollout_dataset import build_rolloutFrames_train_loader
 import random
 import time
 import os
-
 import numpy
 
 import tqdm
@@ -14,7 +13,7 @@ from ltron_torch.models.heads import Conv2dMultiheadDecoder
 
 from ltron.dataset.paths import get_dataset_info
 from ltron_torch.config import Config
-from ltron_torch.train.optimizer import adamw_optimizer
+from ltron_torch.train.optimizer import build_optimizer
 import pdb
 from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 from ltron_torch.gym_tensor import (
@@ -40,7 +39,7 @@ class PretrainResnetBackboneConfig(Config):
     test_frequency = 1
     checkpoint_frequency = 10
     visualization_frequency = 1
-
+    optimizer = "adamw"
 
 def train_disassembly_behavior_cloning(train_config):
     print('=' * 80)
@@ -55,7 +54,7 @@ def train_disassembly_behavior_cloning(train_config):
     model_deeplab = build_model_deeplab(train_config)
     model = build_model(train_config)
     # model.load_state_dict(torch.load("./checkpoint/Nov30_19-24-57_patillo/model_5000.pt"))
-    optimizer = adamw_optimizer(model, train_config)
+    optimizer = build_optimizer(model, train_config)
     # optimizer.load_state_dict(torch.load("./checkpoint/Nov30_19-24-57_patillo/optimizer_5000.pt"))
     train_loader = build_rolloutFrames_train_loader(train_config)
     for epoch in range(1, train_config.epochs + 1):
@@ -115,8 +114,9 @@ def build_model_deeplab(config):
     info = get_dataset_info(config.dataset)
     class_num = max(info['class_ids'].values())+1
    
-    model.classifier[4] = torch.nn.AvgPool2d(kernel_size = (4,4), stride=4)
-    model.classifier.add_module("pred", torch.nn.Conv2d(256, class_num, kernel_size = (1,1)))
+    # model.classifier[4] = torch.nn.AvgPool2d(kernel_size = (4,4), stride=4)
+    # model.classifier.add_module("pred", torch.nn.Conv2d(256, class_num, kernel_size = (3,3), stride=2))
+    model.classifier[4] = torch.nn.Conv2d(256, class_num, kernel_size=1)
     print(model)
     return model.cuda()
 
@@ -138,6 +138,7 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
         # xg, xd = model(xw, xh)
         output, = model(workspace)
         class_id = model_deeplab(workspace)['out']
+        class_id = torch.nn.functional.interpolate(class_id, (64,64), mode="bilinear")
         pos_snap, neg_snap, color_pred = output['pos_snap'], output['neg_snap'], output['color']
         # class_id, pos_snap, neg_snap, color_pred = output["class"], output['pos_snap'], output['neg_snap'], output['color']
         pos_snap = pos_snap.view(pos_snap.shape[0], pos_snap.shape[2], pos_snap.shape[3])
