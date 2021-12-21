@@ -52,9 +52,9 @@ def train_disassembly_behavior_cloning(train_config):
     train_start = time.time()
 
     model_deeplab = build_model_deeplab(train_config)
-    model = build_model(train_config)
+    # model = build_model(train_config)
     # model.load_state_dict(torch.load("./checkpoint/Nov30_19-24-57_patillo/model_5000.pt"))
-    optimizer = build_optimizer(model, train_config)
+    optimizer = build_optimizer(model_deeplab, train_config)
     # optimizer.load_state_dict(torch.load("./checkpoint/Nov30_19-24-57_patillo/optimizer_5000.pt"))
     train_loader = build_rolloutFrames_train_loader(train_config)
     for epoch in range(1, train_config.epochs + 1):
@@ -63,7 +63,7 @@ def train_disassembly_behavior_cloning(train_config):
         print('Epoch: %i' % epoch)
 
         train_pass(
-            train_config, model, optimizer, train_loader, log, clock, step, model_deeplab)
+            train_config, None, optimizer, train_loader, log, clock, step, model_deeplab)
         save_checkpoint(train_config, epoch, model, optimizer, log, clock)
         # episodes = test_epoch(
         #     train_config, epoch, test_env, model, log, clock)
@@ -129,64 +129,67 @@ def fake_train_pass(model, train_loader):
         break
 
 def train_pass(train_config, model, optimizer, train_loader, log, clock, step, model_deeplab):
-    model.train()
+    # model.train()
+    model_deeplab.train()
     counter = 0
     for workspace, label in tqdm.tqdm(train_loader):
         # convert observations to model tensors --------------------------------
         workspace = workspace.cuda()
         # forward --------------------------------------------------------------
         # xg, xd = model(xw, xh)
-        output, = model(workspace)
+        # output, = model(workspace)
         class_id = model_deeplab(workspace)['out']
-        class_id = torch.nn.functional.interpolate(class_id, (64,64), mode="bilinear")
-        pos_snap, neg_snap, color_pred = output['pos_snap'], output['neg_snap'], output['color']
+        # class_id = torch.nn.functional.interpolate(class_id, (64,64), mode="bilinear")
+        # pos_snap, neg_snap, color_pred = output['pos_snap'], output['neg_snap'], output['color']
         # class_id, pos_snap, neg_snap, color_pred = output["class"], output['pos_snap'], output['neg_snap'], output['color']
-        pos_snap = pos_snap.view(pos_snap.shape[0], pos_snap.shape[2], pos_snap.shape[3])
-        neg_snap = neg_snap.view(neg_snap.shape[0], neg_snap.shape[2], neg_snap.shape[3])
-        pos_snap = torch.squeeze(pos_snap)
-        neg_snap = torch.squeeze(neg_snap)
+        # pos_snap = pos_snap.view(pos_snap.shape[0], pos_snap.shape[2], pos_snap.shape[3])
+        # neg_snap = neg_snap.view(neg_snap.shape[0], neg_snap.shape[2], neg_snap.shape[3])
+        # pos_snap = torch.squeeze(pos_snap)
+        # neg_snap = torch.squeeze(neg_snap)
 
         # loss -----------------------------------------------------------------
         label = label.cuda()
         id_label = label[:, :, :, 0]
-        pos_label = label[:, :, :, 1]
-        neg_label = label[:, :, :, 2]
-        color_label = label[:, :, :, 3]
+        # pos_label = label[:, :, :, 1]
+        # neg_label = label[:, :, :, 2]
+        # color_label = label[:, :, :, 3]
         id_weight = torch.ones(class_id.shape[1]).cuda()
-        id_weight[0] = 3
-        color_weight = torch.ones(color_pred.shape[1]).cuda()
-        color_weight[0] = 3
+        id_weight[0] = 0.03
+        # color_weight = torch.ones(color_pred.shape[1]).cuda()
+        # color_weight[0] = 3
         # pdb.set_trace()
-        pos_weight = torch.ones(1).cuda()
-        neg_weight = torch.ones(1).cuda()
-        pos_weight[0] = 3
-        neg_weight[0] = 3
-        loss_id, loss_pos, loss_neg, loss_color = cross_entropy(class_id, id_label, weight=id_weight), binary_cross_entropy_with_logits(pos_snap, pos_label.float(), pos_weight=pos_weight), \
-                                      binary_cross_entropy_with_logits(neg_snap, neg_label.float(), pos_weight=neg_weight), cross_entropy(color_pred, color_label, weight=color_weight)
+        # pos_weight = torch.ones(1).cuda()
+        # neg_weight = torch.ones(1).cuda()
+        # pos_weight[0] = 3
+        # neg_weight[0] = 3
+        # loss_id, loss_pos, loss_neg, loss_color = cross_entropy(class_id, id_label, weight=id_weight), binary_cross_entropy_with_logits(pos_snap, pos_label.float(), pos_weight=pos_weight), \
+        #                             binary_cross_entropy_with_logits(neg_snap, neg_label.float(), pos_weight=neg_weight), cross_entropy(color_pred, color_label, weight=color_weight)
+        loss_id = cross_entropy(class_id, id_label, weight=id_weight)
         # loss_id_t, loss_pos_t, loss_neg_t = cross_entropy(class_id, id_label,
         #                                             weight=id_weight), binary_cross_entropy_with_logits(pos_snap,
         #                                                                                                 pos_label.float(),), \
         #                               binary_cross_entropy_with_logits(neg_snap, neg_label.float(),)
-        loss = loss_id + loss_pos + loss_neg + loss_color
+        # loss = loss_id + loss_pos + loss_neg + loss_color
+        loss = loss_id
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         log.add_scalar('train/class_loss', loss_id*1000, clock[0])
-        log.add_scalar('train/pos_loss', loss_pos*1000, clock[0])
-        log.add_scalar('train/neg_loss', loss_neg*1000, clock[0])
-        log.add_scalar('train/color_loss', loss_color*1000, clock[0])
+        # log.add_scalar('train/pos_loss', loss_pos*1000, clock[0])
+        # log.add_scalar('train/neg_loss', loss_neg*1000, clock[0])
+        # log.add_scalar('train/color_loss', loss_color*1000, clock[0])
         clock[0] += 1
 
         # Accuracy -----------------------------------------------------------------
         id_pred = torch.argmax(class_id, dim=1)
-        pos_pred = torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0)
-        neg_pred = torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0)
-        color_pred = torch.argmax(color_pred, dim=1)
+        # pos_pred = torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0)
+        # neg_pred = torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0)
+        # color_pred = torch.argmax(color_pred, dim=1)
         non_back = torch.sum(torch.where(label[:,:,:,0]>0, 1, 0))
         id_corr = torch.sum(torch.where((label[:,:,:,0] == id_pred) & (label[:,:,:,0] != 0), 1, 0))
-        pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
-        neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
-        color_corr = torch.sum(torch.where((label[:, :, :, 3] == color_pred) & (label[:, :, :, 0] != 0), 1, 0))
+        # pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
+        # neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
+        # color_corr = torch.sum(torch.where((label[:, :, :, 3] == color_pred) & (label[:, :, :, 0] != 0), 1, 0))
         counter += 1
         # pdb.set_trace()
         # if counter == 12:
@@ -196,9 +199,9 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
         #     step += 1
         #     counter = 0
     log.add_scalar("train/id_acc", id_corr / non_back, clock[0], step)
-    log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
-    log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
-    log.add_scalar("train/color_acc", color_corr / non_back, clock[0], step)
+    # log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
+    # log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
+    # log.add_scalar("train/color_acc", color_corr / non_back, clock[0], step)
     step += 1
 
 
