@@ -13,7 +13,8 @@ from ltron_torch.models.simple_fcn import named_resnet_fcn
 from ltron_torch.models.heads import Conv2dMultiheadDecoder
 
 from ltron.dataset.paths import get_dataset_info
-from ltron_torch.config import Config
+from ltron.config import Config
+
 from ltron_torch.train.optimizer import adamw_optimizer
 import pdb
 from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits

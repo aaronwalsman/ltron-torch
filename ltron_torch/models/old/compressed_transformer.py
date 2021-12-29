@@ -8,8 +8,9 @@ from torch.nn import (
 )
 from torch.optim import AdamW
 
+from ltron.config import Config
+
 from ltron_torch.models.padding import cat_padded_seqs
-from ltron_torch.config import Config
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.compressed_causal_attention import (
     CompressedCausalAttention,

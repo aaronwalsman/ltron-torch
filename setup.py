@@ -17,7 +17,9 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     entry_points = {
         'console_scripts' : [
-            'train_break_and_make=ltron_torch.scripts.train_break_and_make:main'
+            'train_break_and_make='
+                'ltron_torch.scripts.train_break_and_make:main',
+            'train_blocks=ltron_torch.scripts.train_blocks:main',
         ]
     }
 )

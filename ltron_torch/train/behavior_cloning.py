@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from splendor.image import save_image
 
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
@@ -23,21 +24,28 @@ from ltron.hierarchy import (
 from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import make_padding_mask
-from ltron_torch.config import Config
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.optimizer import build_optimizer
 
 # config definitions ===========================================================
 
 class BehaviorCloningConfig(Config):
-    epochs=10
-    batch_size=4
-    test_envs=4
+    start_epoch = 1
+    epochs = 10
+    batch_size = 4
+    test_envs = 4
     
-    test_frequency=1
-    checkpoint_frequency=10
-    visualization_frequency=1
-    visualization_seqs=10
+    test_frequency = 1
+    checkpoint_frequency = 10
+    visualization_frequency = 1
+    visualization_seqs = 10
+    
+    test_rollout_steps_per_epoch = 2048
+    
+    def set_dependents(self):
+        self.test_batch_rollout_steps_per_epoch = (
+            self.test_rollout_steps_per_epoch // self.test_envs
+        )
 
 
 # train functions ==============================================================
@@ -59,7 +67,7 @@ def behavior_cloning(
     clock = [0]
     train_start = time.time()
     
-    for epoch in range(1, config.epochs+1):
+    for epoch in range(config.start_epoch, config.epochs+1):
         epoch_start = time.time()
         print('='*80)
         print('Epoch: %i'%epoch)
@@ -69,7 +77,8 @@ def behavior_cloning(
         save_checkpoint(config, epoch, model, optimizer, log, clock)
         episodes = test_epoch(
             config, epoch, test_env, model, interface, log, clock)
-        visualize_episodes(config, epoch, episodes, interface, log, clock)
+        if hasattr(interface, 'visualize_episodes'):
+            visualize_episodes(config, epoch, episodes, interface, log, clock)
         
         train_end = time.time()
         print('='*80)
@@ -139,6 +148,9 @@ def test_epoch(config, epoch, test_env, model, interface, log, clock):
         print('Average Reward: %f'%avg_reward)
         log.add_scalar('val/reward', avg_reward, clock[0])
         
+        if hasattr(interface, 'eval_episodes'):
+            interface.eval_episodes(episodes, log, clock)
+        
         return episodes
     
     else:
@@ -149,8 +161,12 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
     print('Rolling out episodes')
     
     # initialize storage for observations, actions and rewards
-    observation_storage = RolloutStorage(config.num_envs)
-    action_reward_storage = RolloutStorage(config.num_envs)
+    if train_mode == 'test':
+        num_envs = config.test_envs
+    elif train_mode == 'train':
+        num_envs = config.train_envs
+    observation_storage = RolloutStorage(num_envs)
+    action_reward_storage = RolloutStorage(num_envs)
     
     # put the model in eval mode
     model.eval()
@@ -163,12 +179,12 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
     elif train_mode == 'test':
         steps = config.test_batch_rollout_steps_per_epoch
         rollout_mode = 'max'
-    b = config.num_envs
+    b = num_envs
     
     # reset
     observation = env.reset()
-    terminal = numpy.ones(config.num_envs, dtype=numpy.bool)
-    reward = numpy.zeros(config.num_envs)
+    terminal = numpy.ones(num_envs, dtype=numpy.bool)
+    reward = numpy.zeros(num_envs)
     
     with torch.no_grad():
         if hasattr(model, 'initialize_memory'):
@@ -188,15 +204,20 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             # move observations to torch and cuda
             pad = numpy.ones(b, dtype=numpy.long)
             observation = stack_numpy_hierarchies(observation)
-            x = interface.observation_to_tensors(
-                observation, pad, device=device)
+            x = interface.observation_to_tensors(observation, pad)
             
             # compute actions --------------------------------------------------
             if hasattr(model, 'initialize_memory'):
-                x = model(*x, memory=memory)
+                if hasattr(interface, 'forward_rollout'):
+                    x = interface.forward_rollout(terminal, *x, memory=memory)
+                else:
+                    x = model(*x, memory=memory)
                 memory = x['memory']
             else:
-                x = model(*x)
+                if hasattr(interface, 'forward_rollout'):
+                    x = interface.forward_rollout(terminal, *x)
+                else:
+                    x = model(*x)
             actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
             
             # step -------------------------------------------------------------
@@ -213,9 +234,6 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             )
     
     episodes = observation_storage | action_reward_storage
-    
-    if hasattr(interface, 'eval_episodes'):
-        interface.eval_episodes(episodes, log, clock)
     
     return episodes
 

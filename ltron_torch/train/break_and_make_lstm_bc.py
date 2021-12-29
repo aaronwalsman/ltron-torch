@@ -1,6 +1,7 @@
 from ltron.dataset.paths import get_dataset_info
 
-from ltron_torch.config import Config
+from ltron.config import Config
+
 from ltron_torch.train.optimizer import build_optimizer
 from ltron_torch.dataset.break_and_make import (
     build_test_env,

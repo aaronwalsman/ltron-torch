@@ -1,14 +1,18 @@
+import torch
 from torch.nn import BatchNorm1d, BatchNorm2d, BatchNorm3d, LayerNorm, Embedding
 from torch.optim import AdamW
 
+from ltron.config import Config
+
 from ltron_torch.models.parameter import NoWeightDecayParameter
-from ltron_torch.config import Config
 
 class OptimizerConfig(Config):
     optimizer = 'adamw'
     learning_rate = 3e-4
     weight_decay = 0.1
     betas = (0.9, 0.95)
+    
+    optimizer_checkpoint = False
 
 def build_optimizer(model, config):
     
@@ -76,5 +80,8 @@ def build_optimizer(model, config):
         )
     else:
         raise ValueError('Unexpected optimizer "%s"'%config.optimizer)
+    
+    if config.optimizer_checkpoint:
+        optimizer.load_state_dict(torch.load(config.optimizer_checkpoint))
     
     return optimizer

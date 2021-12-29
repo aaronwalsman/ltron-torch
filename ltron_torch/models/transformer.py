@@ -3,7 +3,8 @@ from torch.nn import (
     Embedding, LayerNorm,
 )
 
-from ltron_torch.config import Config
+from ltron.config import Config
+
 from ltron_torch.models.memory_attention import MemoryAttention
 from ltron_torch.models.mask import padded_causal_mask
 
@@ -50,8 +51,13 @@ class TransformerBlock(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self, x, pad, mask=None, use_memory=None):
-        x = x + self.attention(self.attention_norm(x), pad, mask, use_memory)
+    def forward(self,
+        x, pad, xk=None, mask=None, use_memory=None
+    ):
+        xq = self.attention_norm(x)
+        if xk is not None:
+            xk = self.attention_norm(xk)
+        x = x + self.attention(xq, pad, xk=xk, mask=mask, use_memory=use_memory)
         x = x + self.projection_residual(x)
         
         return x
@@ -71,10 +77,10 @@ class Transformer(Module):
             self.apply(init_weights)
     
     def forward(self, x, t, pad, use_memory=None):
-        mask = padded_causal_self_mask(t, pad)
+        mask = padded_causal_mask(t, pad)
         
         for block in self.blocks:
-            x = block(x, pad, mask, use_memory)
+            x = block(x, pad, mask=mask, use_memory=use_memory)
         
         return x
     

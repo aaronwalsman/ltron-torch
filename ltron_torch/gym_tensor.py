@@ -24,23 +24,9 @@ tensor_std = torch.FloatTensor(default_std)
 
 default_tile_transform = transforms.Compose([
     lambda x : torch.FloatTensor(x)/255.,
-    #lambda x : x / 255.,
     lambda x : (x - tensor_mean.view(1,1,1,3)) / tensor_std.view(1,1,1,3)
 ])
 
-'''
-def device_tile_transform(device):
-    device_mean = tensor_mean.to(device)
-    device_std = tensor_std.to(device)
-    def transform(tiles):
-        tiles = torch.FloatTensor(tiles, device=device)
-        tiles = tiles / 255.
-        tiles = tiles - device_mean.view(1,1,1,3)
-        tiles = tiles / device_std.view(1,1,1,3)
-        return tiles
-    
-    return transform
-'''
 def default_image_untransform(x):
     device = x.device
     mean = torch.FloatTensor(default_mean).unsqueeze(-1).unsqueeze(-1)

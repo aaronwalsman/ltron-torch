@@ -12,4 +12,4 @@ class LearnedPositionalEncoding(Module):
     def forward(self, i):
         s, b = i.shape
         c = self.encoding.shape[-1]
-        return self.encoding[i.view(-1)].view(s,b,c)
+        return self.encoding[i.reshape(-1)].view(s,b,c)

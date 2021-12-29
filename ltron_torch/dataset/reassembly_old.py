@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import tqdm
 
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
 from ltron.gym.ltron_env import async_ltron, sync_ltron
 from ltron.gym.reassembly_env import handspace_reassembly_env
@@ -15,7 +16,6 @@ from ltron.hierarchy import (
     auto_pad_stack_numpy_hierarchies,
 )
 
-from ltron_torch.config import Config
 #from ltron_torch.models.reassembly import ReassemblyExpert
 
 
