@@ -121,7 +121,7 @@ def train_pass(
 
 def test_epoch(config, epoch, test_env, model, interface, log, clock):
     frequency = config.test_frequency
-    if frequency is not None and epoch % frequency == 0:
+    if frequency and epoch % frequency == 0:
         episodes = rollout_epoch(
             config, test_env, model, interface, 'test', log, clock)
         
@@ -238,7 +238,7 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
 
 def visualize_episodes(config, epoch, episodes, interface, log, clock):
     frequency = config.visualization_frequency
-    if epoch % frequency == 0:
+    if frequency and epoch % frequency == 0:
         print('-'*80)
         print('Generating Visualizations')
         
@@ -254,7 +254,7 @@ def visualize_episodes(config, epoch, episodes, interface, log, clock):
 
 def save_checkpoint(config, epoch, model, optimizer, log, clock):
     frequency = config.checkpoint_frequency
-    if frequency is not None and epoch % frequency == 0:
+    if frequency and epoch % frequency == 0:
         checkpoint_directory = os.path.join(
             './checkpoint', os.path.split(log.log_dir)[-1])
         if not os.path.exists(checkpoint_directory):
