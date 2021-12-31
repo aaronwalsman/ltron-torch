@@ -14,13 +14,13 @@ from gym import Env
 from gym.spaces import Discrete, MultiDiscrete
 from gym.vector.async_vector_env import AsyncVectorEnv
 
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.ltron_env import async_ltron
 from ltron.gym.reassembly_env import reassembly_env
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.compression import batch_deduplicate_tiled_seqs
 
-from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors
 from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
 from ltron_torch.models.compressed_transformer import (
@@ -127,7 +127,7 @@ class TrainConfig(Config):
     test_frequency=None
     checkpoint_frequency=1
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         self.batch_rollout_steps_per_epoch = (
             self.rollout_steps_per_epoch // self.num_envs
         )

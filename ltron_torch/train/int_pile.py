@@ -11,9 +11,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 import tqdm
 
+from ltron.config import Config
 from ltron.compression import batch_deduplicate_tiled_seqs
 
-from ltron_torch.config import Config
 from ltron_torch.train.optimizer import OptimizerConfig, adamw_optimizer
 from ltron_torch.models.transformer import (
     TransformerConfig, Transformer)

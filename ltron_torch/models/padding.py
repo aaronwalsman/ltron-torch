@@ -2,10 +2,10 @@ import torch
 
 def cat_padded_seqs(a, b, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     '''
-    aa____   bbb_    aabbb____
-    aaa___   b___    aaab_____
-    aaaaaa + bbb_ -> aaaaaabbb
-    a_____   bbbb    abbbb____
+    aa____   bbb_                              aabbb____
+    aaa___   b___                              aaab_____
+    aaaaaa , bbb_ , (2,3,6,1), (3, 1, 3, 4) -> aaaaaabbb , (5, 4, 9, 5)
+    a_____   bbbb                              abbbb____
     '''
     # compute new lengths
     ab_pad = a_pad + b_pad
@@ -15,8 +15,8 @@ def cat_padded_seqs(a, b, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     extra_pad = max_pad - a.shape[seq_dim]
     if extra_pad > 0:
         extra_shape = (*a.shape[:seq_dim], extra_pad, *a.shape[seq_dim+1:])
-        extra_values = torch.ones(
-            extra_shape, dtype=a.dtype, device=a.device) * pad_value
+        extra_values = torch.full(
+            extra_shape, pad_value, dtype=a.dtype, device=a.device)
         ab = torch.cat((a, extra_values), dim=seq_dim)
     else:
         ab = a.clone()
@@ -36,7 +36,7 @@ def linearize_padded_seq(x, pad, seq_dim=0, batch_dim=1):
     '''
     12__
     3456
-    78__ + (2,4,2,1) -> 123456789
+    78__ , (2,4,2,1) -> 123456789
     9___
     '''
     # return all elements from x that are inside the pad region
@@ -59,28 +59,31 @@ def make_padding_mask(pad, shape, seq_dim=0, batch_dim=1):
     return mask
 
 def get_seq_batch_indices(pad):
+    # get indices for the sequence and batch dimensions for every element in
+    # the pad region
     seq_indices = get_seq_indices(pad)
     batch_indices = get_batch_indices(pad)
     return seq_indices, batch_indices
 
 def get_seq_indices(pad):
     # get indices for the sequence dimension for every element in the pad region
-    seq_indices = torch.cat([torch.arange(p) for p in pad]).to(pad.device)
+    seq_indices = torch.cat([torch.arange(p, device=pad.device) for p in pad])
     return seq_indices
     
 def get_seq_range_indices(pad_start, pad_end):
     # get indices for the sequence dimension of a padded range
     seq_indices = torch.cat([
-        torch.arange(ps, pe) for ps, pe in zip(pad_start, pad_end)
-    ]).to(pad_end.device)
+        torch.arange(ps, pe, device=pad_end.device)
+        for ps, pe in zip(pad_start, pad_end)
+    ])
     return seq_indices
 
 def get_batch_indices(pad):
     # get indices for the batch dimension for every element in the pad region
     batch_indices = torch.cat([
-        torch.ones(p, dtype=torch.long)*i
+        torch.full((p,), i, dtype=torch.long, device=pad.device)
         for i, p in enumerate(pad)
-    ]).to(pad.device)
+    ])
     return batch_indices
 
 def get_index_tuple(seq_indices, batch_indices, dims, seq_dim, batch_dim):

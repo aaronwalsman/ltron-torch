@@ -3,7 +3,8 @@ from torch.nn import (
     Module, Identity, Conv2d, Sequential, ReLU, MaxPool2d, Upsample,
     MultiheadAttention, LayerNorm, Linear, Parameter, Embedding, Dropout)
 
-from ltron_torch.config import Config
+from ltron.config import Config
+
 from ltron_torch.models.positional_encoding import sinusoid_positional_encoding
 import ltron_torch.models.dvae as dvae
 
@@ -29,7 +30,7 @@ class SlotoencoderConfig(Config):
     residual_dropout = 0.1
     decoder_dropout = 0.0
     
-    def set_dependent_variables(self, **kwargs):
+    def set_dependents(self, **kwargs):
         if self.residual_channels is None:
             self.residual_channels = self.channels*4
         

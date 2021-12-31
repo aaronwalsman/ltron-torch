@@ -6,7 +6,8 @@ with open("README.md", "r") as fh:
 setuptools.setup(
     name="ltron-torch",
     version="0.0.0",
-    install_requires = ['ltron', 'tqdm', 'numpy', 'pyquaternion', 'tensorboard'],
+    install_requires = [
+        'ltron', 'tqdm', 'numpy', 'pyquaternion', 'tensorboard'],
     author="Aaron Walsman",
     author_email="aaronwalsman@gmail.com",
     description='LTRON Torch Experiments"',
@@ -14,5 +15,11 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/aaronwalsman/ltron-torch",
     packages=setuptools.find_packages(),
-    scripts=[],
+    entry_points = {
+        'console_scripts' : [
+            'train_break_and_make='
+                'ltron_torch.scripts.train_break_and_make:main',
+            'train_blocks=ltron_torch.scripts.train_blocks:main',
+        ]
+    }
 )

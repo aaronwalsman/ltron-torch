@@ -8,8 +8,9 @@ from torch.nn import (
 )
 from torch.optim import AdamW
 
+from ltron.config import Config
+
 from ltron_torch.models.padding import cat_padded_seqs
-from ltron_torch.config import Config
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.compressed_causal_attention import (
     CompressedCausalAttention,
@@ -56,7 +57,7 @@ class CompressedTransformerConfig(Config):
     
     init_weights = True
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         if self.residual_channels is None:
             self.residual_channels = 4 * self.channels
 

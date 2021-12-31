@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import random
 import time
 import os
 
@@ -13,10 +12,10 @@ from torch.distributions import Categorical
 
 from PIL import Image
 
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.envs.reassembly_env import reassembly_template_action
 from ltron.gym.rollout_storage import RolloutStorage
-from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.hierarchy import (
     stack_numpy_hierarchies,
     len_hierarchy,
@@ -24,11 +23,8 @@ from ltron.hierarchy import (
 )
 from ltron.visualization.drawing import write_text
 
-from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
-from ltron_torch.config import Config
-from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
-from ltron_torch.train.reassembly_labels import make_reassembly_labels
-from ltron_torch.train.optimizer import adamw_optimizer
+from ltron_torch.models.padding import make_padding_mask
+from ltron_torch.train.optimizer import build_optimizer
 from ltron_torch.dataset.reassembly import (
     build_train_env,
     build_test_env,
@@ -85,7 +81,7 @@ class BehaviorCloningReassemblyConfig(Config):
     visualization_frequency=1
     visualization_seqs=10
     
-    def set_dependent_variables(self):
+    def set_dependents(self):
         dataset_info = get_dataset_info(self.dataset)
         self.num_classes = max(dataset_info['class_ids'].values()) + 1
         self.num_colors = max(dataset_info['color_ids'].values()) + 1
@@ -97,7 +93,7 @@ class BehaviorCloningReassemblyConfig(Config):
 
 # train functions ==============================================================
 
-def train_reassembly_behavior_cloning(train_config):
+def train_break_and_make_bc_lstm(train_config):
     
     print('='*80)
     print('Setup')
@@ -107,11 +103,8 @@ def train_reassembly_behavior_cloning(train_config):
     clock = [0]
     train_start = time.time()
     
-    #train_config.skip_reassembly=True
-    
-    #model = build_resnet_model(train_config)
     model = build_lstm_model(train_config)
-    optimizer = adamw_optimizer(model, train_config)
+    optimizer = build_optimizer(model, train_config)
     train_loader = build_seq_train_loader(train_config)
     test_env = build_test_env(train_config)
     
