@@ -284,7 +284,15 @@ class CrossAttentionDecoder(Module):
         # split off the global tokens
         global_start = hand_end
         global_end = global_start + self.config.global_tokens
-        global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
+        
+        assert self.config.global_tokens == 1
+        #global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
+        #s, b, _, c = global_x.shape
+        #global_x = global_x.view(s,b,c)
+        global_x = x[:,global_start:global_end]
+        s, _, b, c = global_x.shape
+        global_x = global_x.view(s,b,c)
+        
         x = self.global_decoder(global_x)
         x['table'] = table_x
         x['hand'] = hand_x
