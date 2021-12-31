@@ -23,7 +23,7 @@ from ltron.hierarchy import (
     len_hierarchy,
     index_hierarchy,
 )
-from ltron.visualization.drawing import write_text
+#from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 from ltron_torch.config import Config
