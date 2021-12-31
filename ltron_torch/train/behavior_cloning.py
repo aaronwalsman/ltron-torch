@@ -38,7 +38,6 @@ class BehaviorCloningConfig(Config):
     test_frequency = 1
     checkpoint_frequency = 10
     visualization_frequency = 1
-    visualization_seqs = 10
     
     test_rollout_steps_per_epoch = 2048
     
@@ -208,8 +207,8 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             
             # compute actions --------------------------------------------------
             if hasattr(model, 'initialize_memory'):
-                if hasattr(interface, 'forward_rollout'):
-                    x = interface.forward_rollout(terminal, *x, memory=memory)
+                if hasattr(interface, 'rollout_forward'):
+                    x = interface.rollout_forward(terminal, *x, memory=memory)
                 else:
                     x = model(*x, memory=memory)
                 memory = x['memory']

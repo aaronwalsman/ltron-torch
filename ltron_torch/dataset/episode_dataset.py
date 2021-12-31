@@ -6,23 +6,20 @@ from gym.vector.async_vector_env import AsyncVectorEnv
 
 from ltron.config import Config
 from ltron.dataset.paths import get_dataset_paths
-from ltron.gym.envs.blocks_env import BlocksEnvConfig, BlocksEnv
 
 from ltron_torch.dataset.collate import pad_stack_collate
 
-class BlocksBehaviorCloningConfig(BlocksEnvConfig):
-    dataset='blocks'
+class EpisodeDatasetConfig(Config):
+    dataset='omr_clean'
     
-    train_split = 'train_episodes'
-    train_subset = None
-    
-    test_envs = 4
+    split = 'train_episodes'
+    subset = None
     
     batch_size = 4
     loader_workers = 4
     shuffle = True
 
-class BlocksSequenceDataset(Dataset):
+class EpisodeDataset(Dataset):
     def __init__(self, dataset, split, subset):
         paths = get_dataset_paths(dataset, split, subset=subset)
         self.episode_paths = paths['episodes']
@@ -36,11 +33,11 @@ class BlocksSequenceDataset(Dataset):
         
         return data
 
-def build_sequence_train_loader(config):
-    dataset = BlocksSequenceDataset(
+def build_episode_loader(config):
+    dataset = EpisodeDataset(
         config.dataset,
-        config.train_split,
-        config.train_subset,
+        config.split,
+        config.subset,
     )
     
     loader = DataLoader(
@@ -52,11 +49,3 @@ def build_sequence_train_loader(config):
     )
     
     return loader
-
-def build_test_env(config):
-    def constructor():
-        return BlocksEnv(config)
-    constructors = [constructor for i in range(config.test_envs)]
-    vector_env = AsyncVectorEnv(constructors, context='spawn')
-    
-    return vector_env

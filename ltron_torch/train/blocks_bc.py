@@ -1,34 +1,55 @@
 import torch
 
-from ltron_torch.dataset.blocks import (
-    BlocksBehaviorCloningConfig, build_sequence_train_loader, build_test_env,
+from ltron.gym.envs.ltron_env import async_ltron
+from ltron.gym.envs.blocks_env import BlocksEnvConfig, BlocksEnv
+
+from ltron_torch.dataset.episode_dataset import (
+    EpisodeDatasetConfig, build_episode_loader,
 )
-from ltron_torch.models.break_and_make_transformer import (
-    BreakAndMakeTransformerConfig,
-    BreakAndMakeTransformer,
-    BlocksTransformerInterface,
+from ltron_torch.models.hand_table_transformer import (
+    HandTableTransformerConfig,
+    HandTableTransformer,
+)
+from ltron_torch.models.hand_table_lstm import (
+    HandTableLSTMConfig,
+    HandTableLSTM,
+)
+from ltron_torch.interface.blocks import BlocksInterfaceConfig
+from ltron_torch.interface.blocks_hand_table_transformer import (
+    BlocksHandTableTransformerInterface,
+)
+from ltron_torch.interface.blocks_hand_table_lstm import (
+    BlocksHandTableLSTMInterface,
 )
 from ltron_torch.train.optimizer import OptimizerConfig, build_optimizer
 from ltron_torch.train.behavior_cloning import (
     BehaviorCloningConfig, behavior_cloning,
 )
 
-class BlocksTransformerBCConfig(
-    BlocksBehaviorCloningConfig,
-    BehaviorCloningConfig,
+class BlocksBCConfig(
+    EpisodeDatasetConfig,
+    BlocksEnvConfig,
+    BlocksInterfaceConfig,
+    HandTableTransformerConfig,
+    HandTableLSTMConfig,
     OptimizerConfig,
-    BreakAndMakeTransformerConfig,
+    BehaviorCloningConfig,
 ):
     device = 'cuda'
-    load_checkpoint = None
+    model = 'transformer'
     
-    mode_loss_weight = 1.
-    table_loss_weight = 1.
-    hand_loss_weight = 1.
-    shape_loss_weight = 1.
-    color_loss_weight = 1.
+    dataset = 'blocks'
+    
+    num_test_envs = 4
+    
+    num_modes = 6
+    num_shapes = 6
+    num_colors = 6
+    
+    table_channels = 1
+    hand_channels = 1
 
-def train_blocks_transformer_bc(config):
+def train_blocks_bc(config):
     print('='*80)
     print('Blocks Training Setup')
     config.spatial_channels = 1
@@ -38,7 +59,15 @@ def train_blocks_transformer_bc(config):
     
     print('-'*80)
     print('Building Model')
-    model = BreakAndMakeTransformer(config).to(torch.device(config.device))
+    if config.model == 'transformer':
+        model = HandTableTransformer(config).to(torch.device(config.device))
+        interface = BlocksHandTableTransformerInterface(model, config)
+    elif config.model == 'lstm':
+        model = HandTableLSTM(config).to(torch.device(config.device))
+        interface = BlocksHandTableLSTMInterface(model, config)
+    else:
+        raise ValueError(
+            'config "model" parameter must be either "transformer" or "lstm"')
     
     print('-'*80)
     print('Building Optimizer')
@@ -46,15 +75,11 @@ def train_blocks_transformer_bc(config):
     
     print('-'*80)
     print('Building Data Loader')
-    train_loader = build_sequence_train_loader(config)
+    train_loader = build_episode_loader(config)
     
     print('-'*80)
     print('Building Test Env')
-    test_env = build_test_env(config)
-    
-    print('-'*80)
-    print('Building Interface')
-    interface = BlocksTransformerInterface(model, config)
+    test_env = async_ltron(config.num_test_envs, BlocksEnv, config)
     
     behavior_cloning(
         config, model, optimizer, train_loader, test_env, interface)
