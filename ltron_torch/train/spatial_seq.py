@@ -40,7 +40,7 @@ from ltron_torch.models.vit_transformer import VITTransformerModel
 '''
 import ltron_torch.models.standard_models as standard_models
 from ltron_torch.models.seq_model import SeqCrossProductPoseModel
-from ltron_torch.train.loss import (
+from ltron_torch.train.loss_old import (
         dense_class_label_loss, dense_score_loss, cross_product_loss)
 import ltron_torch.geometry as geometry
 

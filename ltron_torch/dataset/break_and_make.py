@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 import tqdm
 
 import ltron.settings as settings
+from ltron.config import Config
 from ltron.exceptions import LtronException
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
@@ -17,13 +18,12 @@ from ltron.hierarchy import (
     index_hierarchy,
     stack_numpy_hierarchies,
     concatenate_numpy_hierarchies,
-    auto_pad_stack_numpy_hierarchies,
+    #auto_pad_stack_numpy_hierarchies,
 )
 from ltron.plan.plannerd import Roadmap, RoadmapPlanner
 from ltron.bricks.brick_scene import BrickScene
 
-from ltron_torch.config import Config
-
+from ltron_torch.dataset.collate import pad_stack_collate
 
 # config =======================================================================
 
@@ -284,11 +284,12 @@ class BreakAndMakeSequenceDataset(Dataset):
         
         return data
 
+'''
 def break_and_make_data_collate(seqs):
     seqs, pad = auto_pad_stack_numpy_hierarchies(
         *seqs, pad_axis=0, stack_axis=1)
     return seqs, pad
-
+'''
 
 # build functions ==============================================================
 
@@ -348,7 +349,7 @@ def build_test_env(dataset_config):
     return test_env
 
 
-def build_seq_train_loader(config):
+def build_sequence_train_loader(config):
     print('-'*80)
     print('Building Break And Make Data Loader')
     dataset = BreakAndMakeSequenceDataset(
@@ -362,7 +363,8 @@ def build_seq_train_loader(config):
         dataset,
         batch_size=config.batch_size,
         num_workers=config.loader_workers,
-        collate_fn=break_and_make_data_collate,
+        #collate_fn=break_and_make_data_collate,
+        collate_fn=pad_stack_collate,
         shuffle=True,
     )
     

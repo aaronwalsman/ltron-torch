@@ -23,6 +23,6 @@ def categorical_or_max_2d(logits, mode):
     *dims, h, w = logits.shape
     logits = logits.view(*dims, h*w)
     yx = categorical_or_max(logits, mode)
-    y = yx // w
+    y = torch.div(yx, w, rounding_mode='floor')
     x = yx % w
     return y, x

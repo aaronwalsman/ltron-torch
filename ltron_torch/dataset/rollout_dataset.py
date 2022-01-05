@@ -6,8 +6,10 @@ import numpy
 from PIL import Image
 from splendor.image import save_image
 import splendor
+
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
-from ltron_torch.config import Config
+
 from ltron_torch.gym_tensor import (
     gym_space_to_tensors, default_tile_transform, default_image_transform, default_image_untransform)
 import pdb

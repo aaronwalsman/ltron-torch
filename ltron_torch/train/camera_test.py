@@ -25,7 +25,7 @@ from ltron_torch.gym_tensor import (
     gym_space_to_tensors, gym_space_list_to_tensors)
 
 from ltron_torch.models.standard_models import camera_test_step_model
-from ltron_torch.train.loss import (
+from ltron_torch.train.loss_old import (
         dense_class_label_loss, dense_score_loss)
 
 def train_camera_test(

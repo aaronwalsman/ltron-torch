@@ -13,6 +13,7 @@ from torch.distributions import Categorical
 
 from PIL import Image
 
+from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.envs.reassembly_env import reassembly_template_action
 from ltron.gym.rollout_storage import RolloutStorage
@@ -25,7 +26,6 @@ from ltron.hierarchy import (
 from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
-from ltron_torch.config import Config
 from ltron_torch.gym_tensor import gym_space_to_tensors, default_tile_transform
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.optimizer import adamw_optimizer
