@@ -33,8 +33,9 @@ class BehaviorCloningConfig(Config):
     start_epoch = 1
     epochs = 10
     batch_size = 4
-    test_envs = 4
+    num_test_envs = 4
     
+    train_frequency = 1
     test_frequency = 1
     checkpoint_frequency = 10
     visualization_frequency = 1
@@ -43,7 +44,7 @@ class BehaviorCloningConfig(Config):
     
     def set_dependents(self):
         self.test_batch_rollout_steps_per_epoch = (
-            self.test_rollout_steps_per_epoch // self.test_envs
+            self.test_rollout_steps_per_epoch // self.num_test_envs
         )
 
 
@@ -72,7 +73,15 @@ def behavior_cloning(
         print('Epoch: %i'%epoch)
         
         train_pass(
-            config, model, optimizer, train_loader, interface, log, clock)
+            config,
+            epoch,
+            model,
+            optimizer,
+            train_loader,
+            interface,
+            log,
+            clock,
+        )
         save_checkpoint(config, epoch, model, optimizer, log, clock)
         episodes = test_epoch(
             config, epoch, test_env, model, interface, log, clock)
@@ -88,6 +97,7 @@ def behavior_cloning(
 
 def train_pass(
     config,
+    epoch,
     model,
     optimizer,
     loader,
@@ -95,29 +105,30 @@ def train_pass(
     log,
     clock,
 ):
-    
-    model.train()
-    
-    for batch, pad in tqdm.tqdm(loader):
+    frequency = config.train_frequency
+    if frequency and epoch % frequency == 0:
+        model.train()
         
-        observations = batch['observations']
-        actions = batch['actions']
-        
-        # convert observations to model tensors --------------------------------
-        x = interface.observation_to_tensors(observations, pad)
-        
-        # forward --------------------------------------------------------------
-        x = model(*x)
-        
-        # loss -----------------------------------------------------------------
-        loss = interface.loss(x, pad, actions, log, clock)
-        
-        # train ----------------------------------------------------------------
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        
-        clock[0] += 1
+        for batch, pad in tqdm.tqdm(loader):
+            
+            observations = batch['observations']
+            actions = batch['actions']
+            
+            # convert observations to model tensors ----------------------------
+            x = interface.observation_to_tensors(observations, pad)
+            
+            # forward ----------------------------------------------------------
+            x = model(*x)
+            
+            # loss -------------------------------------------------------------
+            loss = interface.loss(x, pad, actions, log, clock)
+            
+            # train ------------------------------------------------------------
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            clock[0] += 1
 
 def test_epoch(config, epoch, test_env, model, interface, log, clock):
     frequency = config.test_frequency
@@ -132,6 +143,9 @@ def test_epoch(config, epoch, test_env, model, interface, log, clock):
         
         if episodes.num_finished_seqs():
             avg_terminal_reward /= episodes.num_finished_seqs()
+        
+        import pdb
+        pdb.set_trace()
         
         print('Average Terminal Reward: %f'%avg_terminal_reward)
         log.add_scalar('val/term_reward', avg_terminal_reward, clock[0])
@@ -161,9 +175,9 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
     
     # initialize storage for observations, actions and rewards
     if train_mode == 'test':
-        num_envs = config.test_envs
+        num_envs = config.num_test_envs
     elif train_mode == 'train':
-        num_envs = config.train_envs
+        num_envs = config.num_train_envs
     observation_storage = RolloutStorage(num_envs)
     action_reward_storage = RolloutStorage(num_envs)
     

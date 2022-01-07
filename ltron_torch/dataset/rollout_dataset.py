@@ -27,7 +27,10 @@ class rolloutFramesConfig(Config):
     file_override = None
     loader_workers = 0
     dataset = "omr_clean"
-    test_split = "pico"
+    test_split = "rollouts_test"
+    optimizer = "adamw"
+    learning_rate = 3e-4
+    test_subset = None
 
 class rolloutFrames(Dataset):
 
@@ -61,7 +64,15 @@ class rolloutFrames(Dataset):
         class_ids = self.id_mapping(rollout['workspace_mask_render'], rollout['config']['class'])
         color_ids = self.color_mapping(rollout['workspace_mask_render'], rollout['config']['color'])
         stacked_label = numpy.stack([class_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
-
+        # if numpy.unique(color_ids).shape[0] > 2:
+        #     pdb.set_trace()
+        # if numpy.sum(rollout['config']['class'] > 0) > len(numpy.unique(rollout['config']['class']))-1:
+        # pdb.set_trace()
+        # if "Wright Flyer" not in str(path) and "Metroliner" not in str(path) and "Darth Maul" not in str(path) and\
+        #         "Rebel Blockade Runner" not in str(path) and "Imperial Star Destroyer" not in str(path) and 2020 in rollout['config']['class']:
+        #     pdb.set_trace()
+        # if 1627 in rollout['config']['class'] and "Darth Maul" not in str(path):
+        #     pdb.set_trace()
 
         if self.transform is not None:
             workspace = self.transform(workspace)
@@ -83,11 +94,15 @@ def build_rolloutFrames_train_loader(config, batch_overload=None):
             dataset,
             batch_size = batch_overload if batch_overload else config.batch_size,
             num_workers = config.loader_workers,
-            shuffle=True,
+            shuffle=False,
     )
     
     return loader
 
+def build_rolloutFrames_test_loader(config, batch_overload=None):
+    print('-'*80)
+    print("Building single frame test data loader")
+    dataset = rolloutFrames(config.dataset, config.test_split, config)
 
 
 def main():
@@ -95,24 +110,26 @@ def main():
     loader = build_rolloutFrames_train_loader(config, 1)
     counter = 1
     for workspace, label in loader:
-        print(workspace.type())
-        print(label.type())
+        # print(workspace.type())
+        # print(label.type())
         # pdb.set_trace()
         image = numpy.transpose(workspace[0].squeeze().detach().cpu().numpy(), [1,2,0])
         im = numpy.uint8(image * 255)
         im = default_image_untransform(workspace[0])
-        save_image(im, "test_dataset/test_im" + str(counter) + ".png")
-        mask = label[0, :, :, 2].squeeze().detach().cpu().numpy()
+        # save_image(im, "test_dataset/test_im" + str(counter) + ".png")
+        mask = label[0, :, :, 0].squeeze().detach().cpu().numpy()
         mask = numpy.uint8(mask * 255)
-        save_image(mask, "test_dataset/test_mask" + str(counter) + ".png")
-        print(numpy.where(label[0, :, :, 0] > 0))
-        print(numpy.where(label[0, :, :, 1] > 0))
-        print(workspace.shape)
-        print(label.shape)
-        print(numpy.unique(label[0, :, :, 0]))
-        print(numpy.unique(label[0, :, :, 1]))
-        print(numpy.unique(label[0, :, :, 2]))
+        # save_image(mask, "test_dataset/test_mask" + str(counter) + ".png")
+        # print(numpy.where(label[0, :, :, 0] > 0))
+        # print(numpy.where(label[0, :, :, 1] > 0))
+        # print(workspace.shape)
+        # print(label.shape)
+        # print(numpy.unique(label[0, :, :, 0]))
+        # print(numpy.unique(label[0, :, :, 1]))
+        # print(numpy.unique(label[0, :, :, 2]))
         counter += 1
+        if counter >= 100000:
+            break
 
 
 if __name__ == '__main__' :

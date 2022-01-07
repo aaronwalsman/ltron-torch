@@ -70,7 +70,8 @@ class HandTableTransformerConfig(Config):
     attention_dropout = 0.1
     content_dropout = 0.1
     
-    spatial_channels = 2
+    table_channels = 2
+    hand_channels = 2
     num_modes = 20
     num_shapes = 6
     num_colors = 6
@@ -212,17 +213,18 @@ class CrossAttentionDecoder(Module):
         )
         self.block = TransformerBlock(decoder_config)
         
-        upsample_spatial_channels = (
-            config.spatial_channels * config.upsample_h * config.upsample_w)
-        
         # output
         self.norm = LayerNorm(config.decoder_channels)
         
+        table_upsample_channels = (
+            config.table_channels * config.upsample_h * config.upsample_w)
         self.table_decoder = Linear(
-            config.decoder_channels, upsample_spatial_channels)
+            config.decoder_channels, table_upsample_channels)
         
+        hand_upsample_channels = (
+            config.hand_channels * config.upsample_h * config.upsample_w)
         self.hand_decoder = Linear(
-            config.decoder_channels, upsample_spatial_channels)
+            config.decoder_channels, hand_upsample_channels)
         
         #self.mode_decoder = Linear(
         #    config.decoder_channels, config.global_channels)
@@ -257,7 +259,8 @@ class CrossAttentionDecoder(Module):
         # reshape the output
         uh = self.config.upsample_h
         uw = self.config.upsample_w
-        uc = self.config.spatial_channels
+        assert self.config.table_channels == self.config.hand_channels
+        uc = self.config.table_channels
         uhwc = uh*uw*uc
         x = x.view(s, hw, b, c)
         
