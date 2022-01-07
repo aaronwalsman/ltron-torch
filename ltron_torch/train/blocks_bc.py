@@ -49,13 +49,11 @@ class BlocksBCConfig(
     table_channels = 1
     hand_channels = 1
 
-def train_blocks_bc(config):
-    print('='*80)
-    print('Blocks Training Setup')
-    config.spatial_channels = 1
-    config.mode_channels = (
-        6 + len(config.block_shapes) + len(config.block_colors))
-    config.set_all_dependents()
+def train_blocks_bc(config=None):
+    if config is None:
+        print('='*80)
+        print('Loading Config')
+        config = BlocksBCConfig.from_commandline()
     
     print('-'*80)
     print('Building Model')
