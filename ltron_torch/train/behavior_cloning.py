@@ -144,9 +144,6 @@ def test_epoch(config, epoch, test_env, model, interface, log, clock):
         if episodes.num_finished_seqs():
             avg_terminal_reward /= episodes.num_finished_seqs()
         
-        import pdb
-        pdb.set_trace()
-        
         print('Average Terminal Reward: %f'%avg_terminal_reward)
         log.add_scalar('val/term_reward', avg_terminal_reward, clock[0])
         
