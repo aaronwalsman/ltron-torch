@@ -13,14 +13,14 @@ class BreakAndMakeResnet(Module):
         super(BreakAndMakeResnet, self).__init__()
         modes = 23
         dataset_info = get_dataset_info(config.dataset)
-        num_classes = max(dataset_info['class_ids'].values())+1
+        num_shapes = max(dataset_info['shape_ids'].values())+1
         num_colors = max(dataset_info['color_ids'].values())+1
         
         self.fcn = named_resnet_independent_sequence_fcn(
             'resnet50',
             256,
             global_heads = LinearMultiheadDecoder(
-                2048, {'mode':modes, 'class':num_classes, 'color':num_colors}),
+                2048, {'mode':modes, 'shape':num_shapes, 'color':num_colors}),
             dense_heads = Conv2dMultiheadDecoder(256, 2, kernel_size=1)
         )
     

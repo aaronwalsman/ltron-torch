@@ -107,6 +107,8 @@ def train_pass(
 ):
     frequency = config.train_frequency
     if frequency and epoch % frequency == 0:
+        print('-'*80)
+        print('Training')
         model.train()
         
         for batch, pad in tqdm.tqdm(loader):
@@ -133,6 +135,8 @@ def train_pass(
 def test_epoch(config, epoch, test_env, model, interface, log, clock):
     frequency = config.test_frequency
     if frequency and epoch % frequency == 0:
+        print('-'*80)
+        print('Testing')
         episodes = rollout_epoch(
             config, test_env, model, interface, 'test', log, clock)
         

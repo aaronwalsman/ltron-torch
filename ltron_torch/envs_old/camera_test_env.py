@@ -73,7 +73,7 @@ def camera_test_env(
     )
     
     # instance labels
-    num_classes = max(dataset_info['class_ids'].values())+1
+    num_classes = max(dataset_info['shape_ids'].values())+1
     components['class_label'] = InstanceListComponent(
         num_classes,
         dataset_info['max_instances_per_scene'],

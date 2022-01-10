@@ -313,6 +313,12 @@ class BreakAndMakeInterface:
                 else:
                     mode_string = 'UNWRITTEN'
                 
+                if frame_id:
+                    reward = seq['reward'][frame_id-1]
+                else:
+                    reward = 0.
+                mode_string += '\nReward: %.04f'%reward
+                
                 joined_image = write_text(joined_image, mode_string)
                 
                 frame_path = os.path.join(

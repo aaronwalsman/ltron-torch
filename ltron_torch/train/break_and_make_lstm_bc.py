@@ -59,7 +59,7 @@ class BreakAndMakeLSTMBCConfig(Config):
     
     def set_dependents(self):
         dataset_info = get_dataset_info(self.dataset)
-        self.num_classes = max(dataset_info['class_ids'].values()) + 1
+        self.num_classes = max(dataset_info['shape_ids'].values()) + 1
         self.num_colors = max(dataset_info['color_ids'].values()) + 1
         
         self.test_batch_rollout_steps_per_epoch = (

@@ -14,7 +14,7 @@ import tqdm
 
 from ltron.geometry.align import best_first_total_alignment
 from ltron.bricks.brick_scene import BrickScene
-from ltron.bricks.brick_type import BrickType
+from ltron.bricks.brick_shape import BrickShape
 
 from ltron.dataset.paths import get_dataset_info
 from ltron.gym.ltron_env import async_ltron
@@ -77,7 +77,7 @@ def train_camera_test(
     log = SummaryWriter()
     
     dataset_info = get_dataset_info(dataset)
-    num_classes = max(dataset_info['class_ids'].values()) + 1
+    num_classes = max(dataset_info['shape_ids'].values()) + 1
     
     print('-'*80)
     print('Building the step model')
@@ -497,7 +497,7 @@ def test_checkpoint(
 ):
     
     dataset_info = get_dataset_info(dataset)
-    num_classes = max(dataset_info['class_ids'].values()) + 1
+    num_classes = max(dataset_info['shape_ids'].values()) + 1
     max_instances_per_scene = dataset_info['max_instances_per_scene']
     
     '''
@@ -567,14 +567,14 @@ def test_model(
         for _ in range(env.num_envs)
     ]
     
-    inverse_class_ids = {
-        brick_type : class_id
-        for class_id, brick_type in dataset_info['class_ids'].items()
+    inverse_shape_ids = {
+        brick_shape : class_id
+        for class_id, brick_shape in dataset_info['shape_ids'].items()
     }
     
     class_boxes = {
-        class_id : BrickType(brick_type).bbox
-        for class_id, brick_type in inverse_class_ids.items()
+        class_id : BrickShape(brick_shape).bbox
+        for class_id, brick_shape in inverse_shape_ids.items()
     }
     
     all_distances = []
@@ -639,7 +639,7 @@ def test_model(
                             step_tensors['viewpoint']['camera_matrix'][i]).cpu()
                         camera_pose = numpy.linalg.inv(camera_matrix)
                         active_scenes[i].add_instance(
-                            brick_type = inverse_class_ids[class_label],
+                            brick_shape = inverse_shape_ids[class_label],
                             brick_color = 4,
                             transform = transform,
                         )
@@ -674,20 +674,20 @@ def test_model(
                 if terminal:
                     
                     # compare reconstructed scene and target scene -------------
-                    target_class_ids = (
+                    target_shape_ids = (
                         step_tensors['class_labels'][i].cpu())
                     target_poses = step_tensors['pose_labels'][i].cpu()
                     target_instances = [
                         (int(target_id), numpy.array(target_pose))
                         for target_id, target_pose
-                        in zip(target_class_ids, target_poses)
+                        in zip(target_shape_ids, target_poses)
                         if target_id != 0
                     ]
                     scene = active_scenes[i]
                     predicted_instances = []
                     for instance_id, instance in scene.instances.items():
-                        class_id = dataset_info['class_ids'][
-                            str(instance.brick_type)]
+                        class_id = dataset_info['shape_ids'][
+                            str(instance.brick_shape)]
                         predicted_instances.append(
                             (class_id, instance.transform))
                     
@@ -709,8 +709,8 @@ def test_model(
                     # now get a new predicted instance list
                     predicted_instances = []
                     for instance_id, instance in scene.instances.items():
-                        class_id = dataset_info['class_ids'][
-                            str(instance.brick_type)]
+                        class_id = dataset_info['shape_ids'][
+                            str(instance.brick_shape)]
                         predicted_instances.append(
                             (class_id, instance.transform))
                     
@@ -758,8 +758,8 @@ def test_model(
     for pid_sid, scene in tqdm.tqdm(reconstructed_scenes.items()):
         #instances = []
         #for instance_id, instance in scene.items:
-        #    class_name = str(instance.brick_type)
-        #    class_id = dataset_info['class_ids'][class_name]
+        #    class_name = str(instance.brick_shape)
+        #    class_id = dataset_info['shape_ids'][class_name]
         #    transform = 
         if output_path is not None:
             mpd_path = os.path.join(

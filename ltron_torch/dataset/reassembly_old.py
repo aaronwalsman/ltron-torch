@@ -50,7 +50,7 @@ def generate_offline_dataset(dataset_config):
     dataset_info = get_dataset_info(dataset_config.dataset)
     expert = ReassemblyExpert(
         dataset_config.num_envs,
-        dataset_info['class_ids'],
+        dataset_info['shape_ids'],
         dataset_info['color_ids'],
     )
     
