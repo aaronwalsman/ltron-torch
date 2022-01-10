@@ -16,7 +16,7 @@ import splendor.masks as masks
 
 from ltron.geometry.align import best_first_total_alignment
 from ltron.bricks.brick_scene import BrickScene
-from ltron.bricks.brick_type import BrickType
+from ltron.bricks.brick_shape import BrickShape
 
 from ltron_torch.evaluation import spatial_metrics
 from ltron.dataset.paths import get_dataset_info
@@ -746,13 +746,13 @@ def test_model(
     ]
     
     inverse_class_ids = {
-        brick_type : class_id
-        for class_id, brick_type in dataset_info['class_ids'].items()
+        brick_shape : class_id
+        for class_id, brick_shape in dataset_info['class_ids'].items()
     }
     
     class_boxes = {
-        class_id : BrickType(brick_type).bbox
-        for class_id, brick_type in inverse_class_ids.items()
+        class_id : BrickShape(brick_shape).bbox
+        for class_id, brick_shape in inverse_class_ids.items()
     }
     
     all_distances = []
@@ -847,7 +847,7 @@ def test_model(
                             step_tensors['viewpoint']['camera_matrix'][i]).cpu()
                         camera_pose = numpy.linalg.inv(camera_matrix)
                         active_scenes[i].add_instance(
-                            brick_type = inverse_class_ids[class_label],
+                            brick_shape = inverse_class_ids[class_label],
                             brick_color = 4,
                             transform = transform,
                         )
@@ -895,7 +895,7 @@ def test_model(
                     predicted_instances = []
                     for instance_id, instance in scene.instances.items():
                         class_id = dataset_info['class_ids'][
-                            str(instance.brick_type)]
+                            str(instance.brick_shape)]
                         predicted_instances.append(
                             (class_id, instance.transform))
                     
@@ -918,7 +918,7 @@ def test_model(
                     predicted_instances = []
                     for instance_id, instance in scene.instances.items():
                         class_id = dataset_info['class_ids'][
-                            str(instance.brick_type)]
+                            str(instance.brick_shape)]
                         predicted_instances.append(
                             (class_id, instance.transform))
                     
@@ -965,7 +965,7 @@ def test_model(
     for pid_sid, scene in tqdm.tqdm(reconstructed_scenes.items()):
         #instances = []
         #for instance_id, instance in scene.items:
-        #    class_name = str(instance.brick_type)
+        #    class_name = str(instance.brick_shape)
         #    class_id = dataset_info['class_ids'][class_name]
         #    transform = 
         if output_path is not None:

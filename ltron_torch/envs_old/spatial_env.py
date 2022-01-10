@@ -132,7 +132,7 @@ def pose_estimation_env(
     components['segmentation_render'] = segmentation_component
     
     # instance labels
-    num_classes = max(dataset_info['class_ids'].values())+1
+    num_classes = max(dataset_info['shape_ids'].values())+1
     components['class_labels'] = InstanceListComponent(
         num_classes,
         dataset_info['max_instances_per_scene'],

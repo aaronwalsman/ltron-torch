@@ -83,7 +83,7 @@ class BehaviorCloningReassemblyConfig(Config):
     
     def set_dependents(self):
         dataset_info = get_dataset_info(self.dataset)
-        self.num_classes = max(dataset_info['class_ids'].values()) + 1
+        self.num_classes = max(dataset_info['shape_ids'].values()) + 1
         self.num_colors = max(dataset_info['color_ids'].values()) + 1
         
         self.test_batch_rollout_steps_per_epoch = (
@@ -253,7 +253,7 @@ def rollout_epoch(train_config, env, model, train_mode, log, clock):
                     action['reassembly'] = 2
                 
                 elif mode_action[i] == 22:
-                    action['insert_brick']['class_id'] = class_action[i]
+                    action['insert_brick']['shape_id'] = class_action[i]
                     action['insert_brick']['color_id'] = color_action[i]
                 
                 actions.append(action)
@@ -324,7 +324,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
                 elif batch['actions']['reassembly'][i,j]:
                     global_label[i,j] = batch['actions']['reassembly'][i,j] + 19
                     continue
-                elif batch['actions']['insert_brick']['class_id'][i,j]:
+                elif batch['actions']['insert_brick']['shape_id'][i,j]:
                     global_label[i,j] = 22
                     continue
                 else:
@@ -341,7 +341,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         log.add_scalar('train/global_loss', global_loss, clock[0])
         
         class_label = torch.LongTensor(
-            batch['actions']['insert_brick']['class_id']).cuda()
+            batch['actions']['insert_brick']['shape_id']).cuda()
         class_loss = torch.nn.functional.cross_entropy(
             xb.view(s*b, -1), class_label.view(-1), reduction='none')
         class_loss = class_loss * (class_label.view(-1) != 0)
@@ -478,9 +478,9 @@ def visualize_episodes(train_config, epoch, episodes, log, clock):
                     result = []
                     if action['disassembly']:
                         result.append('Disassembly')
-                    if action['insert_brick']['class_id'] != 0:
+                    if action['insert_brick']['shape_id'] != 0:
                         result.append('Insert Brick [%i] [%i]'%(
-                            action['insert_brick']['class_id'],
+                            action['insert_brick']['shape_id'],
                             action['insert_brick']['color_id'],
                         ))
                     if action['pick_and_place'] == 1:

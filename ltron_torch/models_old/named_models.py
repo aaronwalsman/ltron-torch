@@ -197,7 +197,7 @@ def named_graph_pool_model(
 def named_graph_step_model(
         name,
         backbone_name,
-        brick_types,
+        brick_shapes,
         brick_vector_channels=256,
         shape=(256,256)):
     if name == 'ground_truth_segmentation':
@@ -206,11 +206,11 @@ def named_graph_step_model(
                 backbone, brick_feature_model)
         heads = {
                 'brick_features' : torch.nn.Identity(),
-                'brick_type' : LinearReluStack(
+                'brick_shape' : LinearReluStack(
                         3,
                         brick_vector_channels,
                         brick_vector_channels,
-                        brick_types),
+                        brick_shapes),
                 'add_to_graph' : LinearReluStack(
                         3,
                         brick_vector_channels,

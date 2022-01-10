@@ -8,7 +8,7 @@ from torch.distributions import Categorical
 from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.dataset.paths import get_dataset_info
 from ltron.hierarchy import index_hierarchy
-from ltron.bricks.brick_type import BrickType
+from ltron.bricks.brick_shape import BrickShape
 from ltron.gym.envs.reassembly_env import reassembly_template_action
 
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
@@ -26,11 +26,11 @@ from ltron_torch.models.heads import (
 # expert =======================================================================
 
 class ReassemblyExpert:
-    def __init__(self, batch_size, class_ids):
+    def __init__(self, batch_size, shape_ids):
         self.batch_size = batch_size
         self.orders = [None for _ in range(batch_size)]
-        self.class_ids = class_ids
-        self.class_names = {value:key for key, value in class_ids.items()}
+        self.shape_ids = shape_ids
+        self.shape_names = {value:key for key, value in shape_ids.items()}
     
     def generate_order(self, obs):
         #return [4,3,2,1] # TMP 000001
@@ -57,10 +57,10 @@ class ReassemblyExpert:
         workspace_config = obs['reassembly']['workspace_configuration']
         
         # if there is still stuff to remove, remove it
-        if numpy.any(workspace_config['class']):
+        if numpy.any(workspace_config['shape']):
             # figure out the next instance to remove
             for instance_id in order:
-                if workspace_config['class'][instance_id]:
+                if workspace_config['shape'][instance_id]:
                     next_instance = instance_id
             
             # pick a snap pixel belonging to the chosen instance and remove it
@@ -136,14 +136,14 @@ class ReassemblyExpert:
                 actions.append(act)
                 '''
                 # if there are no objects left, switch to reassembly
-                if not numpy.any(workspace_config['class']):
+                if not numpy.any(workspace_config['shape']):
                     act['reassembly']['start'] = 1
                     actions.append(act)
                     continue
                 
                 # figure out the next item to remove
                 for instance_id in self.orders[i]:
-                    if workspace_config['class'][instance_id]:
+                    if workspace_config['shape'][instance_id]:
                         next_instance = instance_id
                 
                 # pick a snap pixel and remove it
@@ -173,7 +173,7 @@ class ReassemblyExpert:
             
             else:
                 reverse_order = list(reversed(self.orders[i]))
-                num_bricks = numpy.sum(workspace_config['class'] != 0)
+                num_bricks = numpy.sum(workspace_config['shape'] != 0)
                 
                 # if the reward is 1, then we are done
                 if reward[i] == 1.:
@@ -192,7 +192,7 @@ class ReassemblyExpert:
                 else:
                     #instance_id = reverse_order[num_bricks]
                     last_placed_brick = numpy.max(numpy.where(
-                        workspace_config['class'])[0])
+                        workspace_config['shape'])[0])
                     last_target_id = reverse_order[num_bricks-1]
                     edge_ids = target_config['edges']
                     last_edges = edge_ids[0] == last_target_id
@@ -286,11 +286,11 @@ class ReassemblyExpert:
                     p = polarities[r]
                     
                     # then figure out which direction to rotate
-                    brick_class = workspace_config['class'][num_bricks]
-                    brick_type = BrickType(
-                        self.class_names[brick_class])
+                    brick_shape = workspace_config['shape'][num_bricks]
+                    brick_shape = BrickShape(
+                        self.shape_names[brick_shape])
                     instance_transform = workspace_config['pose'][num_bricks]
-                    snap_transform = brick_type.snaps[picked_snap].transform
+                    snap_transform = brick_shape.snaps[picked_snap].transform
                     inv_snap_transform = numpy.linalg.inv(snap_transform)
                     instance_snap_transform = (
                         instance_transform @
@@ -374,12 +374,12 @@ class ReassemblyExpert:
                 
                 else:
                     target_id = reverse_order[num_bricks]
-                    class_id = target_config['class'][target_id]
+                    shape_id = target_config['shape'][target_id]
                     color_id = target_config['color'][target_id]
                     
                     # pick up the correct brick if necessary
-                    if handspace_config['class'][1] != class_id:
-                        act['insert_brick']['class_id'] = class_id
+                    if handspace_config['shape'][1] != shape_id:
+                        act['insert_brick']['shape_id'] = shape_id
                         act['insert_brick']['color_id'] = color_id
                         actions.append(act)
                         continue
@@ -391,13 +391,13 @@ class ReassemblyExpert:
                         if num_bricks == 0:
                             # Need to pick a snap that's
                             # y-up so the model ends up aligned properly
-                            # I need the brick type for this though.
-                            brick_class = handspace_config['class'][1]
-                            brick_type = BrickType(
-                                self.class_names[brick_class])
+                            # I need the brick shape for this though.
+                            brick_shape = handspace_config['shape'][1]
+                            brick_shape = BrickShape(
+                                self.shape_names[brick_shape])
                             snap_ys = [
                                 snap.transform[:3,1]
-                                for snap in brick_type.snaps
+                                for snap in brick_shape.snaps
                             ]
                             pose_y = target_config['pose'][target_id][:3,1]
                             alignment = [-snap_y @ pose_y for snap_y in snap_ys]
