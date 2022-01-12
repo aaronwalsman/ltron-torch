@@ -22,7 +22,11 @@ from ltron_torch.interface.break_and_make_hand_table_transformer import (
 #from ltron_torch.interface.break_and_make_hand_table_lstm import (
 #    BreakAndMakeHandTableLSTMInterface,
 #)
-from ltron_torch.train.optimizer import OptimizerConfig, build_optimizer
+from ltron_torch.train.optimizer import (
+    OptimizerConfig,
+    build_optimizer,
+    build_scheduler,
+)
 from ltron_torch.train.behavior_cloning import (
     BehaviorCloningConfig, behavior_cloning,
 )
@@ -53,6 +57,8 @@ class BreakAndMakeBCConfig(
     device = 'cuda'
     model = 'transformer'
     
+    load_checkpoint = None
+    
     dataset = 'random_construction_6_6'
     train_split = 'train_episodes'
     test_split = 'test'
@@ -72,13 +78,29 @@ def train_break_and_make_bc(config=None):
         print('Loading Config')
         config = BreakAndMakeBCConfig.from_commandline()
     
+    if config.load_checkpoint is not None:
+        print('-'*80)
+        print('Loading Checkpoint')
+        checkpoint = torch.load(config.load_checkpoint)
+        if 'config' in checkpoint:
+            config = BreakAndMakeBCConfig(**checkpoint['config'])
+        model_checkpoint = checkpoint['model']
+        optimizer_checkpoint = checkpoint['optimizer']
+        scheduler_checkpoint = checkpoint['scheduler']
+    else:
+        model_checkpoint = None
+        optimizer_checkpoint = None
+        scheduler_checkpoint = None
+    
+    device = torch.device(config.device)
+    
     print('-'*80)
     print('Building Model')
     if config.model == 'transformer':
-        model = HandTableTransformer(config).to(torch.device(config.device))
+        model = HandTableTransformer(config, model_checkpoint).to(device)
         interface = BreakAndMakeHandTableTransformerInterface(model, config)
     elif config.model == 'lstm':
-        model = HandTableLSTM(config).to(torch.device(config.device))
+        model = HandTableLSTM(config, model_checkpoint).to(device)
         interface = BreakAndMakeHandTableLSTMInterface(model, config)
     else:
         raise ValueError(
@@ -86,8 +108,12 @@ def train_break_and_make_bc(config=None):
     
     print('-'*80)
     print('Building Optimizer')
-    optimizer = build_optimizer(model, config)
-
+    optimizer = build_optimizer(config, model, optimizer_checkpoint)
+    
+    print('-'*80)
+    print('Building Scheduler')
+    scheduler = build_scheduler(config, optimizer, scheduler_checkpoint)
+    
     print('-'*80)
     print('Building Data Loader')
     train_config = BreakAndMakeBCConfig.translate(config, split='train_split')
@@ -104,4 +130,4 @@ def train_break_and_make_bc(config=None):
     )
 
     behavior_cloning(
-        config, model, optimizer, train_loader, test_env, interface)
+        config, model, optimizer, scheduler, train_loader, test_env, interface)

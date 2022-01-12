@@ -91,7 +91,7 @@ class BreakAndMakeInterface:
         polarity_losses = []
         for region, t in ('table', table_t), ('hand', hand_t):
             h, w = x[region].shape[-2:]
-            x_region = x[region].view(s*b, 2, h*w)[t]
+            x_region = x[region].reshape(s*b, 2, h*w)[t]
             
             # spatial
             x_spatial = x_region[:,0]

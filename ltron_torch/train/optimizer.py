@@ -1,6 +1,8 @@
+import math
+
 import torch
 from torch.nn import BatchNorm1d, BatchNorm2d, BatchNorm3d, LayerNorm, Embedding
-from torch.optim import AdamW
+from torch.optim import Adam, AdamW
 
 from ltron.config import Config
 
@@ -12,19 +14,20 @@ class OptimizerConfig(Config):
     weight_decay = 0.1
     betas = (0.9, 0.95)
     
-    optimizer_checkpoint = False
-
-def build_optimizer(model, config):
+    grad_norm_clip = 1.
     
-    decay_names = set()
-    no_decay_names = set()
+    linear_warmup_cosine_decay = True
+    cosine_decay_start = 5000 # TODO: ?
+    cosine_decay_stop = 25000 # TODO: ?
+    min_learning_rate_scale = 0.1
+
+def build_optimizer(config, model, checkpoint=None):
+    
     decay_params = []
     no_decay_params = []
-    #decay_modules = (Linear, Conv2d)
     no_decay_modules = (
         BatchNorm1d, BatchNorm2d, BatchNorm3d, LayerNorm, Embedding)
     for module_name, module in model.named_modules():
-        #is_decay_module = isinstance(module, decay_modules)
         is_no_decay_module = isinstance(module, no_decay_modules)
         for param_name, param in module.named_parameters(recurse=False):
             full_param_name = (
@@ -33,29 +36,11 @@ def build_optimizer(model, config):
             )
 
             if isinstance(param, NoWeightDecayParameter):
-                no_decay_names.add(full_param_name)
                 no_decay_params.append(param)
             elif param_name.endswith('bias') or is_no_decay_module:
-                no_decay_names.add(full_param_name)
                 no_decay_params.append(param)
             else:
-                decay_names.add(full_param_name)
                 decay_params.append(param)
-            #elif param_name.endswith('weight') and is_decay_module:
-            #    decay_names.add(full_param_name)
-            #    decay_params.append(param)
-            #elif param_name.endswith('weight') and is_no_decay_module:
-            #    no_decay_names.add(full_param_name)
-            #    no_decay_params.append(param)
-            #else:
-            #    print(module)
-            #    print(module_name, param_name)
-            #    raise Exception('Something bad happened')
-
-    param_intersection = decay_names & no_decay_names
-    param_union = decay_names | no_decay_names
-    assert len(param_intersection) == 0
-    assert len(param_union) == len(decay_names) + len(no_decay_names)
 
     optimizer_groups = [
         {'params': decay_params,
@@ -81,7 +66,62 @@ def build_optimizer(model, config):
     else:
         raise ValueError('Unexpected optimizer "%s"'%config.optimizer)
     
-    if config.optimizer_checkpoint:
-        optimizer.load_state_dict(torch.load(config.optimizer_checkpoint))
+    if checkpoint is not None:
+        if isinstance(checkpoint, str):
+            checkpoint = torch.load(checkpoint)
+        optimizer.load_state_dict(checkpoint)
     
     return optimizer
+
+def clip_grad(config, model):
+    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+
+class NoScheduler:
+    def __init__(self, config, optimizer):
+        self.config = config
+        self.optimizer = optimizer
+    
+    def step(self):
+        pass
+    
+    def state_dict(self):
+        return {}
+    
+    def load_state_dict(self, state_dict):
+        pass
+
+class LinearWarmupCosineDecayScheduler:
+    def __init__(self, config, optimizer):
+        self.config = config
+        self.optimizer = optimizer
+        self.steps = 0
+        self.base_lr = [
+            param_group['lr'] for param_group in optimizer.param_groups]
+    
+    def step(self):
+        lb = self.config.min_learning_rate_scale
+        if self.steps < self.config.cosine_decay_start:
+            lr_scale = self.steps / self.config.cosine_decay_start
+        elif self.steps < self.config.cosine_decay_stop:
+            i = self.steps - self.config.cosine_decay_start
+            j = self.config.cosine_decay_stop - self.config.cosine_decay_start
+            t = i/j
+            lr_scale = lb + 0.5 * (1. - lb) * (1 + math.cos(t * math.pi))
+        else:
+            lr_scale = lb
+        for group, lr in zip(self.optimizer.param_groups, self.base_lr):
+            group['lr'] = lr * lr_scale
+        
+        self.steps += 1
+    
+    def state_dict(self):
+        return {'steps':self.steps}
+    
+    def load_state_dict(self, state_dict):
+        self.steps = state_dict['steps']
+
+def build_scheduler(config, optimizer):
+    if config.linear_warmup_cosine_decay:
+        return LinearWarmupCosineDecayScheduler(config, optimizer)
+    else:
+        return NoScheduler(config, optimizer)
