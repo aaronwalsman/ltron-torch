@@ -280,7 +280,7 @@ def save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock):
         if not os.path.exists(checkpoint_directory):
             os.makedirs(checkpoint_directory)
         
-        path = os.path.join(checkpoint_directory, 'checkpoint_%04i.pt')
+        path = os.path.join(checkpoint_directory, 'checkpoint_%04i.pt'%epoch)
         print('-'*80)
         print('Saving checkpoint to: %s'%path)
         checkpoint = {

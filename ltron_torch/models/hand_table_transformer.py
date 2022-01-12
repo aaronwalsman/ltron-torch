@@ -96,17 +96,18 @@ class HandTableTransformerConfig(Config):
         
         self.spatial_tiles = self.table_tiles + self.hand_tiles
         
-        assert self.table_decode_tokens_h % self.table_decode_h == 0
-        assert self.table_decode_tokens_w % self.table_decode_w == 0
-        self.upsample_h = self.table_decode_tokens_h // self.table_decode_h
-        self.upsample_w = self.table_decode_tokens_w // self.table_decode_w
+        assert self.table_decode_h % self.table_decode_tokens_h == 0, (
+            '%i, %i'%(self.table_decode_tokens_h, self.table_decode_h))
+        assert self.table_decode_w % self.table_decode_tokens_w == 0
+        self.upsample_h = self.table_decode_h // self.table_decode_tokens_h
+        self.upsample_w = self.table_decode_w // self.table_decode_tokens_w
         self.table_decode_tokens = (
             self.table_decode_tokens_h * self.table_decode_tokens_w)
         
-        assert self.hand_decode_tokens_h % self.hand_decode_h == 0
-        assert self.hand_decode_tokens_w % self.hand_decode_w == 0
-        assert self.hand_decode_tokens_h//self.hand_decode_h == self.upsample_h
-        assert self.hand_decode_tokens_w//self.hand_decode_w == self.upsample_w
+        assert self.hand_decode_h % self.hand_decode_tokens_h == 0
+        assert self.hand_decode_w % self.hand_decode_tokens_w == 0
+        assert self.hand_decode_h//self.hand_decode_tokens_h == self.upsample_h
+        assert self.hand_decode_w//self.hand_decode_tokens_w == self.upsample_w
         self.hand_decode_tokens = (
             self.hand_decode_tokens_h * self.hand_decode_tokens_w)
         

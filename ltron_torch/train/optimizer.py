@@ -120,8 +120,13 @@ class LinearWarmupCosineDecayScheduler:
     def load_state_dict(self, state_dict):
         self.steps = state_dict['steps']
 
-def build_scheduler(config, optimizer):
+def build_scheduler(config, optimizer, checkpoint=None):
     if config.linear_warmup_cosine_decay:
-        return LinearWarmupCosineDecayScheduler(config, optimizer)
+        scheduler = LinearWarmupCosineDecayScheduler(config, optimizer)
     else:
-        return NoScheduler(config, optimizer)
+        scheduler = NoScheduler(config, optimizer)
+    
+    if checkpoint is not None:
+        scheduler.load_state_dict(checkpoint)
+    
+    return scheduler
