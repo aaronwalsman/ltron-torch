@@ -46,8 +46,7 @@ class BlocksBCConfig(
     num_shapes = 6
     num_colors = 6
     
-    table_channels = 1
-    hand_channels = 1
+    cursor_channels = 1
 
 def train_blocks_bc(config=None):
     if config is None:

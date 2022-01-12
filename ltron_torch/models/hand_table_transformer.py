@@ -43,8 +43,12 @@ class HandTableTransformerConfig(Config):
     hand_h = 96
     hand_w = 96
     
+    table_decode_tokens_h = 16
+    table_decode_tokens_w = 16
     table_decode_h = 64
     table_decode_w = 64
+    hand_decode_tokens_h = 6
+    hand_decode_tokens_w = 6
     hand_decode_h = 24
     hand_decode_w = 24
     
@@ -70,13 +74,11 @@ class HandTableTransformerConfig(Config):
     attention_dropout = 0.1
     content_dropout = 0.1
     
-    table_channels = 2
-    hand_channels = 2
+    cursor_channels = 2
     num_modes = 20
     num_shapes = 6
     num_colors = 6
     
-    model_checkpoint = False
     init_weights = True
     
     def set_dependents(self):
@@ -94,22 +96,38 @@ class HandTableTransformerConfig(Config):
         
         self.spatial_tiles = self.table_tiles + self.hand_tiles
         
+        assert self.table_decode_tokens_h % self.table_decode_h == 0
+        assert self.table_decode_tokens_w % self.table_decode_w == 0
+        self.upsample_h = self.table_decode_tokens_h // self.table_decode_h
+        self.upsample_w = self.table_decode_tokens_w // self.table_decode_w
+        self.table_decode_tokens = (
+            self.table_decode_tokens_h * self.table_decode_tokens_w)
+        
+        assert self.hand_decode_tokens_h % self.hand_decode_h == 0
+        assert self.hand_decode_tokens_w % self.hand_decode_w == 0
+        assert self.hand_decode_tokens_h//self.hand_decode_h == self.upsample_h
+        assert self.hand_decode_tokens_w//self.hand_decode_w == self.upsample_w
+        self.hand_decode_tokens = (
+            self.hand_decode_tokens_h * self.hand_decode_tokens_w)
+        
+        self.decode_tokens = self.table_decode_tokens + self.hand_decode_tokens
+        
         self.table_decoder_pixels = self.table_decode_h * self.table_decode_w
         self.hand_decoder_pixels = self.hand_decode_h * self.hand_decode_w
         self.decoder_pixels = (
             self.table_decoder_pixels + self.hand_decoder_pixels)
         
-        assert self.table_decode_h % self.table_tiles_h == 0
-        assert self.table_decode_w % self.table_tiles_w == 0
-        self.upsample_h = self.table_decode_h // self.table_tiles_h
-        self.upsample_w = self.table_decode_w // self.table_tiles_w
-        assert self.hand_decode_h // self.hand_tiles_h == self.upsample_h
-        assert self.hand_decode_w // self.hand_tiles_w == self.upsample_w
+        #assert self.table_decode_h % self.table_tiles_h == 0
+        #assert self.table_decode_w % self.table_tiles_w == 0
+        #self.upsample_h = self.table_decode_h // self.table_tiles_h
+        #self.upsample_w = self.table_decode_w // self.table_tiles_w
+        #assert self.hand_decode_h // self.hand_tiles_h == self.upsample_h
+        #assert self.hand_decode_w // self.hand_tiles_w == self.upsample_w
         
         #self.global_tokens = self.num_modes + self.num_shapes + self.num_colors
 
 class HandTableTransformer(Module):
-    def __init__(self, config):
+    def __init__(self, config, checkpoint=None):
         super().__init__()
         self.config = config
         
@@ -152,8 +170,10 @@ class HandTableTransformer(Module):
         self.decoder = CrossAttentionDecoder(config)
         
         # initialize weights
-        if config.model_checkpoint:
-            self.load_state_dict(torch.load(config.model_checkpoint))
+        if checkpoint is not None:
+            if isinstance(checkpoint, str):
+                checkpoint = torch.load(checkpoint)
+            self.load_state_dict(checkpoint)
         elif config.init_weights:
             self.apply(init_weights)
     
@@ -199,7 +219,9 @@ class CrossAttentionDecoder(Module):
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
-            config.decoder_channels, config.spatial_tiles+config.global_tokens)
+            config.decoder_channels,
+            config.decode_tokens + config.global_tokens,
+        )
         self.temporal_position_encoding = LearnedPositionalEncoding(
             config.decoder_channels, config.max_sequence_length)
         
@@ -216,15 +238,12 @@ class CrossAttentionDecoder(Module):
         # output
         self.norm = LayerNorm(config.decoder_channels)
         
-        table_upsample_channels = (
-            config.table_channels * config.upsample_h * config.upsample_w)
+        upsample_channels = (
+            config.cursor_channels * config.upsample_h * config.upsample_w)
         self.table_decoder = Linear(
-            config.decoder_channels, table_upsample_channels)
-        
-        hand_upsample_channels = (
-            config.hand_channels * config.upsample_h * config.upsample_w)
+            config.decoder_channels, upsample_channels)
         self.hand_decoder = Linear(
-            config.decoder_channels, hand_upsample_channels)
+            config.decoder_channels, upsample_channels)
         
         #self.mode_decoder = Linear(
         #    config.decoder_channels, config.global_channels)
@@ -259,27 +278,26 @@ class CrossAttentionDecoder(Module):
         # reshape the output
         uh = self.config.upsample_h
         uw = self.config.upsample_w
-        assert self.config.table_channels == self.config.hand_channels
-        uc = self.config.table_channels
+        uc = self.config.cursor_channels
         uhwc = uh*uw*uc
         x = x.view(s, hw, b, c)
         
         # split off the table tokens, upsample and reshape into a rectangle
         table_start = 0
-        table_end = table_start + self.config.table_tiles
+        table_end = table_start + self.config.table_decode_tokens
         table_x = self.table_decoder(x[:,table_start:table_end])
-        th = self.config.table_tiles_h
-        tw = self.config.table_tiles_w
+        th = self.config.table_decode_tokens_h
+        tw = self.config.table_decode_tokens_w
         table_x = table_x.view(s, th, tw, b, uh, uw, uc)
         table_x = table_x.permute(0, 3, 6, 1, 4, 2, 5)
         table_x = table_x.reshape(s, b, uc, th*uh, tw*uw)
         
         # split off the hand tokens, upsample and reshape into a rectangle
         hand_start = table_end
-        hand_end = hand_start + self.config.hand_tiles
+        hand_end = hand_start + self.config.hand_decode_tokens
         hand_x = self.hand_decoder(x[:,hand_start:hand_end])
-        hh = self.config.hand_tiles_h
-        hw = self.config.hand_tiles_w
+        hh = self.config.hand_decode_tokens_h
+        hw = self.config.hand_decode_tokens_w
         hand_x = hand_x.view(s, hh, hw, b, uh, uw, uc)
         hand_x = hand_x.permute(0, 3, 6, 1, 4, 2, 5)
         hand_x = hand_x.reshape(s, b, uc, hh*uh, hw*uw)

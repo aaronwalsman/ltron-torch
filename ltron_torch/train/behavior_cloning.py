@@ -25,7 +25,7 @@ from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
-from ltron_torch.train.optimizer import build_optimizer
+from ltron_torch.train.optimizer import clip_grad
 
 # config definitions ===========================================================
 
@@ -54,6 +54,7 @@ def behavior_cloning(
     config,
     model,
     optimizer,
+    scheduler,
     train_loader,
     test_env,
     interface,
@@ -77,12 +78,13 @@ def behavior_cloning(
             epoch,
             model,
             optimizer,
+            scheduler,
             train_loader,
             interface,
             log,
             clock,
         )
-        save_checkpoint(config, epoch, model, optimizer, log, clock)
+        save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock)
         episodes = test_epoch(
             config, epoch, test_env, model, interface, log, clock)
         if hasattr(interface, 'visualize_episodes'):
@@ -100,6 +102,7 @@ def train_pass(
     epoch,
     model,
     optimizer,
+    scheduler,
     loader,
     interface,
     log,
@@ -126,9 +129,11 @@ def train_pass(
             loss = interface.loss(x, pad, actions, log, clock)
             
             # train ------------------------------------------------------------
-            loss.backward()
-            optimizer.step()
             optimizer.zero_grad()
+            loss.backward()
+            clip_grad(config, model)
+            scheduler.step()
+            optimizer.step()
             
             clock[0] += 1
 
@@ -267,7 +272,7 @@ def visualize_episodes(config, epoch, episodes, interface, log, clock):
         
         interface.visualize_episodes(epoch, episodes, visualization_directory)
 
-def save_checkpoint(config, epoch, model, optimizer, log, clock):
+def save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock):
     frequency = config.checkpoint_frequency
     if frequency and epoch % frequency == 0:
         checkpoint_directory = os.path.join(
@@ -275,13 +280,13 @@ def save_checkpoint(config, epoch, model, optimizer, log, clock):
         if not os.path.exists(checkpoint_directory):
             os.makedirs(checkpoint_directory)
         
+        path = os.path.join(checkpoint_directory, 'checkpoint_%04i.pt')
         print('-'*80)
-        model_path = os.path.join(
-            checkpoint_directory, 'model_%04i.pt'%epoch)
-        print('Saving model to: %s'%model_path)
-        torch.save(model.state_dict(), model_path)
-        
-        optimizer_path = os.path.join(
-            checkpoint_directory, 'optimizer_%04i.pt'%epoch)
-        print('Saving optimizer to: %s'%optimizer_path)
-        torch.save(optimizer.state_dict(), optimizer_path)
+        print('Saving checkpoint to: %s'%path)
+        checkpoint = {
+            'config' : config.as_dict(),
+            'model' : model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+            'scheduler' : optimizer.state_dict(),
+        }
+        torch.save(checkpoint, path)
