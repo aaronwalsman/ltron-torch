@@ -17,8 +17,8 @@ class OptimizerConfig(Config):
     grad_norm_clip = 1.
     
     linear_warmup_cosine_decay = True
-    cosine_decay_start = 5000 # TODO: ?
-    cosine_decay_stop = 25000 # TODO: ?
+    cosine_decay_start = 5000 # TODO: I hope this is good?
+    cosine_decay_stop = 500000 # TODO: I hope this is good too?
     min_learning_rate_scale = 0.1
 
 def build_optimizer(config, model, checkpoint=None):

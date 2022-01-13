@@ -58,7 +58,7 @@ class BreakAndMakeBCConfig(
     model = 'transformer'
     
     load_checkpoint = None
-    use_config_checkpoint = False
+    use_checkpoint_config = False
     
     dataset = 'random_construction_6_6'
     train_split = 'train_episodes'
