@@ -319,7 +319,10 @@ class BreakAndMakeInterface:
                     reward = 0.
                 mode_string += '\nReward: %.04f'%reward
                 
-                joined_image = write_text(joined_image, mode_string)
+                try:
+                    joined_image = write_text(joined_image, mode_string)
+                except OSError:
+                    pass
                 
                 frame_path = os.path.join(
                     seq_path,
