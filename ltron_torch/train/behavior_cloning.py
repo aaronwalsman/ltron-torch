@@ -287,6 +287,6 @@ def save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock):
             'config' : config.as_dict(),
             'model' : model.state_dict(),
             'optimizer' : optimizer.state_dict(),
-            'scheduler' : optimizer.state_dict(),
+            'scheduler' : scheduler.state_dict(),
         }
         torch.save(checkpoint, path)

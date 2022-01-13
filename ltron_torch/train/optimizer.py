@@ -118,7 +118,11 @@ class LinearWarmupCosineDecayScheduler:
         return {'steps':self.steps}
     
     def load_state_dict(self, state_dict):
-        self.steps = state_dict['steps']
+        if 'steps' in state_dict:
+            self.steps = state_dict['steps']
+        else:
+            self.steps = 0
+            print('NO STEPS FOUND, MAKE THIS AN ERROR AGAIN')
 
 def build_scheduler(config, optimizer, checkpoint=None):
     if config.linear_warmup_cosine_decay:
