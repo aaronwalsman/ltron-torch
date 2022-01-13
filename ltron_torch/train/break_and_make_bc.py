@@ -58,6 +58,7 @@ class BreakAndMakeBCConfig(
     model = 'transformer'
     
     load_checkpoint = None
+    use_config_checkpoint = False
     
     dataset = 'random_construction_6_6'
     train_split = 'train_episodes'
@@ -82,7 +83,15 @@ def train_break_and_make_bc(config=None):
         print('-'*80)
         print('Loading Checkpoint')
         checkpoint = torch.load(config.load_checkpoint)
-        if 'config' in checkpoint:
+        # this is bad because it overwrites things specified on the command line
+        # if you want to do this, find a better way, and put it in the Config
+        # class itself (which is hard because the Config class is in ltron and 
+        # doesn't know about pytorch
+        # ok here's the compromise: I just added "use_checkpoint_config" which
+        # turns on this behavior
+        if config.use_checkpoint_config:
+            assert 'config' in checkpoint, (
+                '"config" not found in checkpoint: %s'%config.load_checkpoint)
             config = BreakAndMakeBCConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
         optimizer_checkpoint = checkpoint['optimizer']
