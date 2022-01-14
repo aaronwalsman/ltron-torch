@@ -13,6 +13,7 @@ from ltron.dataset.paths import get_dataset_info, get_dataset_paths
 from ltron_torch.gym_tensor import (
     gym_space_to_tensors, default_tile_transform, default_image_transform, default_image_untransform)
 import pdb
+import json
 
 class rolloutFramesConfig(Config):
     train_split = 'rollouts_frames'
@@ -64,7 +65,7 @@ class rolloutFrames(Dataset):
         class_ids = self.id_mapping(rollout['workspace_mask_render'], rollout['config']['class'])
         color_ids = self.color_mapping(rollout['workspace_mask_render'], rollout['config']['color'])
         stacked_label = numpy.stack([class_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
-        # if numpy.unique(color_ids).shape[0] > 2:
+        # if numpy.unique(color_ids).class[0] > 2:
         #     pdb.set_trace()
         # if numpy.sum(rollout['config']['class'] > 0) > len(numpy.unique(rollout['config']['class']))-1:
         # pdb.set_trace()
@@ -122,8 +123,8 @@ def main():
         # save_image(mask, "test_dataset/test_mask" + str(counter) + ".png")
         # print(numpy.where(label[0, :, :, 0] > 0))
         # print(numpy.where(label[0, :, :, 1] > 0))
-        # print(workspace.shape)
-        # print(label.shape)
+        # print(workspace.class)
+        # print(label.class)
         # print(numpy.unique(label[0, :, :, 0]))
         # print(numpy.unique(label[0, :, :, 1]))
         # print(numpy.unique(label[0, :, :, 2]))
