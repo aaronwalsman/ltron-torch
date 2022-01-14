@@ -41,7 +41,7 @@ class HandTableLSTMConfig(Config):
     hand_shape = (3,3)
 
 class HandTableLSTM(Module):
-    def __init__(self, config):
+    def __init__(self, config, checkpoint=None):
         # intiialization and storage
         super().__init__()
         self.config = config
@@ -124,6 +124,11 @@ class HandTableLSTM(Module):
             config.lstm_hidden_channels,
             global_head_spec,
         )
+        
+        if checkpoint is not None:
+            if isinstance(checkpoint, str):
+                checkpoint = torch.load(checkpoint)
+            self.load_state_dict(checkpoint)
     
     def initialize_memory(self, batch_size):
         device = next(self.parameters()).device

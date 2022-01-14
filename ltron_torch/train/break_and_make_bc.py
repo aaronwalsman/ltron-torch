@@ -20,9 +20,9 @@ from ltron_torch.interface.break_and_make_hand_table_transformer import (
     BreakAndMakeHandTableTransformerInterfaceConfig,
     BreakAndMakeHandTableTransformerInterface,
 )
-#from ltron_torch.interface.break_and_make_hand_table_lstm import (
-#    BreakAndMakeHandTableLSTMInterface,
-#)
+from ltron_torch.interface.break_and_make_hand_table_lstm import (
+    BreakAndMakeHandTableLSTMInterface,
+)
 from ltron_torch.train.optimizer import (
     OptimizerConfig,
     build_optimizer,
@@ -133,7 +133,7 @@ def train_break_and_make_bc(config=None):
     print('-'*80)
     print('Building Test Env')
     test_config = BreakAndMakeBCConfig.translate(config, split='test_split')
-    test_env = sync_ltron(
+    test_env = async_ltron(
         config.num_test_envs,
         BreakAndMakeEnv,
         test_config,
