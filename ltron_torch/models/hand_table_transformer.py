@@ -43,8 +43,12 @@ class HandTableTransformerConfig(Config):
     hand_h = 96
     hand_w = 96
     
+    table_decode_tokens_h = 16
+    table_decode_tokens_w = 16
     table_decode_h = 64
     table_decode_w = 64
+    hand_decode_tokens_h = 6
+    hand_decode_tokens_w = 6
     hand_decode_h = 24
     hand_decode_w = 24
     
@@ -70,12 +74,11 @@ class HandTableTransformerConfig(Config):
     attention_dropout = 0.1
     content_dropout = 0.1
     
-    spatial_channels = 2
+    cursor_channels = 2
     num_modes = 20
     num_shapes = 6
     num_colors = 6
     
-    model_checkpoint = False
     init_weights = True
     
     def set_dependents(self):
@@ -93,22 +96,39 @@ class HandTableTransformerConfig(Config):
         
         self.spatial_tiles = self.table_tiles + self.hand_tiles
         
+        assert self.table_decode_h % self.table_decode_tokens_h == 0, (
+            '%i, %i'%(self.table_decode_tokens_h, self.table_decode_h))
+        assert self.table_decode_w % self.table_decode_tokens_w == 0
+        self.upsample_h = self.table_decode_h // self.table_decode_tokens_h
+        self.upsample_w = self.table_decode_w // self.table_decode_tokens_w
+        self.table_decode_tokens = (
+            self.table_decode_tokens_h * self.table_decode_tokens_w)
+        
+        assert self.hand_decode_h % self.hand_decode_tokens_h == 0
+        assert self.hand_decode_w % self.hand_decode_tokens_w == 0
+        assert self.hand_decode_h//self.hand_decode_tokens_h == self.upsample_h
+        assert self.hand_decode_w//self.hand_decode_tokens_w == self.upsample_w
+        self.hand_decode_tokens = (
+            self.hand_decode_tokens_h * self.hand_decode_tokens_w)
+        
+        self.decode_tokens = self.table_decode_tokens + self.hand_decode_tokens
+        
         self.table_decoder_pixels = self.table_decode_h * self.table_decode_w
         self.hand_decoder_pixels = self.hand_decode_h * self.hand_decode_w
         self.decoder_pixels = (
             self.table_decoder_pixels + self.hand_decoder_pixels)
         
-        assert self.table_decode_h % self.table_tiles_h == 0
-        assert self.table_decode_w % self.table_tiles_w == 0
-        self.upsample_h = self.table_decode_h // self.table_tiles_h
-        self.upsample_w = self.table_decode_w // self.table_tiles_w
-        assert self.hand_decode_h // self.hand_tiles_h == self.upsample_h
-        assert self.hand_decode_w // self.hand_tiles_w == self.upsample_w
+        #assert self.table_decode_h % self.table_tiles_h == 0
+        #assert self.table_decode_w % self.table_tiles_w == 0
+        #self.upsample_h = self.table_decode_h // self.table_tiles_h
+        #self.upsample_w = self.table_decode_w // self.table_tiles_w
+        #assert self.hand_decode_h // self.hand_tiles_h == self.upsample_h
+        #assert self.hand_decode_w // self.hand_tiles_w == self.upsample_w
         
         #self.global_tokens = self.num_modes + self.num_shapes + self.num_colors
 
 class HandTableTransformer(Module):
-    def __init__(self, config):
+    def __init__(self, config, checkpoint=None):
         super().__init__()
         self.config = config
         
@@ -151,8 +171,10 @@ class HandTableTransformer(Module):
         self.decoder = CrossAttentionDecoder(config)
         
         # initialize weights
-        if config.model_checkpoint:
-            self.load_state_dict(torch.load(config.model_checkpoint))
+        if checkpoint is not None:
+            if isinstance(checkpoint, str):
+                checkpoint = torch.load(checkpoint)
+            self.load_state_dict(checkpoint)
         elif config.init_weights:
             self.apply(init_weights)
     
@@ -198,7 +220,9 @@ class CrossAttentionDecoder(Module):
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
-            config.decoder_channels, config.spatial_tiles+config.global_tokens)
+            config.decoder_channels,
+            config.decode_tokens + config.global_tokens,
+        )
         self.temporal_position_encoding = LearnedPositionalEncoding(
             config.decoder_channels, config.max_sequence_length)
         
@@ -212,17 +236,15 @@ class CrossAttentionDecoder(Module):
         )
         self.block = TransformerBlock(decoder_config)
         
-        upsample_spatial_channels = (
-            config.spatial_channels * config.upsample_h * config.upsample_w)
-        
         # output
         self.norm = LayerNorm(config.decoder_channels)
         
+        upsample_channels = (
+            config.cursor_channels * config.upsample_h * config.upsample_w)
         self.table_decoder = Linear(
-            config.decoder_channels, upsample_spatial_channels)
-        
+            config.decoder_channels, upsample_channels)
         self.hand_decoder = Linear(
-            config.decoder_channels, upsample_spatial_channels)
+            config.decoder_channels, upsample_channels)
         
         #self.mode_decoder = Linear(
         #    config.decoder_channels, config.global_channels)
@@ -257,26 +279,26 @@ class CrossAttentionDecoder(Module):
         # reshape the output
         uh = self.config.upsample_h
         uw = self.config.upsample_w
-        uc = self.config.spatial_channels
+        uc = self.config.cursor_channels
         uhwc = uh*uw*uc
         x = x.view(s, hw, b, c)
         
         # split off the table tokens, upsample and reshape into a rectangle
         table_start = 0
-        table_end = table_start + self.config.table_tiles
+        table_end = table_start + self.config.table_decode_tokens
         table_x = self.table_decoder(x[:,table_start:table_end])
-        th = self.config.table_tiles_h
-        tw = self.config.table_tiles_w
+        th = self.config.table_decode_tokens_h
+        tw = self.config.table_decode_tokens_w
         table_x = table_x.view(s, th, tw, b, uh, uw, uc)
         table_x = table_x.permute(0, 3, 6, 1, 4, 2, 5)
         table_x = table_x.reshape(s, b, uc, th*uh, tw*uw)
         
         # split off the hand tokens, upsample and reshape into a rectangle
         hand_start = table_end
-        hand_end = hand_start + self.config.hand_tiles
+        hand_end = hand_start + self.config.hand_decode_tokens
         hand_x = self.hand_decoder(x[:,hand_start:hand_end])
-        hh = self.config.hand_tiles_h
-        hw = self.config.hand_tiles_w
+        hh = self.config.hand_decode_tokens_h
+        hw = self.config.hand_decode_tokens_w
         hand_x = hand_x.view(s, hh, hw, b, uh, uw, uc)
         hand_x = hand_x.permute(0, 3, 6, 1, 4, 2, 5)
         hand_x = hand_x.reshape(s, b, uc, hh*uh, hw*uw)
@@ -301,323 +323,3 @@ class CrossAttentionDecoder(Module):
         #color_x = global_x['color']
         
         return x
-
-class BreakAndMakeTransformerInterface:
-    def __init__(self, model, config):
-        self.config = config
-        self.model = model
-    
-    def observation_to_tensors(self, observation, pad):
-        device = next(self.model.parameters()).device
-        
-        # process table tiles
-        table_tiles, table_tyx, table_pad = batch_deduplicate_tiled_seqs(
-            observation['workspace_color_render'],
-            pad,
-            self.config.tile_h,
-            self.config.tile_w,
-            background=102,
-        )
-        table_pad = torch.LongTensor(table_pad).to(device)
-        table_tiles = default_tile_transform(table_tiles).to(device)
-        table_t = torch.LongTensor(table_tyx[...,0]).to(device)
-        table_yx = torch.LongTensor(
-            table_tyx[...,1] *
-            self.config.table_tiles_w +
-            table_tyx[...,2],
-        ).to(device)
-        
-        # processs hand tiles
-        hand_tiles, hand_tyx, hand_pad = batch_deduplicate_tiled_seqs(
-            observation['handspace_color_render'],
-            pad,
-            self.config.tile_h,
-            self.config.tile_w,
-            background=102,
-        )
-        hand_pad = torch.LongTensor(hand_pad).to(device)
-        hand_tiles = default_tile_transform(hand_tiles).to(device)
-        hand_t = torch.LongTensor(hand_tyx[...,0]).to(device)
-        hand_yx = torch.LongTensor(
-            hand_tyx[...,1] *
-            self.config.hand_tiles_w +
-            hand_tyx[...,2] +
-            self.config.table_tiles,
-        ).to(device)
-        
-        # cat table and hand ties
-        tile_x, tile_pad = cat_padded_seqs(
-            table_tiles, hand_tiles, table_pad, hand_pad)
-        tile_t, _ = cat_padded_seqs(table_t, hand_t, table_pad, hand_pad)
-        tile_yx, _ = cat_padded_seqs(table_yx, hand_yx, table_pad, hand_pad)
-        
-        # process tokens
-        token_x = torch.LongTensor(observation['phase_switch']).to(device)
-        s = numpy.max(pad)
-        b, = pad.shape
-        
-        token_t = torch.arange(s).view(s, 1).expand(s, b).contiguous().to(
-            device)
-        token_pad = torch.LongTensor(pad).to(device)
-        
-        # step
-        decode_t = torch.LongTensor(observation['step']).to(device)
-        decode_pad = token_pad
-        
-        return (
-            tile_x, tile_t, tile_yx, tile_pad,
-            token_x, token_t, token_pad,
-            decode_t, decode_pad,
-        )
-    
-    def loss(self, x, pad, y, log=None, clock=None):
-        pass
-    
-    def tensor_to_actions(self, x, env, mode='sample'):
-        pass
-    
-    def visualize_episodes(self, epoch, episodes, visualization_directory):
-        pass
-    
-    def eval_episodes(self, episodes, log, clock):
-        pass
-
-#class BlocksTransformerInterface:
-#    def __init__(self, model, config):
-#        self.config = config
-#        self.model = model
-#    
-#    def observation_to_tensors(self, observation, pad):
-#        # get the device
-#        device = next(self.model.parameters()).device
-#        
-#        # process table tiles
-#        table_tiles, table_tyx, table_pad = batch_deduplicate_from_masks(
-#            observation['table_render'],
-#            observation['table_tile_mask'],
-#            observation['step'],
-#            pad,
-#        )
-#        
-#        table_pad = torch.LongTensor(table_pad).to(device)
-#        table_tiles = default_tile_transform(table_tiles).to(device)
-#        table_t = torch.LongTensor(table_tyx[...,0]).to(device)
-#        table_yx = torch.LongTensor(
-#            table_tyx[...,1] *
-#            self.config.table_tiles_w +
-#            table_tyx[...,2],
-#        ).to(device)
-#        
-#        # processs hand tiles
-#        hand_tiles, hand_tyx, hand_pad = batch_deduplicate_from_masks(
-#            observation['hand_render'],
-#            observation['hand_tile_mask'],
-#            observation['step'],
-#            pad,
-#        )
-#        
-#        hand_pad = torch.LongTensor(hand_pad).to(device)
-#        hand_tiles = default_tile_transform(hand_tiles).to(device)
-#        hand_t = torch.LongTensor(hand_tyx[...,0]).to(device)
-#        hand_yx = torch.LongTensor(
-#            hand_tyx[...,1] *
-#            self.config.hand_tiles_w +
-#            hand_tyx[...,2] +
-#            self.config.table_tiles,
-#        ).to(device)
-#        
-#        # cat table and hand ties
-#        tile_x, tile_pad = cat_padded_seqs(
-#            table_tiles, hand_tiles, table_pad, hand_pad)
-#        tile_t, _ = cat_padded_seqs(table_t, hand_t, table_pad, hand_pad)
-#        tile_yx, _ = cat_padded_seqs(table_yx, hand_yx, table_pad, hand_pad)
-#        
-#        # process token x/t/pad
-#        token_x = torch.LongTensor(observation['phase']).to(device)
-#        token_t = torch.LongTensor(observation['step']).to(device)
-#        token_pad = torch.LongTensor(pad).to(device)
-#        
-#        # process decode t/pad
-#        decode_t = token_t
-#        decode_pad = token_pad
-#        
-#        return (
-#            tile_x, tile_t, tile_yx, tile_pad,
-#            token_x, token_t, token_pad,
-#            decode_t, decode_pad,
-#        )
-#    
-#    def loss(self, x, pad, y, log=None, clock=None):
-#        # split out the components of x
-#        #x_table, x_hand, x_mode_shape_color = x
-#        #num_shapes = len(self.config.block_shapes)
-#        #num_colors = len(self.config.block_colors)
-#        #s, b = x_mode_shape_color.shape[:2]
-#        #x_mode = x_mode_shape_color[..., 0:6].view(s, b, 6)
-#        #x_shape = x_mode_shape_color[..., 6:6+num_shapes].view(s, b, num_shapes)
-#        #x_color = x_mode_shape_color[
-#        #    ..., 6+num_shapes:6+num_shapes+num_colors].view(s, b, num_colors)
-#        x_table, x_hand, x_mode, x_shape, x_color = x
-#        
-#        pad = torch.LongTensor(pad).to(x_mode.device)
-#        pad_mask = make_padding_mask(pad, (s,b))
-#        
-#        # mode supervision
-#        y_mode = torch.LongTensor(y['mode']).to(x_mode.device)
-#        mode_loss = torch.nn.functional.cross_entropy(
-#            x_mode.view(-1,6), y_mode.view(-1), reduction='none')
-#        mode_loss = mode_loss.view(s,b) * ~pad_mask
-#        mode_loss = mode_loss.mean() * self.config.mode_loss_weight
-#        
-#        # table supervision
-#        h, w = x_table.shape[2:4]
-#        table_entries = ((y_mode == 0) | (y_mode == 1)).view(-1)
-#        x_table = x_table.view(s*b, h*w)[table_entries]
-#        y_table_y = torch.LongTensor(y['table_cursor'][:,:,0])
-#        y_table_x = torch.LongTensor(y['table_cursor'][:,:,1])
-#        y_table = (y_table_y * w + y_table_x).view(-1)[table_entries]
-#        y_table = y_table.to(x_table.device)
-#        table_loss = torch.nn.functional.cross_entropy(x_table, y_table)
-#        table_loss = table_loss * self.config.table_loss_weight
-#        
-#        # hand supervision
-#        h, w = x_hand.shape[2:4]
-#        hand_entries = (y_mode == 1).view(-1)
-#        x_hand = x_hand.view(s*b, h*w)[hand_entries]
-#        y_hand_y = torch.LongTensor(y['hand_cursor'][:,:,0])
-#        y_hand_x = torch.LongTensor(y['hand_cursor'][:,:,1])
-#        y_hand = (y_hand_y * w + y_hand_x).view(-1)[hand_entries]
-#        y_hand = y_hand.to(x_hand.device)
-#        hand_loss = torch.nn.functional.cross_entropy(x_hand, y_hand)
-#        hand_loss = hand_loss * self.config.hand_loss_weight
-#        
-#        # shape supervision
-#        shape_entries = (y_mode == 2).view(-1)
-#        x_shape = x_shape.view(s*b, num_shapes)[shape_entries]
-#        y_shape = torch.LongTensor(y['shape']).view(-1)[shape_entries]
-#        y_shape = y_shape.to(x_shape.device)
-#        shape_loss = torch.nn.functional.cross_entropy(x_shape, y_shape)
-#        shape_loss = shape_loss * self.config.shape_loss_weight
-#        
-#        # color supervision
-#        color_entries = (y_mode == 2).view(-1)
-#        x_color = x_color.view(s*b, num_colors)[color_entries]
-#        y_color = torch.LongTensor(y['color']).view(-1)[color_entries]
-#        y_color = y_color.to(x_color.device)
-#        color_loss = torch.nn.functional.cross_entropy(x_color, y_color)
-#        color_loss = color_loss * self.config.color_loss_weight
-#        
-#        loss = mode_loss + table_loss + hand_loss + shape_loss + color_loss
-#        
-#        if log is not None:
-#            log.add_scalar('train/mode_loss', mode_loss, clock[0])
-#            log.add_scalar('train/table_loss', table_loss, clock[0])
-#            log.add_scalar('train/hand_loss', hand_loss, clock[0])
-#            log.add_scalar('train/shape_loss', shape_loss, clock[0])
-#            log.add_scalar('train/color_loss', color_loss, clock[0])
-#            log.add_scalar('train/total_loss', loss, clock[0])
-#        
-#        return loss
-#    
-#    def forward_rollout(self, terminal, *x):
-#        use_memory = torch.BoolTensor(~terminal).to(x[0].device)
-#        return self.model(*x, use_memory=use_memory)
-#    
-#    def tensor_to_actions(self, x, env, mode='sample'):
-#        #x_table, x_hand, x_mode_shape_color = x
-#        #num_shapes = len(self.config.block_shapes)
-#        #num_colors = len(self.config.block_colors)
-#        #s, b = x_mode_shape_color.shape[:2]
-#        #assert s == 1
-#        #x_mode = x_mode_shape_color[..., 0:6].view(b, 6)
-#        #x_shape = x_mode_shape_color[..., 6:6+num_shapes].view(b, num_shapes)
-#        #x_color = x_mode_shape_color[
-#        #    ..., 6+num_shapes:6+num_shapes+num_colors].view(b, num_colors)
-#        x_table, x_hand, x_mode, x_shape, x_color = x
-#        
-#        mode_action = categorical_or_max(x_mode, mode=mode).cpu().numpy()
-#        shape_action = categorical_or_max(x_shape, mode=mode).cpu().numpy()
-#        color_action = categorical_or_max(x_color, mode=mode).cpu().numpy()
-#        
-#        s, b, h, w, c = x_table.shape
-#        x_table = x_table.view(b, 1, h, w)
-#        table_y, table_x = categorical_or_max_2d(x_table, mode=mode)
-#        table_y = table_y.cpu().numpy()
-#        table_x = table_x.cpu().numpy()
-#        
-#        s, b, h, w, c = x_hand.shape
-#        x_hand = x_hand.view(b, 1, h, w)
-#        hand_y, hand_x = categorical_or_max_2d(x_hand, mode=mode)
-#        hand_y = hand_y.cpu().numpy()
-#        hand_x = hand_x.cpu().numpy()
-#        
-#        actions = []
-#        for i in range(b):
-#            action = BlocksEnv.no_op_action()
-#            action['mode'] = mode_action[i]
-#            action['shape'] = shape_action[i]
-#            action['color'] = color_action[i]
-#            action['table_cursor'] = numpy.array([table_y[i], table_x[i]])
-#            action['hand_cursor'] = numpy.array([hand_y[i], hand_x[i]])
-#            actions.append(action)
-#        
-#        return actions
-#    
-#    def visualize_episodes(self, epoch, episodes, visualization_directory):
-#        num_seqs = min(
-#            self.config.visualization_seqs, episodes.num_seqs())
-#        for seq_id in tqdm.tqdm(range(num_seqs)):
-#            seq_path = os.path.join(
-#                visualization_directory, 'seq_%06i'%seq_id)
-#            if not os.path.exists(seq_path):
-#                os.makedirs(seq_path)
-#            
-#            seq = episodes.get_seq(seq_id)
-#            seq_len = len_hierarchy(seq)
-#            table_frames = seq['observation']['table_render']
-#            hand_frames = seq['observation']['hand_render']
-#            for frame_id in range(seq_len):
-#                table_frame = table_frames[frame_id]
-#                hand_frame = hand_frames[frame_id]
-#                th, tw = table_frame.shape[:2]
-#                hh, hw = hand_frame.shape[:2]
-#                w = tw + hw
-#                joined_image = numpy.zeros((th, w, 3), dtype=numpy.uint8)
-#                joined_image[:,:tw] = table_frame
-#                joined_image[th-hh:,tw:] = hand_frame
-#                
-#                frame_action = index_hierarchy(seq['action'], frame_id)
-#                frame_mode = int(frame_action['mode'])
-#                frame_shape_id = int(frame_action['shape'])
-#                frame_color_id = int(frame_action['color'])
-#                ty, tx = frame_action['table_cursor']
-#                ty = int(ty)
-#                tx = int(tx)
-#                hy, hx = frame_action['hand_cursor']
-#                hy = int(hy)
-#                hx = int(hx)
-#                
-#                joined_image[ty*4:(ty+1)*4, tx*4:(tx+1)*4] = (0,0,0)
-#                yy = th - hh
-#                joined_image[
-#                    yy+hy*4:yy+(hy+1)*4, tw+(hx)*4:tw+(hx+1)*4] = (0,0,0)
-#                
-#                mode_string = 'Mode: %s'%([
-#                    'disassemble',
-#                    'place',
-#                    'pick-up',
-#                    'make',
-#                    'end',
-#                    'no-op'][frame_mode])
-#                shape_string = 'Shape: %s'%str(
-#                    self.config.block_shapes[frame_shape_id])
-#                color_string = 'Color: %s'%str(
-#                    self.config.block_colors[frame_shape_id])
-#                lines = (mode_string, shape_string, color_string)
-#                joined_image = write_text(joined_image, '\n'.join(lines))
-#                
-#                frame_path = os.path.join(
-#                    seq_path,
-#                    'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
-#                )
-#                save_image(joined_image, frame_path)

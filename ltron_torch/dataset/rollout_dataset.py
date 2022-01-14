@@ -44,7 +44,7 @@ class rolloutFrames(Dataset):
     def __init__(self, dataset, split, subset, transform=None):
 
         self.transform = transform
-        self.workspace = []
+        self.table = []
         # self.pos_snap = []
         # self.neg_snap = []
         # self.mask = []
@@ -59,13 +59,13 @@ class rolloutFrames(Dataset):
         
         path = self.rollout_paths[i]
         rollout = numpy.load(path, allow_pickle=True)['rollout'].item()
-        workspace = rollout['workspace_color_render']
-        pos_snap_reduced = numpy.where(rollout['workspace_pos_snap_render'][:, :, 0] > 0, 1, 0)
-        neg_snap_reduced = numpy.where(rollout['workspace_neg_snap_render'][:, :, 0] > 0, 1, 0)
-        class_ids = self.id_mapping(rollout['workspace_mask_render'], rollout['config']['class'])
-        color_ids = self.color_mapping(rollout['workspace_mask_render'], rollout['config']['color'])
+        table = rollout['table_color_render']
+        pos_snap_reduced = numpy.where(rollout['table_pos_snap_render'][:, :, 0] > 0, 1, 0)
+        neg_snap_reduced = numpy.where(rollout['table_neg_snap_render'][:, :, 0] > 0, 1, 0)
+        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['config']['shape'])
+        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['config']['color'])
         stacked_label = numpy.stack([class_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
-        # if numpy.unique(color_ids).class[0] > 2:
+        # if numpy.unique(color_ids).shape[0] > 2:
         #     pdb.set_trace()
         # if numpy.sum(rollout['config']['class'] > 0) > len(numpy.unique(rollout['config']['class']))-1:
         # pdb.set_trace()
@@ -76,10 +76,10 @@ class rolloutFrames(Dataset):
         #     pdb.set_trace()
 
         if self.transform is not None:
-            workspace = self.transform(workspace)
-            return workspace, stacked_label
+            table = self.transform(table)
+            return table, stacked_label
 
-        return workspace, stacked_label
+        return table, stacked_label
 
 def build_rolloutFrames_train_loader(config, batch_overload=None):
     print('-'*80)
@@ -123,8 +123,8 @@ def main():
         # save_image(mask, "test_dataset/test_mask" + str(counter) + ".png")
         # print(numpy.where(label[0, :, :, 0] > 0))
         # print(numpy.where(label[0, :, :, 1] > 0))
-        # print(workspace.class)
-        # print(label.class)
+        # print(workspace.shape)
+        # print(label.shape)
         # print(numpy.unique(label[0, :, :, 0]))
         # print(numpy.unique(label[0, :, :, 1]))
         # print(numpy.unique(label[0, :, :, 2]))

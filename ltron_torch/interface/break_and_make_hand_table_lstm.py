@@ -10,21 +10,16 @@ import tqdm
 from splendor.image import save_image
 
 from ltron.hierarchy import len_hierarchy, index_hierarchy
-from ltron.gym.envs.blocks_env import BlocksEnv
 from ltron.visualization.drawing import write_text
 
 from ltron_torch.gym_tensor import default_image_transform
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.interface.utils import (
     categorical_or_max, categorical_or_max_2d)
-from ltron_torch.interface.blocks import BlocksInterface
+from ltron_torch.interface.break_and_make import BreakAndMakeInterface
 
-class BlocksHandTableLSTMInterface(BlocksInterface):
-    def __init__(self, model, config):
-        self.model = model
-        self.config = config
-    
-    def observation_to_tensors(self, observation, pad):
+class BreakAndMakeHandTableLSTMInterface(BreakAndMakeInterface):
+    def observation_to_tensors(self, observation, pad, train_mode):
         # get the device
         device = next(self.model.parameters()).device
         

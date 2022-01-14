@@ -25,7 +25,7 @@ from ltron.visualization.drawing import write_text
 
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
-from ltron_torch.train.optimizer import build_optimizer
+from ltron_torch.train.optimizer import clip_grad
 
 # config definitions ===========================================================
 
@@ -33,8 +33,9 @@ class BehaviorCloningConfig(Config):
     start_epoch = 1
     epochs = 10
     batch_size = 4
-    test_envs = 4
+    num_test_envs = 4
     
+    train_frequency = 1
     test_frequency = 1
     checkpoint_frequency = 10
     visualization_frequency = 1
@@ -43,7 +44,7 @@ class BehaviorCloningConfig(Config):
     
     def set_dependents(self):
         self.test_batch_rollout_steps_per_epoch = (
-            self.test_rollout_steps_per_epoch // self.test_envs
+            self.test_rollout_steps_per_epoch // self.num_test_envs
         )
 
 
@@ -53,6 +54,7 @@ def behavior_cloning(
     config,
     model,
     optimizer,
+    scheduler,
     train_loader,
     test_env,
     interface,
@@ -72,8 +74,17 @@ def behavior_cloning(
         print('Epoch: %i'%epoch)
         
         train_pass(
-            config, model, optimizer, train_loader, interface, log, clock)
-        save_checkpoint(config, epoch, model, optimizer, log, clock)
+            config,
+            epoch,
+            model,
+            optimizer,
+            scheduler,
+            train_loader,
+            interface,
+            log,
+            clock,
+        )
+        save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock)
         episodes = test_epoch(
             config, epoch, test_env, model, interface, log, clock)
         if hasattr(interface, 'visualize_episodes'):
@@ -88,40 +99,49 @@ def behavior_cloning(
 
 def train_pass(
     config,
+    epoch,
     model,
     optimizer,
+    scheduler,
     loader,
     interface,
     log,
     clock,
 ):
-    
-    model.train()
-    
-    for batch, pad in tqdm.tqdm(loader):
+    frequency = config.train_frequency
+    if frequency and epoch % frequency == 0:
+        print('-'*80)
+        print('Training')
+        model.train()
         
-        observations = batch['observations']
-        actions = batch['actions']
-        
-        # convert observations to model tensors --------------------------------
-        x = interface.observation_to_tensors(observations, pad)
-        
-        # forward --------------------------------------------------------------
-        x = model(*x)
-        
-        # loss -----------------------------------------------------------------
-        loss = interface.loss(x, pad, actions, log, clock)
-        
-        # train ----------------------------------------------------------------
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        
-        clock[0] += 1
+        for batch, pad in tqdm.tqdm(loader):
+            
+            observations = batch['observations']
+            actions = batch['actions']
+            
+            # convert observations to model tensors ----------------------------
+            x = interface.observation_to_tensors(observations, pad, 'train')
+            
+            # forward ----------------------------------------------------------
+            x = model(*x)
+            
+            # loss -------------------------------------------------------------
+            loss = interface.loss(x, pad, actions, log, clock)
+            
+            # train ------------------------------------------------------------
+            optimizer.zero_grad()
+            loss.backward()
+            clip_grad(config, model)
+            scheduler.step()
+            optimizer.step()
+            
+            clock[0] += 1
 
 def test_epoch(config, epoch, test_env, model, interface, log, clock):
     frequency = config.test_frequency
     if frequency and epoch % frequency == 0:
+        print('-'*80)
+        print('Testing')
         episodes = rollout_epoch(
             config, test_env, model, interface, 'test', log, clock)
         
@@ -161,9 +181,9 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
     
     # initialize storage for observations, actions and rewards
     if train_mode == 'test':
-        num_envs = config.test_envs
+        num_envs = config.num_test_envs
     elif train_mode == 'train':
-        num_envs = config.train_envs
+        num_envs = config.num_train_envs
     observation_storage = RolloutStorage(num_envs)
     action_reward_storage = RolloutStorage(num_envs)
     
@@ -203,7 +223,7 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             # move observations to torch and cuda
             pad = numpy.ones(b, dtype=numpy.long)
             observation = stack_numpy_hierarchies(observation)
-            x = interface.observation_to_tensors(observation, pad)
+            x = interface.observation_to_tensors(observation, pad, train_mode)
             
             # compute actions --------------------------------------------------
             if hasattr(model, 'initialize_memory'):
@@ -252,7 +272,7 @@ def visualize_episodes(config, epoch, episodes, interface, log, clock):
         
         interface.visualize_episodes(epoch, episodes, visualization_directory)
 
-def save_checkpoint(config, epoch, model, optimizer, log, clock):
+def save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock):
     frequency = config.checkpoint_frequency
     if frequency and epoch % frequency == 0:
         checkpoint_directory = os.path.join(
@@ -260,13 +280,13 @@ def save_checkpoint(config, epoch, model, optimizer, log, clock):
         if not os.path.exists(checkpoint_directory):
             os.makedirs(checkpoint_directory)
         
+        path = os.path.join(checkpoint_directory, 'checkpoint_%04i.pt'%epoch)
         print('-'*80)
-        model_path = os.path.join(
-            checkpoint_directory, 'model_%04i.pt'%epoch)
-        print('Saving model to: %s'%model_path)
-        torch.save(model.state_dict(), model_path)
-        
-        optimizer_path = os.path.join(
-            checkpoint_directory, 'optimizer_%04i.pt'%epoch)
-        print('Saving optimizer to: %s'%optimizer_path)
-        torch.save(optimizer.state_dict(), optimizer_path)
+        print('Saving checkpoint to: %s'%path)
+        checkpoint = {
+            'config' : config.as_dict(),
+            'model' : model.state_dict(),
+            'optimizer' : optimizer.state_dict(),
+            'scheduler' : scheduler.state_dict(),
+        }
+        torch.save(checkpoint, path)

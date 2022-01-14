@@ -8,7 +8,6 @@ from torch.distributions import Categorical
 from ltron.compression import batch_deduplicate_tiled_seqs
 from ltron.dataset.paths import get_dataset_info
 from ltron.hierarchy import index_hierarchy
-from ltron.bricks.brick_type import BrickType
 from ltron.gym.envs.reassembly_env import reassembly_template_action
 
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask

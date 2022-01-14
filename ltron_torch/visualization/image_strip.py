@@ -181,7 +181,7 @@ def offset_image(
     #large_image = Image.fromarray(large_image)
     #draw = ImageDraw.Draw(large_image)
     
-    from skimage.draw import line
+#    from skimage.draw import line
     
     h, w = offsets.shape[-2:]
     for y in range(h):
