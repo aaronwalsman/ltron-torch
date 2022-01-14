@@ -120,7 +120,7 @@ def train_pass(
             actions = batch['actions']
             
             # convert observations to model tensors ----------------------------
-            x = interface.observation_to_tensors(observations, pad)
+            x = interface.observation_to_tensors(observations, pad, 'train')
             
             # forward ----------------------------------------------------------
             x = model(*x)
@@ -223,7 +223,7 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             # move observations to torch and cuda
             pad = numpy.ones(b, dtype=numpy.long)
             observation = stack_numpy_hierarchies(observation)
-            x = interface.observation_to_tensors(observation, pad)
+            x = interface.observation_to_tensors(observation, pad, train_mode)
             
             # compute actions --------------------------------------------------
             if hasattr(model, 'initialize_memory'):

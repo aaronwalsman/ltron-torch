@@ -24,7 +24,7 @@ class BreakAndMakeHandTableTransformerInterfaceConfig(
     shift_images = True
 
 class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
-    def observation_to_tensors(self, observation, pad):
+    def observation_to_tensors(self, observation, pad, train_mode):
         # get the device
         device = next(self.model.parameters()).device
         
@@ -75,22 +75,23 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         token_pad = torch.LongTensor(pad).to(device)
         
         # augmentations
-        if self.config.simulate_misclick:
-            b = tile_t.shape[1]
-            max_t = max(
-                torch.max(tile_t),
-                torch.max(token_t),
-            )
-            for i in range(b):
-                shift_map = torch.arange(max_t+1)
-                for j in range(max_t+1):
-                    if random.random() < self.config.simulate_misclick:
-                        shift_map[j:] += 1
-                tile_t[:,i] = shift_map[tile_t[:,i]]
-                token_t[:,i] = shift_map[token_t[:,i]]
-        
-        if self.config.shift_images:
-            pass
+        if train_mode == 'train':
+            if self.config.simulate_misclick:
+                b = tile_t.shape[1]
+                max_t = max(
+                    torch.max(tile_t),
+                    torch.max(token_t),
+                )
+                for i in range(b):
+                    shift_map = torch.arange(max_t+1)
+                    for j in range(max_t+1):
+                        if random.random() < self.config.simulate_misclick:
+                            shift_map[j:] += 1
+                    tile_t[:,i] = shift_map[tile_t[:,i]]
+                    token_t[:,i] = shift_map[token_t[:,i]]
+            
+            if self.config.shift_images:
+                pass
         
         # process decode t/pad
         decode_t = token_t
