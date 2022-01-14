@@ -4,9 +4,10 @@ from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
 from ltron.gym.envs.break_and_make_env import (
     BreakAndMakeEnvConfig, BreakAndMakeEnv)
 
-from ltron_torch.dataset.episode_dataset import (
-    EpisodeDatasetConfig, build_episode_loader,
+from ltron_torch.dataset.break_and_make_dataset import (
+    BreakAndMakeDatasetConfig, BreakAndMakeDataset
 )
+from ltron_torch.dataset.episode_dataset import build_episode_loader
 from ltron_torch.models.hand_table_transformer import (
     HandTableTransformerConfig,
     HandTableTransformer,
@@ -15,8 +16,8 @@ from ltron_torch.models.hand_table_lstm import (
     HandTableLSTMConfig,
     HandTableLSTM,
 )
-from ltron_torch.interface.break_and_make import BreakAndMakeInterfaceConfig
 from ltron_torch.interface.break_and_make_hand_table_transformer import (
+    BreakAndMakeHandTableTransformerInterfaceConfig,
     BreakAndMakeHandTableTransformerInterface,
 )
 #from ltron_torch.interface.break_and_make_hand_table_lstm import (
@@ -46,9 +47,9 @@ from ltron_torch.train.behavior_cloning import (
 # overrides method or something?  Whatever, avoid the issue for now.
 
 class BreakAndMakeBCConfig(
-    EpisodeDatasetConfig,
+    BreakAndMakeDatasetConfig,
     BreakAndMakeEnvConfig,
-    BreakAndMakeInterfaceConfig,
+    BreakAndMakeHandTableTransformerInterfaceConfig,
     HandTableTransformerConfig,
     HandTableLSTMConfig,
     OptimizerConfig,
@@ -126,7 +127,8 @@ def train_break_and_make_bc(config=None):
     print('-'*80)
     print('Building Data Loader')
     train_config = BreakAndMakeBCConfig.translate(config, split='train_split')
-    train_loader = build_episode_loader(train_config)
+    train_dataset = BreakAndMakeDataset(train_config)
+    train_loader = build_episode_loader(train_config, train_dataset)
 
     print('-'*80)
     print('Building Test Env')

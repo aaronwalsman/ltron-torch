@@ -1,3 +1,4 @@
+import random
 import os
 
 import numpy
@@ -11,7 +12,16 @@ from ltron.compression import batch_deduplicate_from_masks
 
 from ltron_torch.gym_tensor import default_tile_transform
 from ltron_torch.models.padding import cat_padded_seqs
-from ltron_torch.interface.break_and_make import BreakAndMakeInterface
+from ltron_torch.interface.break_and_make import (
+    BreakAndMakeInterfaceConfig,
+    BreakAndMakeInterface,
+)
+
+class BreakAndMakeHandTableTransformerInterfaceConfig(
+    BreakAndMakeInterfaceConfig
+):
+    simulate_misclick = 0.15
+    shift_images = True
 
 class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
     def observation_to_tensors(self, observation, pad):
@@ -63,6 +73,24 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         token_x = torch.LongTensor(observation['phase']).to(device)
         token_t = torch.LongTensor(observation['step']).to(device)
         token_pad = torch.LongTensor(pad).to(device)
+        
+        # augmentations
+        if self.config.simulate_misclick:
+            b = tile_t.shape[1]
+            max_t = max(
+                torch.max(tile_t),
+                torch.max(token_t),
+            )
+            for i in range(b):
+                shift_map = torch.arange(max_t+1)
+                for j in range(max_t+1):
+                    if random.random() < self.config.simulate_misclick:
+                        shift_map[j:] += 1
+                tile_t[:,i] = shift_map[tile_t[:,i]]
+                token_t[:,i] = shift_map[token_t[:,i]]
+        
+        if self.config.shift_images:
+            pass
         
         # process decode t/pad
         decode_t = token_t

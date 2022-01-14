@@ -43,9 +43,7 @@ class EpisodeDataset(Dataset):
         
         return data
 
-def build_episode_loader(config):
-    dataset = EpisodeDataset(config)
-    
+def build_episode_loader(config, dataset):
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
