@@ -40,13 +40,140 @@ class BreakAndMakeInterface:
     def observation_to_tensors(self, observation, pad):
         raise NotImplementedError
     
-    def loss(self, x, pad, y, log=None, clock=None):
+    def action_to_tensors(self, action, pad):
+        
+        # initialize y
+        y = {}
+        
+        # get the device
+        device = next(self.model.parameters()).device
+        
+        # build the mode tensor
+        y_mode = numpy.zeros(action['phase'].shape, dtype=numpy.long)
+        y_mode[action['phase'] == 1] = 0
+        y_mode[action['phase'] == 2] = 1
+        y_mode[action['disassembly'] == 1] = 2
+        y_mode[action['pick_and_place'] == 1] = 3
+        y_mode[action['pick_and_place'] == 2] = 4
+        y_mode[action['rotate'] == 1] = 5
+        y_mode[action['rotate'] == 2] = 6
+        y_mode[action['rotate'] == 3] = 7
+        y_mode[action['insert_brick']['shape'] != 0] = 8
+        y_mode[action['table_viewpoint'] == 1] = 9
+        y_mode[action['table_viewpoint'] == 2] = 10
+        y_mode[action['table_viewpoint'] == 3] = 11
+        y_mode[action['table_viewpoint'] == 4] = 12
+        y_mode[action['table_viewpoint'] == 5] = 13
+        y_mode[action['table_viewpoint'] == 6] = 14
+        y_mode[action['table_viewpoint'] == 7] = 15
+        y_mode[action['hand_viewpoint'] == 1] == 16
+        y_mode[action['hand_viewpoint'] == 2] == 17
+        y_mode[action['hand_viewpoint'] == 3] == 18
+        y_mode[action['hand_viewpoint'] == 4] == 19
+        y_mode[action['hand_viewpoint'] == 5] == 20
+        y_mode[action['hand_viewpoint'] == 6] == 21
+        y_mode[action['hand_viewpoint'] == 7] == 22
+        y['mode'] = torch.LongTensor(y_mode).to(device)
+        
+        for region in 'table', 'hand':
+            # get the active sequence indices
+            y['%s_i'%region] = torch.BoolTensor(
+                action['%s_cursor'%region]['activate']).to(device)
+            
+            # get the click locations
+            y['%s_yx'%region] = torch.LongTensor(
+                action['%s_cursor'%region]['position']).to(device)
+            
+            # get the click polarity
+            y['%s_p'%region] = torch.LongTensor(
+                action[region + '_cursor']['polarity']).to(device)
+        
+        y['insert_i'] = y['mode'] == 8
+        y['shape'] = torch.LongTensor(
+            action['insert_brick']['shape']).to(device) - 1
+        y['color'] = torch.LongTensor(
+            action['insert_brick']['color']).to(device) - 1
+        
+        return y
+    
+    def loss(self, x, y, pad, log=None, clock=None):
+        
+        # initialize loss
+        loss = 0
+        
+        # get shape and device
+        s, b, m = x['mode'].shape
+        device = x['mode'].device
+        
+        # mode supervision
+        pad = torch.LongTensor(pad).to(device)
+        loss_mask = make_padding_mask(pad, (s,b), mask_value=True)
+        mode_loss = cross_entropy(
+            x['mode'].view(-1,m), y['mode'].view(-1), reduction='none')
+        mode_loss = mode_loss.view(s,b) * loss_mask
+        mode_loss = mode_loss.mean() * self.config.mode_loss_weight
+        loss = loss + mode_loss
+        
+        if log is not None:
+            log.add_scalar('train/mode_loss', mode_loss, clock[0])
+        
+        # table and hand supervision
+        for region in 'table', 'hand':
+            h, w = x[region].shape[-2:]
+            i = y['%s_i'%region].view(-1)
+            x_region = x[region].reshape(s*b, 2, h*w)[i]
+            
+            # spatial
+            x_spatial = x_region[:,0]
+            y_y = y['%s_yx'%region][:,:,0]
+            y_x = y['%s_yx'%region][:,:,1]
+            y_spatial = (y_y * w + y_x).view(-1)[i]
+            spatial_loss = cross_entropy(x_spatial, y_spatial)
+            spatial_loss = spatial_loss * getattr(
+                self.config, '%s_spatial_loss_weight'%region)
+            loss = loss + spatial_loss
+            
+            # polarity
+            x_p = x_region[:,1].view(-1, h*w)
+            x_p = x_p[range(x_p.shape[0]), y_spatial]
+            y_p = y['%s_p'%region].view(-1)[i].float()
+            polarity_loss = binary_cross_entropy_with_logits(x_p, y_p)
+            polarity_loss = polarity_loss * getattr(
+                self.config, '%s_polarity_loss_weight'%region)
+            loss = loss + polarity_loss
+            
+            if log is not None:
+                log.add_scalar(
+                    'train/%s_spatial_loss'%region, spatial_loss, clock[0])
+                log.add_scalar(
+                    'train/%s_polarity_loss'%region, polarity_loss, clock[0])
+        
+        # shape and color loss
+        i = y['insert_i'].view(-1)
+        for region in 'shape', 'color':
+            n = x[region].shape[-1]
+            x_region = x[region].view(s*b, n)[i]
+            y_region = y[region].view(-1)[i]
+            region_loss = cross_entropy(x_region, y_region)
+            region_loss = region_loss * getattr(
+                self.config, '%s_loss_weight'%region)
+            loss = loss + region_loss
+            
+            if log is not None:
+                log.add_scalar('train/%s_loss'%region, region_loss, clock[0])
+        
+        if log is not None:
+            log.add_scalar('train/total_loss', loss, clock[0])
+        
+        return loss
+    
+    def loss_old(self, x, pad, y, log=None, clock=None):
         s, b = x['mode'].shape[:2]
         device = x['mode'].device
         
         # make the padding mask
         pad = torch.LongTensor(pad).to(device)
-        loss_mask = ~make_padding_mask(pad, (s,b))
+        loss_mask = make_padding_mask(pad, (s,b), mask_value=True)
         
         # mode, shape and color supervision
         y_mode = numpy.zeros(y['phase'].shape, dtype=numpy.long)
