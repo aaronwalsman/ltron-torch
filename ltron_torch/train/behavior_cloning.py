@@ -119,17 +119,20 @@ def train_pass(
             observations = batch['observations']
             actions = batch['actions']
             
-            # convert observations to model tensors ----------------------------
+            # convert observations to model tensors
             x = interface.observation_to_tensors(observations, pad)
             y = interface.action_to_tensors(actions, pad)
             
-            # forward ----------------------------------------------------------
-            x = model(*x)
+            if hasattr(interface, 'augment'):
+                x, y = interface.augment(x, y)
             
-            # loss -------------------------------------------------------------
+            # forward
+            x = model(**x)
+            
+            # loss
             loss = interface.loss(x, y, pad, log, clock)
             
-            # train ------------------------------------------------------------
+            # train
             optimizer.zero_grad()
             loss.backward()
             clip_grad(config, model)

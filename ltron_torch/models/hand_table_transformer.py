@@ -179,11 +179,25 @@ class HandTableTransformer(Module):
             self.apply(init_weights)
     
     def forward(self,
-        tile_x, tile_t, tile_yx, tile_pad,
+        #tile_x, tile_t, tile_yx, tile_pad,
+        table_tiles, table_t, table_yx, table_pad,
+        hand_tiles, hand_t, hand_yx, hand_pad,
         token_x, token_t, token_pad,
         decode_t, decode_pad,
         use_memory=None,
     ):
+        
+        # linearize table_yx and hand_yx
+        table_w = self.config.table_tiles_w
+        table_yx = table_yx[...,0] * table_w + table_yx[...,1]
+        hand_w = self.config.hand_tiles_w
+        hand_yx = hand_yx[...,0] * hand_w + hand_yx[...,1]
+        
+        # cat table and hand tiles
+        tile_x, tile_pad = cat_padded_seqs(
+            table_tiles, hand_tiles, table_pad, hand_pad)
+        tile_t, _ = cat_padded_seqs(table_t, hand_t, table_pad, hand_pad)
+        tile_yx, _ = cat_padded_seqs(table_yx, hand_yx, table_pad, hand_pad)
         
         # make the tile embeddings
         tile_x = self.tile_embedding(tile_x)

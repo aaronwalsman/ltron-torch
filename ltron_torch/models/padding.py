@@ -44,7 +44,7 @@ def linearize_padded_seq(x, pad, seq_dim=0, batch_dim=1):
     x_index = get_index_tuple(xi, xj, len(x.shape), seq_dim, batch_dim)
     return x[x_index]
 
-def make_padding_mask(pad, shape, seq_dim=0, batch_dim=1):
+def make_padding_mask(pad, shape, seq_dim=0, batch_dim=1, mask_value=False):
     '''
                  000111
                  000011
@@ -52,10 +52,13 @@ def make_padding_mask(pad, shape, seq_dim=0, batch_dim=1):
                  000000
     '''
     # make a mask that is False inside the pad region and True everywhere else
-    mask = torch.ones(shape, dtype=torch.bool, device=pad.device)
+    if mask_value:
+        mask = torch.zeros(shape, dtype=torch.bool, device=pad.device)
+    else:
+        mask = torch.ones(shape, dtype=torch.bool, device=pad.device)
     i, j = get_seq_batch_indices(pad)
     index = get_index_tuple(i, j, len(shape), seq_dim, batch_dim)
-    mask[index] = False
+    mask[index] = bool(mask_value)
     return mask
 
 def get_seq_batch_indices(pad):
