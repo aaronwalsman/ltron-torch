@@ -618,7 +618,8 @@ def train_resnet_pass(train_config, model, optimizer, loader, log, clock):
         s, b, c, h, w = xd.shape
         
         # loss -----------------------------------------------------------------
-        loss_mask = ~make_padding_mask(torch.LongTensor(pad), (s,b)).cuda()
+        loss_mask = make_padding_mask(
+            torch.LongTensor(pad), (s,b), mask_value=True).cuda()
         
         viewpoint_label = batch['actions']['workspace_viewpoint']
         end_label = (batch['actions']['reassembly'] == 1) * 8
@@ -692,7 +693,7 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         
         # compute losses -------------------------------------------------------
         s, b = logits['disassembly'].shape[:2]
-        mask = ~make_padding_mask(d_pad, (s,b)).cuda()
+        mask = make_padding_mask(d_pad, (s,b), mask_value=True).cuda()
         labels = batch['actions']
         
         loss = 0
@@ -964,8 +965,8 @@ def insert_brick_loss(logits, labels, mask):
     
     #insert_brick_loss = class_id_loss + color_id_loss
     #insert_brick_loss = insert_brick_loss.view(s, b)
-    #insert_brick_loss = insert_brick_loss * ~make_padding_mask(
-    #    decoder_pad, (s,b)).cuda()
+    #insert_brick_loss = insert_brick_loss * make_padding_mask(
+    #    decoder_pad, (s,b), mask_value=True).cuda()
     #insert_brick_loss = (
     #    torch.sum(insert_brick_loss) / insert_brick_loss.numel())
     
@@ -1070,8 +1071,8 @@ def old_disassembly_loss(action_logits, labels, decoder_pad):
             pick_x_loss
         )
         disassembly_loss = disassembly_loss.view(s, b)
-        disassembly_loss = disassembly_loss * ~make_padding_mask(
-            decoder_pad, (s,b)).cuda()
+        disassembly_loss = disassembly_loss * make_padding_mask(
+            decoder_pad, (s,b), mask_value=True).cuda()
         disassembly_loss = disassembly_loss * torch.BoolTensor(activate).cuda()
         disassembly_loss = (
             torch.sum(disassembly_loss) / disassembly_loss.numel())
@@ -1103,8 +1104,8 @@ def old_insert_brick_loss(action_logits, labels, decoder_pad):
     
     insert_brick_loss = class_id_loss + color_id_loss
     insert_brick_loss = insert_brick_loss.view(s, b)
-    insert_brick_loss = insert_brick_loss * ~make_padding_mask(
-        decoder_pad, (s,b)).cuda()
+    insert_brick_loss = insert_brick_loss * make_padding_mask(
+        decoder_pad, (s,b), mask_value=True).cuda()
     insert_brick_loss = (
         torch.sum(insert_brick_loss) / insert_brick_loss.numel())
     
@@ -1173,8 +1174,8 @@ def old_pick_and_place_loss(action_logits, labels, decoder_pad):
             place_x_loss
         )
         pick_and_place_loss = pick_and_place_loss.view(s, b)
-        pick_and_place_loss = pick_and_place_loss * ~make_padding_mask(
-            decoder_pad, (s,b)).cuda()
+        pick_and_place_loss = pick_and_place_loss * make_padding_mask(
+            decoder_pad, (s,b), mask_value=True).cuda()
         pick_and_place_loss = (
             pick_and_place_loss * torch.BoolTensor(activate).cuda())
         pick_and_place_loss = (
