@@ -13,6 +13,7 @@ from ltron.dataset.paths import get_dataset_info, get_dataset_paths
 from ltron_torch.gym_tensor import (
     gym_space_to_tensors, default_tile_transform, default_image_transform, default_image_untransform)
 import pdb
+import json
 
 class rolloutFramesConfig(Config):
     train_split = 'rollouts_frames'
@@ -61,17 +62,17 @@ class rolloutFrames(Dataset):
         table = rollout['table_color_render']
         pos_snap_reduced = numpy.where(rollout['table_pos_snap_render'][:, :, 0] > 0, 1, 0)
         neg_snap_reduced = numpy.where(rollout['table_neg_snap_render'][:, :, 0] > 0, 1, 0)
-        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['config']['class'])
-        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['config']['color'])
-        stacked_label = numpy.stack([shape_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
+        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['assembly']['shape'])
+        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['assembly']['color'])
+        stacked_label = numpy.stack([class_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
         # if numpy.unique(color_ids).shape[0] > 2:
         #     pdb.set_trace()
-        # if numpy.sum(rollout['config']['class'] > 0) > len(numpy.unique(rollout['config']['class']))-1:
+        # if numpy.sum(rollout['assembly']['class'] > 0) > len(numpy.unique(rollout['assembly']['class']))-1:
         # pdb.set_trace()
         # if "Wright Flyer" not in str(path) and "Metroliner" not in str(path) and "Darth Maul" not in str(path) and\
-        #         "Rebel Blockade Runner" not in str(path) and "Imperial Star Destroyer" not in str(path) and 2020 in rollout['config']['class']:
+        #         "Rebel Blockade Runner" not in str(path) and "Imperial Star Destroyer" not in str(path) and 2020 in rollout['assembly']['class']:
         #     pdb.set_trace()
-        # if 1627 in rollout['config']['class'] and "Darth Maul" not in str(path):
+        # if 1627 in rollout['assembly']['class'] and "Darth Maul" not in str(path):
         #     pdb.set_trace()
 
         if self.transform is not None:
