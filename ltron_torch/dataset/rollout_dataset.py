@@ -43,7 +43,7 @@ class rolloutFrames(Dataset):
     def __init__(self, dataset, split, subset, transform=None):
 
         self.transform = transform
-        self.workspace = []
+        self.table = []
         # self.pos_snap = []
         # self.neg_snap = []
         # self.mask = []
@@ -58,11 +58,11 @@ class rolloutFrames(Dataset):
         
         path = self.rollout_paths[i]
         rollout = numpy.load(path, allow_pickle=True)['rollout'].item()
-        workspace = rollout['workspace_color_render']
-        pos_snap_reduced = numpy.where(rollout['workspace_pos_snap_render'][:, :, 0] > 0, 1, 0)
-        neg_snap_reduced = numpy.where(rollout['workspace_neg_snap_render'][:, :, 0] > 0, 1, 0)
-        shape_ids = self.id_mapping(rollout['workspace_mask_render'], rollout['config']['class'])
-        color_ids = self.color_mapping(rollout['workspace_mask_render'], rollout['config']['color'])
+        table = rollout['table_color_render']
+        pos_snap_reduced = numpy.where(rollout['table_pos_snap_render'][:, :, 0] > 0, 1, 0)
+        neg_snap_reduced = numpy.where(rollout['table_neg_snap_render'][:, :, 0] > 0, 1, 0)
+        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['config']['class'])
+        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['config']['color'])
         stacked_label = numpy.stack([shape_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
         # if numpy.unique(color_ids).shape[0] > 2:
         #     pdb.set_trace()
@@ -75,10 +75,10 @@ class rolloutFrames(Dataset):
         #     pdb.set_trace()
 
         if self.transform is not None:
-            workspace = self.transform(workspace)
-            return workspace, stacked_label
+            table = self.transform(table)
+            return table, stacked_label
 
-        return workspace, stacked_label
+        return table, stacked_label
 
 def build_rolloutFrames_train_loader(config, batch_overload=None):
     print('-'*80)
@@ -109,20 +109,20 @@ def main():
     config = rolloutFramesConfig.load_config("../../experiments/pretrainbackbone_resnet/settings.cfg")
     loader = build_rolloutFrames_train_loader(config, 1)
     counter = 1
-    for workspace, label in loader:
-        # print(workspace.type())
+    for table, label in loader:
+        # print(table.type())
         # print(label.type())
         # pdb.set_trace()
-        image = numpy.transpose(workspace[0].squeeze().detach().cpu().numpy(), [1,2,0])
+        image = numpy.transpose(table[0].squeeze().detach().cpu().numpy(), [1,2,0])
         im = numpy.uint8(image * 255)
-        im = default_image_untransform(workspace[0])
+        im = default_image_untransform(table[0])
         # save_image(im, "test_dataset/test_im" + str(counter) + ".png")
         mask = label[0, :, :, 0].squeeze().detach().cpu().numpy()
         mask = numpy.uint8(mask * 255)
         # save_image(mask, "test_dataset/test_mask" + str(counter) + ".png")
         # print(numpy.where(label[0, :, :, 0] > 0))
         # print(numpy.where(label[0, :, :, 1] > 0))
-        # print(workspace.shape)
+        # print(table.shape)
         # print(label.shape)
         # print(numpy.unique(label[0, :, :, 0]))
         # print(numpy.unique(label[0, :, :, 1]))
