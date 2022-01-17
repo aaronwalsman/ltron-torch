@@ -277,7 +277,8 @@ def train_pass(train_config, model, optimizer, loader, log, clock):
         s, b, c, h, w = xd.shape
         
         # loss -----------------------------------------------------------------
-        loss_mask = ~make_padding_mask(torch.LongTensor(pad), (s,b)).cuda()
+        loss_mask = make_padding_mask(
+            torch.LongTensor(pad), (s,b), mask_value=True).cuda()
         
         viewpoint_label = batch['actions']['workspace_viewpoint']
         end_label = (batch['actions']['reassembly'] == 1) * 8
