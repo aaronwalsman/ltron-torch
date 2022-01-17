@@ -227,20 +227,20 @@ def rollout_epoch(config, env, model, interface, train_mode, log, clock):
             # move observations to torch and cuda
             pad = numpy.ones(b, dtype=numpy.long)
             observation = stack_numpy_hierarchies(observation)
-            x = interface.observation_to_tensors(observation, pad, train_mode)
+            x = interface.observation_to_tensors(observation, pad)
             
             # compute actions --------------------------------------------------
             if hasattr(model, 'initialize_memory'):
-                if hasattr(interface, 'rollout_forward'):
-                    x = interface.rollout_forward(terminal, *x, memory=memory)
+                if hasattr(interface, 'forward_rollout'):
+                    x = interface.forward_rollout(terminal, **x, memory=memory)
                 else:
-                    x = model(*x, memory=memory)
+                    x = model(**x, memory=memory)
                 memory = x['memory']
             else:
                 if hasattr(interface, 'forward_rollout'):
-                    x = interface.forward_rollout(terminal, *x)
+                    x = interface.forward_rollout(terminal, **x)
                 else:
-                    x = model(*x)
+                    x = model(**x)
             actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
             
             # step -------------------------------------------------------------
