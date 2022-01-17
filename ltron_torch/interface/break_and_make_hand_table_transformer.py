@@ -93,55 +93,8 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         b = x['token_pad'].shape[0]
         device = x['token_pad'].device
         
-        '''
-        def dump(name, region, tiles, t, tile_yx, cursor_yx):
-            s = tiles.shape[0]
-            max_t = torch.max(t)
-            frames = numpy.ones(
-                (max_t+1, b, 16, 16, 16, 16, 3), dtype=numpy.uint8) * 16
-            tiles = tiles * torch.FloatTensor(
-                [0.229, 0.224, 0.225]).to(device)
-            tiles = tiles + torch.FloatTensor(
-                [0.485, 0.456, 0.406]).to(device)
-            tiles = (tiles * 255.).cpu().view(s*b,16,16,3)
-            tiles = tiles.numpy().astype(numpy.uint8)
-            
-            bb = numpy.zeros(t.shape, dtype=numpy.long)
-            bb[:] = numpy.arange(b).reshape(1,b)
-            
-            tt = t.view(-1).cpu().numpy()
-            
-            yy = tile_yx[...,0].view(-1).cpu().numpy()
-            xx = tile_yx[...,1].view(-1).cpu().numpy()
-            
-            frames[tt, bb.reshape(-1), yy, xx] = tiles
-            frames = numpy.transpose(
-                frames, axes=(0, 1, 2, 4, 3, 5, 6)).reshape(
-                max_t+1,b,16*16,16*16,3)
-            
-            from splendor.image import save_image
-            for i in range(max_t):
-                for j in range(b):
-                    frame = frames[i,j]
-                    yy = cursor_yx[i,j,0]
-                    xx = cursor_yx[i,j,1]
-                    frame[yy*4:(yy+1)*4, xx*4:(xx+1)*4] = [255,255,255]
-                    save_image(frame, '%s_%s_%i_%i.png'%(name, region, j, i))
-        '''
-        
         # apply tile shift augmentation
         if self.config.tile_shift_augmentation:
-            '''
-            for region in 'table', 'hand':
-                dump(
-                    'orig',
-                    region,
-                    x['%s_tiles'%region],
-                    x['%s_t'%region],
-                    x['%s_yx'%region],
-                    y['%s_yx'%region],
-                )
-            '''
             for region in 'table', 'hand':
                 region_yx = x['%s_yx'%region]
                 h = getattr(self.config, '%s_tiles_h'%region)
@@ -162,8 +115,6 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
                     # pick shift randomly within min/max
                     shift_y = random.randint(min_shift_y, max_shift_y)
                     shift_x = random.randint(min_shift_x, max_shift_x)
-                    #shift_x = random.choice([-1,0,1])
-                    #shift_y = random.choice([-1,0,1])
                     tile_shifts.append([shift_y, shift_x])
                     cursor_shifts.append([shift_y * up_h, shift_x * up_w])
                 
@@ -174,17 +125,6 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
                 # shift tile and cursor positions
                 x['%s_yx'%region] = x['%s_yx'%region] + tile_shifts
                 y['%s_yx'%region] = y['%s_yx'%region] + cursor_shifts
-                
-                '''
-                dump(
-                    'offset',
-                    region,
-                    x['%s_tiles'%region],
-                    x['%s_t'%region],
-                    x['%s_yx'%region],
-                    y['%s_yx'%region],
-                )
-                '''
         
         # apply simulated misclicks
         if self.config.misclick_augmentation:
@@ -194,16 +134,18 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
                 torch.max(x['token_t']),
             )
             for i in range(b):
-                shift_map = torch.arange(max_t+1)
+                encode_shift_map = torch.arange(max_t+1)
+                decode_shift_map = torch.arange(max_t+1)
                 for j in range(max_t+1):
                     if random.random() < self.config.misclick_augmentation:
-                        shift_map[j:] += 1
+                        encode_shift_map[j+1:] += 1
+                        decode_shift_map[j:] += 1
                 
                 # shift the table, hand, token and decode time steps
-                x['table_t'][:,i] = shift_map[x['table_t'][:,i]]
-                x['hand_t'][:,i] = shift_map[x['hand_t'][:,i]]
-                x['token_t'][:,i] = shift_map[x['token_t'][:,i]]
-                x['decode_t'][:,i] = shift_map[x['decode_t'][:,i]]
+                x['table_t'][:,i] = encode_shift_map[x['table_t'][:,i]]
+                x['hand_t'][:,i] = encode_shift_map[x['hand_t'][:,i]]
+                x['token_t'][:,i] = encode_shift_map[x['token_t'][:,i]]
+                x['decode_t'][:,i] = decode_shift_map[x['decode_t'][:,i]]
         
         return x, y
     
