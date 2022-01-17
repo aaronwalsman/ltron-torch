@@ -41,7 +41,7 @@ class BlocksInterface:
         
         # make the padding mask
         pad = torch.LongTensor(pad).to(device)
-        loss_mask = ~make_padding_mask(pad, (s,b))
+        loss_mask = make_padding_mask(pad, (s,b), mask_value=True)
         
         # mode, shape and color supervision
         y_mode = torch.LongTensor(y['mode']).to(x['mode'].device)
