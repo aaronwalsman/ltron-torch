@@ -107,7 +107,7 @@ def train_break_and_make_bc(config=None):
     device = torch.device(config.device)
     
     print('-'*80)
-    print('Building Model')
+    print('Building Model (%s)'%config.model)
     if config.model == 'transformer':
         model = HandTableTransformer(config, model_checkpoint).to(device)
         interface = BreakAndMakeHandTableTransformerInterface(model, config)

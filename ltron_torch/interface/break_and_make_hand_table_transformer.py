@@ -21,7 +21,7 @@ class BreakAndMakeHandTableTransformerInterfaceConfig(
     BreakAndMakeInterfaceConfig
 ):
     misclick_augmentation = 0.15
-    tile_shift_augmentation = True
+    tile_shift_augmentation = 2
     tile_h = 16
     tile_w = 16
     table_h = 256
@@ -94,7 +94,8 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         device = x['token_pad'].device
         
         # apply tile shift augmentation
-        if self.config.tile_shift_augmentation:
+        max_shift = self.config.tile_shift_augmentation
+        if max_shift:
             for region in 'table', 'hand':
                 region_yx = x['%s_yx'%region]
                 h = getattr(self.config, '%s_tiles_h'%region)
@@ -107,10 +108,14 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
                     
                     # compute shift min/max
                     p = x['%s_pad'%region][i]
-                    min_shift_y = -torch.min(region_yx[:p,i,0])
-                    max_shift_y = (h-1) - torch.max(region_yx[:p,i,0])
-                    min_shift_x = -torch.min(region_yx[:p,i,1])
-                    max_shift_x = (w-1) - torch.max(region_yx[:p,i,1])
+                    min_shift_y = int(-torch.min(region_yx[:p,i,0]).cpu())
+                    min_shift_y = max(min_shift_y, -max_shift)
+                    max_shift_y = int((h-1)-torch.max(region_yx[:p,i,0]).cpu())
+                    max_shift_y = min(max_shift_y, max_shift)
+                    min_shift_x = int(-torch.min(region_yx[:p,i,1]).cpu())
+                    min_shift_x = max(min_shift_x, -max_shift)
+                    max_shift_x = int((w-1)-torch.max(region_yx[:p,i,1]).cpu())
+                    max_shift_x = min(max_shift_x, max_shift)
                     
                     # pick shift randomly within min/max
                     shift_y = random.randint(min_shift_y, max_shift_y)
