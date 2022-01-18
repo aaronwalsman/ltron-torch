@@ -5,7 +5,7 @@ from ltron.gym.envs.break_and_make_env import (
     BreakAndMakeEnvConfig, BreakAndMakeEnv)
 
 from ltron_torch.dataset.break_and_make_dataset import (
-    BreakAndMakeDatasetConfig, BreakAndMakeDataset
+    BreakAndMakeDatasetConfig, BreakAndMakeDataset, BreakOnlyDataset,
 )
 from ltron_torch.dataset.episode_dataset import build_episode_loader
 from ltron_torch.models.hand_table_transformer import (
@@ -64,6 +64,8 @@ class BreakAndMakeBCConfig(
     dataset = 'random_construction_6_6'
     train_split = 'train_episodes'
     test_split = 'test'
+    
+    task = 'break_and_make'
     
     num_test_envs = 4
     
@@ -127,7 +129,12 @@ def train_break_and_make_bc(config=None):
     print('-'*80)
     print('Building Data Loader')
     train_config = BreakAndMakeBCConfig.translate(config, split='train_split')
-    train_dataset = BreakAndMakeDataset(train_config)
+    if config.task == 'break_and_make':
+        train_dataset = BreakAndMakeDataset(train_config)
+    elif config.task == 'break_only':
+        train_dataset = BreakOnlyDataset(train_config)
+    else:
+        assert False, 'bad task: "%s"'%config.task
     train_loader = build_episode_loader(train_config, train_dataset)
 
     print('-'*80)

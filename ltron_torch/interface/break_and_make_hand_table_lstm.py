@@ -19,24 +19,24 @@ from ltron_torch.interface.utils import (
 from ltron_torch.interface.break_and_make import BreakAndMakeInterface
 
 class BreakAndMakeHandTableLSTMInterface(BreakAndMakeInterface):
-    def observation_to_tensors(self, observation, pad, train_mode):
+    def observation_to_tensors(self, observation, pad):
         # get the device
         device = next(self.model.parameters()).device
         
-        output = []
-        for component in 'table_color_render', 'hand_color_render':
-            frames = observation[component]
+        output = {}
+        for region in 'table', 'hand':
+            frames = observation['%s_color_render'%region]
             s, b, h, w, c = frames.shape
             frames = frames.reshape(s*b, h, w, c)
             frames = [default_image_transform(frame) for frame in frames]
             frames = torch.stack(frames)
             frames = frames.view(s, b, c, h, w).to(device)
-            output.append(frames)
+            output['x_%s'%region] = frames
         
         phase = torch.LongTensor(observation['phase']).to(device)
-        output.append(phase)
+        output['r'] = phase
         
-        return tuple(output)
+        return output
     
     #def loss(self, x, pad, y, log=None, clock=None):
     #    return blocks_loss(self.config, x, pad, y, log, clock)
