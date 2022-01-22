@@ -32,7 +32,6 @@ from ltron_torch.train.optimizer import clip_grad
 # config definitions ===========================================================
 
 class BehaviorCloningConfig(Config):
-    start_epoch = 1
     epochs = 10
     batch_size = 4
     num_test_envs = 4
@@ -63,20 +62,17 @@ def behavior_cloning(
     train_loader,
     test_env,
     interface,
+    train_log,
+    test_log,
+    start_epoch = 1,
 ):
     
     print('='*80)
     print('Begin Behavior Cloning')
-    print('-'*80)
-    print('Log')
-    #log = SummaryWriter()
-    #clock = [0]
-    train_log = interface.make_train_log(config)
-    test_log = SynchronousConsecutiveLog('terminal_reward')
     
     train_start = time.time()
     
-    for epoch in range(config.start_epoch, config.epochs+1):
+    for epoch in range(start_epoch, config.epochs+1):
         epoch_start = time.time()
         print('='*80)
         print('Epoch: %i'%epoch)
@@ -92,7 +88,6 @@ def behavior_cloning(
                 train_loader,
                 interface,
                 train_log,
-                #clock,
             )
             chart = train_log.plot_grid(
                 topline=True, legend=True, minmax_y=True, height=40, width=72)
@@ -145,7 +140,6 @@ def train_epoch(
     loader,
     interface,
     train_log,
-    #clock,
 ):
     print('-'*80)
     print('Training')
@@ -176,8 +170,6 @@ def train_epoch(
         scheduler.step()
         optimizer.step()
         
-        #log_optimizer(optimizer, log, clock)
-        #clock[0] += 1
         train_log.step()
 
 def rollout_epoch(
@@ -371,13 +363,12 @@ def save_checkpoint(
     print('-'*80)
     print('Saving checkpoint to: %s'%path)
     checkpoint = {
+        'epoch' : epoch,
         'config' : config.as_dict(),
         'model' : model.state_dict(),
         'optimizer' : optimizer.state_dict(),
         'scheduler' : scheduler.state_dict(),
+        'train_log' : train_log.get_state(),
+        'test_log' : test_log.get_state(),
     }
     torch.save(checkpoint, path)
-
-#def log_optimizer(optimizer, log, clock):
-#    for i, group in enumerate(optimizer.param_groups):
-#        log.add_scalar('opt/lr_%i'%i, group['lr'], clock[0])

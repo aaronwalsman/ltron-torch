@@ -99,10 +99,16 @@ def train_break_and_make_bc(config=None):
         model_checkpoint = checkpoint['model']
         optimizer_checkpoint = checkpoint['optimizer']
         scheduler_checkpoint = checkpoint['scheduler']
+        train_log_checkpoint = checkpoint.get('train_log', None)
+        test_log_checkpoint = checkpoint.get('test_log', None)
+        start_epoch = checkpoint.get('epoch', 1)
     else:
         model_checkpoint = None
         optimizer_checkpoint = None
         scheduler_checkpoint = None
+        train_log_checkpoint = None
+        test_log_checkpoint = None
+        start_epoch = 1
     
     device = torch.device(config.device)
     
@@ -110,10 +116,8 @@ def train_break_and_make_bc(config=None):
     print('Building Model (%s)'%config.model)
     if config.model == 'transformer':
         model = HandTableTransformer(config, model_checkpoint).to(device)
-        interface = BreakAndMakeHandTableTransformerInterface(model, config)
     elif config.model == 'lstm':
         model = HandTableLSTM(config, model_checkpoint).to(device)
-        interface = BreakAndMakeHandTableLSTMInterface(model, config)
     else:
         raise ValueError(
             'config "model" parameter must be either "transformer" or "lstm"')
@@ -121,6 +125,20 @@ def train_break_and_make_bc(config=None):
     print('-'*80)
     print('Building Optimizer')
     optimizer = build_optimizer(config, model, optimizer_checkpoint)
+    
+    print('-'*80)
+    print('Building Interface (%s)'%config.model)
+    if config.model == 'transformer':
+        interface = BreakAndMakeHandTableTransformerInterface(
+            config, model, optimizer)
+    elif config.model == 'lstm':
+        interface = BreakAndMakeHandTableLSTMInterface(
+            config, model, optimizer)
+    
+    print('-'*80)
+    print('Building Logs')
+    train_log = interface.make_train_log(config, train_log_checkpoint)
+    test_log = interface.make_test_log(config, test_log_checkpoint)
     
     print('-'*80)
     print('Building Scheduler')
@@ -148,4 +166,14 @@ def train_break_and_make_bc(config=None):
     )
 
     behavior_cloning(
-        config, model, optimizer, scheduler, train_loader, test_env, interface)
+        config,
+        model,
+        optimizer,
+        scheduler,
+        train_loader,
+        test_env,
+        interface,
+        train_log,
+        test_log,
+        start_epoch=start_epoch,
+    )

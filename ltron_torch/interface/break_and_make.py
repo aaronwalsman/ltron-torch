@@ -36,14 +36,15 @@ class BreakAndMakeInterfaceConfig(Config):
     visualization_seqs = 10
 
 class BreakAndMakeInterface:
-    def __init__(self, model, config):
-        self.model = model
+    def __init__(self, config, model, optimizer):
         self.config = config
+        self.model = model
+        self.optimizer = optimizer
         dummy_env = BreakAndMakeEnv(config)
         self.no_op_action = dummy_env.no_op_action()
     
-    def make_train_log(self, config):
-        return SynchronousConsecutiveLog(
+    def make_train_log(self, config, checkpoint=None):
+        train_log = SynchronousConsecutiveLog(
             'table_spatial_loss',
             'table_polarity_loss',
             'hand_spatial_loss',
@@ -52,8 +53,23 @@ class BreakAndMakeInterface:
             'color_loss',
             'mode_loss',
             'total_loss',
-            capacity = 36,
+            compressed = True,
+            capacity = 1024,
         )
+        if checkpoint is not None:
+            train_log.set_state(checkpoint)
+        
+        return train_log
+    
+    def make_test_log(self, config, checkpoint=None):
+        test_log = SynchronousConsecutiveLog(
+            'terminal_reward',
+            compressed = False,
+        )
+        if checkpoint is not None:
+            test_log.set_state(checkpoint)
+        
+        return test_log
     
     def observation_to_tensors(self, observation, pad):
         raise NotImplementedError
@@ -406,6 +422,8 @@ class BreakAndMakeInterface:
         nonconsecutive_disassembly_n = 0
         pick_and_place_n = 0
         pick_and_place_correct = 0
+        pick_and_place_one_correct = 0
+        pick_and_place_both_correct = 0
         rotation_n = 0
         rotation_correct = 0
         phase_n = 0
@@ -453,6 +471,7 @@ class BreakAndMakeInterface:
             table_edges = initial_table_assembly['edges']
             n_edges = table_edges.shape[1]
             good_edges = set()
+            good_snaps = set()
             for k in range(n_edges):
                 a_i, b_i, a_s, b_s = table_edges[:,k]
                 if a_i == 0 or b_i == 0:
@@ -463,6 +482,8 @@ class BreakAndMakeInterface:
                 b_color = initial_table_assembly['color'][b_i]
                 good_edges.add(
                     (a_shape, a_color, a_s, b_shape, b_color, b_s))
+                good_snaps.add((a_shape, a_color, a_s))
+                good_snaps.add((b_shape, b_color, b_s))
             
             for j in range(seq_len):
                 step = index_hierarchy(seq, j)
@@ -531,6 +552,14 @@ class BreakAndMakeInterface:
                     
                     if edge_a in good_edges or edge_b in good_edges:
                         pick_and_place_correct += 1
+                    
+                    hand_snap = (hand_shape, hand_color, hand_snap_id)
+                    table_snap = (table_shape, table_color, table_snap_id)
+                    if hand_snap in good_snaps or table_snap in good_snaps:
+                        pick_and_place_one_correct += 1
+                    
+                    if hand_snap in good_snaps and table_snap in good_snaps:
+                        pick_and_place_both_correct += 1
                 
                 if step['action']['rotate']:
                     # was this a good rotate action?
@@ -567,3 +596,7 @@ class BreakAndMakeInterface:
             disassembly_correct / nonconsecutive_disassembly_n))
         print('Pick and Place: %.04f'%(
             pick_and_place_correct / pick_and_place_n))
+        print('Pick and Place One Correct: %.04f'%(
+            pick_and_place_one_correct / pick_and_place_n))
+        print('Pick and Place Both Correct: %.04f'%(
+            pick_and_place_both_correct / pick_and_place_n))
