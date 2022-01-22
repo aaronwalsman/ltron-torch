@@ -9,7 +9,9 @@ import tqdm
 import torch
 from torch.distributions import Categorical
 from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
+
+from conspiracy.log import SynchronousConsecutiveLog
 
 from splendor.image import save_image
 
@@ -43,6 +45,8 @@ class BehaviorCloningConfig(Config):
     #test_rollout_steps_per_epoch = 2048
     test_episodes_per_epoch = 64
     
+    checkpoint_directory = './checkpoint'
+    
     #def set_dependents(self):
     #    self.test_batch_rollout_steps_per_epoch = (
     #        self.test_rollout_steps_per_epoch // self.num_test_envs
@@ -65,8 +69,11 @@ def behavior_cloning(
     print('Begin Behavior Cloning')
     print('-'*80)
     print('Log')
-    log = SummaryWriter()
-    clock = [0]
+    #log = SummaryWriter()
+    #clock = [0]
+    train_log = interface.make_train_log(config)
+    test_log = SynchronousConsecutiveLog('terminal_reward')
+    
     train_start = time.time()
     
     for epoch in range(config.start_epoch, config.epochs+1):
@@ -74,18 +81,27 @@ def behavior_cloning(
         print('='*80)
         print('Epoch: %i'%epoch)
         
-        train_pass(
-            config,
-            epoch,
-            model,
-            optimizer,
-            scheduler,
-            train_loader,
-            interface,
-            log,
-            clock,
-        )
-        save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock)
+        train_freq = config.train_frequency
+        if train_freq and epoch % train_freq == 0:
+            train_epoch(
+                config,
+                epoch,
+                model,
+                optimizer,
+                scheduler,
+                train_loader,
+                interface,
+                train_log,
+                #clock,
+            )
+            chart = train_log.plot_grid(
+                topline=True, legend=True, minmax_y=True, height=40, width=72)
+            print(chart)
+        
+        checkpoint_freq = config.checkpoint_frequency
+        if checkpoint_freq and epoch % checkpoint_freq == 0:
+            save_checkpoint(
+                config, epoch, model, optimizer, scheduler, train_log, test_log)
         
         test_freq = config.test_frequency
         test = test_freq and epoch % test_freq == 0
@@ -100,14 +116,18 @@ def behavior_cloning(
                 interface,
                 'test',
                 visualize,
-                log,
-                clock,
+                visualize,
             )
         
         if test:
-            test_episodes(config, epoch, episodes, interface, log, clock)
+            test_episodes(config, epoch, episodes, interface, test_log)
+            test_log.step()
+            chart = test_log.plot_sequential(
+                legend=True, minmax_y=True, height=60, width=160)
+            print(chart)
+        
         if visualize:
-            visualize_episodes(config, epoch, episodes, interface, log, clock)
+            visualize_episodes(config, epoch, episodes, interface)
         
         train_end = time.time()
         print('='*80)
@@ -116,7 +136,7 @@ def behavior_cloning(
 
 # train subfunctions ===========================================================
 
-def train_pass(
+def train_epoch(
     config,
     epoch,
     model,
@@ -124,90 +144,41 @@ def train_pass(
     scheduler,
     loader,
     interface,
-    log,
-    clock,
+    train_log,
+    #clock,
 ):
-    frequency = config.train_frequency
-    if frequency and epoch % frequency == 0:
-        print('-'*80)
-        print('Training')
-        model.train()
-        
-        for batch, pad in tqdm.tqdm(loader):
-            
-            observations = batch['observations']
-            actions = batch['actions']
-            
-            # convert observations to model tensors
-            x = interface.observation_to_tensors(observations, pad)
-            y = interface.action_to_tensors(actions, pad)
-            
-            if hasattr(interface, 'augment'):
-                x, y = interface.augment(x, y)
-            
-            # forward
-            x = model(**x)
-            
-            # loss
-            loss = interface.loss(x, y, pad, log, clock)
-            
-            # train
-            optimizer.zero_grad()
-            loss.backward()
-            clip_grad(config, model)
-            scheduler.step()
-            optimizer.step()
-            
-            log_optimizer(optimizer, log, clock)
-            
-            clock[0] += 1
-
-#def test_epoch(config, epoch, test_env, model, interface, log, clock):
-def test_episodes(config, epoch, episodes, interface, log, clock):
-    #if config.test_frequency and epoch % config.test_frequency == 0:
     print('-'*80)
-    print('Testing')
-    #episodes = rollout_epoch(
-    #    config, test_env, model, interface, 'test', False, log, clock)
+    print('Training')
+    model.train()
     
-    avg_terminal_reward = 0.
-    reward_bins = [0 for _ in range(11)]
-    for seq_id in episodes.finished_seqs:
-        seq = episodes.get_seq(seq_id)
-        reward = seq['reward'][-1]
-        avg_terminal_reward += reward
-        reward_bin = int(reward * 10)
-        reward_bins[reward_bin] += 1
-    
-    n = episodes.num_finished_seqs()
-    if n:
-        avg_terminal_reward /= n
-    
-    print('Average Terminal Reward: %f'%avg_terminal_reward)
-    log.add_scalar('val/term_reward', avg_terminal_reward, clock[0])
-    
-    if n:
-        bin_percent = [b/n for b in reward_bins]
-        for i, (p, c) in enumerate(zip(bin_percent, reward_bins)):
-            low = i * 0.1
-            print('%.01f'%low)
-            print('|' * round(p * 40) + ' (%i)'%c)
-    
-    #avg_reward = 0.
-    #entries = 0
-    #for seq_id in range(episodes.num_seqs()):
-    #    seq = episodes.get_seq(seq_id)
-    #    avg_reward += numpy.sum(seq['reward'])
-    #    entries += seq['reward'].shape[0]
-    #
-    #avg_reward /= entries
-    #print('Average Reward: %f'%avg_reward)
-    #log.add_scalar('val/reward', avg_reward, clock[0])
-    
-    if hasattr(interface, 'eval_episodes'):
-        interface.eval_episodes(episodes, log, clock)
-    
-    #return episodes
+    for batch, pad in tqdm.tqdm(loader):
+        
+        observations = batch['observations']
+        actions = batch['actions']
+        
+        # convert observations to model tensors
+        x = interface.observation_to_tensors(observations, pad)
+        y = interface.action_to_tensors(actions, pad)
+        
+        if hasattr(interface, 'augment'):
+            x, y = interface.augment(x, y)
+        
+        # forward
+        x = model(**x)
+        
+        # loss
+        loss = interface.loss(x, y, pad, train_log)
+        
+        # train
+        optimizer.zero_grad()
+        loss.backward()
+        clip_grad(config, model)
+        scheduler.step()
+        optimizer.step()
+        
+        #log_optimizer(optimizer, log, clock)
+        #clock[0] += 1
+        train_log.step()
 
 def rollout_epoch(
     config,
@@ -216,13 +187,12 @@ def rollout_epoch(
     interface,
     train_mode,
     store_observations,
-    log,
-    clock,
+    store_activations,
 ):
     print('-'*80)
     print('Rolling out episodes')
     
-    # initialize storage for observations, actions and rewards
+    # initialize storage for observations, actions, rewards and activations
     if train_mode == 'test':
         num_envs = config.num_test_envs
     elif train_mode == 'train':
@@ -230,6 +200,9 @@ def rollout_epoch(
     if store_observations:
         observation_storage = RolloutStorage(num_envs)
     action_reward_storage = RolloutStorage(num_envs)
+    
+    if store_activations:
+        activation_storage = RolloutStorage(num_envs)
     
     # put the model in eval mode
     model.eval()
@@ -241,7 +214,6 @@ def rollout_epoch(
         steps = config.train_batch_rollout_steps_per_epoch
         rollout_mode = 'sample'
     elif train_mode == 'test':
-        #steps = config.test_batch_rollout_steps_per_epoch
         episodes = config.test_episodes_per_epoch
         rollout_mode = 'max'
     b = num_envs
@@ -266,6 +238,8 @@ def rollout_epoch(
                 action_reward_storage.start_new_seqs(terminal)
                 if store_observations:
                     observation_storage.start_new_seqs(terminal)
+                if store_activations:
+                    activation_storage.start_new_seqs(terminal)
                 
                 # add latest observation to storage
                 if store_observations:
@@ -304,6 +278,13 @@ def rollout_epoch(
                     reward=reward,
                 )
                 
+                if store_activations:
+                    a = {
+                        key:value.cpu().numpy().squeeze(axis=0)
+                        for key, value in x.items()
+                    }
+                    activation_storage.append_batch(activations=a)
+                
                 update = action_reward_storage.num_finished_seqs() - progress.n
                 progress.update(update)
     
@@ -312,9 +293,56 @@ def rollout_epoch(
     else:
         episodes = action_reward_storage
     
+    if store_activations:
+        episodes = episodes | activation_storage
+    
     return episodes
 
-def visualize_episodes(config, epoch, episodes, interface, log, clock):
+#def test_epoch(config, epoch, test_env, model, interface, log, clock):
+def test_episodes(config, epoch, episodes, interface, test_log):
+    print('-'*80)
+    print('Testing')
+    
+    avg_terminal_reward = 0.
+    reward_bins = [0 for _ in range(11)]
+    for seq_id in episodes.finished_seqs:
+        seq = episodes.get_seq(seq_id)
+        reward = seq['reward'][-1]
+        avg_terminal_reward += reward
+        reward_bin = int(reward * 10)
+        reward_bins[reward_bin] += 1
+    
+    n = episodes.num_finished_seqs()
+    if n:
+        avg_terminal_reward /= n
+    
+    print('Average Terminal Reward: %f'%avg_terminal_reward)
+    test_log.log(terminal_reward=avg_terminal_reward)
+    
+    if n:
+        bin_percent = [b/n for b in reward_bins]
+        for i, (p, c) in enumerate(zip(bin_percent, reward_bins)):
+            low = i * 0.1
+            print('%.01f'%low)
+            print('|' * round(p * 40) + ' (%i)'%c)
+    
+    #avg_reward = 0.
+    #entries = 0
+    #for seq_id in range(episodes.num_seqs()):
+    #    seq = episodes.get_seq(seq_id)
+    #    avg_reward += numpy.sum(seq['reward'])
+    #    entries += seq['reward'].shape[0]
+    #
+    #avg_reward /= entries
+    #print('Average Reward: %f'%avg_reward)
+    #log.add_scalar('val/reward', avg_reward, clock[0])
+    
+    if hasattr(interface, 'test_episodes'):
+        interface.test_episodes(episodes, test_log)
+    
+    #return episodes
+
+def visualize_episodes(config, epoch, episodes, interface):
     #frequency = config.visualization_frequency
     #if frequency and epoch % frequency == 0:
     print('-'*80)
@@ -322,7 +350,7 @@ def visualize_episodes(config, epoch, episodes, interface, log, clock):
     
     visualization_directory = os.path.join(
         './visualization',
-        os.path.split(log.log_dir)[-1],
+        #os.path.split(log.log_dir)[-1],
         'epoch_%04i'%epoch,
     )
     if not os.path.exists(visualization_directory):
@@ -330,25 +358,26 @@ def visualize_episodes(config, epoch, episodes, interface, log, clock):
     
     interface.visualize_episodes(epoch, episodes, visualization_directory)
 
-def save_checkpoint(config, epoch, model, optimizer, scheduler, log, clock):
-    frequency = config.checkpoint_frequency
-    if frequency and epoch % frequency == 0:
-        checkpoint_directory = os.path.join(
-            './checkpoint', os.path.split(log.log_dir)[-1])
-        if not os.path.exists(checkpoint_directory):
-            os.makedirs(checkpoint_directory)
-        
-        path = os.path.join(checkpoint_directory, 'checkpoint_%04i.pt'%epoch)
-        print('-'*80)
-        print('Saving checkpoint to: %s'%path)
-        checkpoint = {
-            'config' : config.as_dict(),
-            'model' : model.state_dict(),
-            'optimizer' : optimizer.state_dict(),
-            'scheduler' : scheduler.state_dict(),
-        }
-        torch.save(checkpoint, path)
+def save_checkpoint(
+    config, epoch, model, optimizer, scheduler, train_log, test_log):
+    #checkpoint_directory = os.path.join(
+    #    './checkpoint', os.path.split(log.log_dir)[-1])
+    
+    if not os.path.exists(config.checkpoint_directory):
+        os.makedirs(config.checkpoint_directory)
+    
+    path = os.path.join(
+        config.checkpoint_directory, 'checkpoint_%04i.pt'%epoch)
+    print('-'*80)
+    print('Saving checkpoint to: %s'%path)
+    checkpoint = {
+        'config' : config.as_dict(),
+        'model' : model.state_dict(),
+        'optimizer' : optimizer.state_dict(),
+        'scheduler' : scheduler.state_dict(),
+    }
+    torch.save(checkpoint, path)
 
-def log_optimizer(optimizer, log, clock):
-    for i, group in enumerate(optimizer.param_groups):
-        log.add_scalar('opt/lr_%i'%i, group['lr'], clock[0])
+#def log_optimizer(optimizer, log, clock):
+#    for i, group in enumerate(optimizer.param_groups):
+#        log.add_scalar('opt/lr_%i'%i, group['lr'], clock[0])

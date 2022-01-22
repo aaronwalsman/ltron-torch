@@ -1,3 +1,4 @@
+import math
 import os
 import copy
 
@@ -8,12 +9,16 @@ from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 
 import tqdm
 
+from conspiracy.log import SynchronousConsecutiveLog
+
 from splendor.image import save_image
 
 from ltron.config import Config
 from ltron.hierarchy import len_hierarchy, index_hierarchy
+from splendor.masks import color_index_to_byte
 from ltron.gym.envs.break_and_make_env import BreakAndMakeEnv
-from ltron.visualization.drawing import write_text
+from ltron.visualization.drawing import (
+    write_text, block_upscale_image, draw_box)
 
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.interface.utils import (
@@ -36,6 +41,19 @@ class BreakAndMakeInterface:
         self.config = config
         dummy_env = BreakAndMakeEnv(config)
         self.no_op_action = dummy_env.no_op_action()
+    
+    def make_train_log(self, config):
+        return SynchronousConsecutiveLog(
+            'table_spatial_loss',
+            'table_polarity_loss',
+            'hand_spatial_loss',
+            'hand_polarity_loss',
+            'shape_loss',
+            'color_loss',
+            'mode_loss',
+            'total_loss',
+            capacity = 36,
+        )
     
     def observation_to_tensors(self, observation, pad):
         raise NotImplementedError
@@ -96,7 +114,7 @@ class BreakAndMakeInterface:
         
         return y
     
-    def loss(self, x, y, pad, log=None, clock=None):
+    def loss(self, x, y, pad, log=None):
         
         # initialize loss
         loss = 0
@@ -115,7 +133,8 @@ class BreakAndMakeInterface:
         loss = loss + mode_loss
         
         if log is not None:
-            log.add_scalar('train/mode_loss', mode_loss, clock[0])
+            #log.add_scalar('train/mode_loss', mode_loss, clock[0])
+            log.log(mode_loss=mode_loss)
         
         # table and hand supervision
         for region in 'table', 'hand':
@@ -143,10 +162,12 @@ class BreakAndMakeInterface:
             loss = loss + polarity_loss
             
             if log is not None:
-                log.add_scalar(
-                    'train/%s_spatial_loss'%region, spatial_loss, clock[0])
-                log.add_scalar(
-                    'train/%s_polarity_loss'%region, polarity_loss, clock[0])
+                #log.add_scalar(
+                #    'train/%s_spatial_loss'%region, spatial_loss, clock[0])
+                #log.add_scalar(
+                #    'train/%s_polarity_loss'%region, polarity_loss, clock[0])
+                log.log(**{'%s_spatial_loss'%region:spatial_loss})
+                log.log(**{'%s_polarity_loss'%region:spatial_loss})
         
         # shape and color loss
         i = y['insert_i'].view(-1)
@@ -160,10 +181,12 @@ class BreakAndMakeInterface:
             loss = loss + region_loss
             
             if log is not None:
-                log.add_scalar('train/%s_loss'%region, region_loss, clock[0])
+                #log.add_scalar('train/%s_loss'%region, region_loss, clock[0])
+                log.log(**{'%s_loss'%region:region_loss})
         
         if log is not None:
-            log.add_scalar('train/total_loss', loss, clock[0])
+            #log.add_scalar('train/total_loss', loss, clock[0])
+            log.log(total_loss=loss)
         
         return loss
     
@@ -262,48 +285,93 @@ class BreakAndMakeInterface:
             
             seq = episodes.get_seq(seq_id)
             seq_len = len_hierarchy(seq)
-            table_frames = seq['observation']['table_color_render']
-            hand_frames = seq['observation']['hand_color_render']
             for frame_id in range(seq_len):
-                table_frame = table_frames[frame_id]
-                hand_frame = hand_frames[frame_id]
+                frame_action = index_hierarchy(seq['action'], frame_id)
+                
+                magenta = numpy.array([255,0,255]).reshape(1,1,3)
+                cyan = numpy.array([0,255,255]).reshape(1,1,3)
+                
+                def draw_cursor(region):
+                    frames = seq['observation']['%s_color_render'%region]
+                    frame = frames[frame_id]
+                    h, w = frame.shape[:2]
+                    if frame_action['%s_cursor'%region]['activate'] == 1:
+                        activation = index_hierarchy(
+                            seq['activations'][region], frame_id)
+                        
+                        # softmax
+                        location = activation[0].astype(numpy.float)
+                        location = numpy.exp(location)
+                        norm = numpy.sum(location)
+                        location /= norm
+                        
+                        # upsample
+                        location = block_upscale_image(
+                            location, h, w).reshape(h, w, 1)
+                        
+                        polarity = activation[1].astype(numpy.float)
+                        polarity = 1. / (1. + math.e ** -polarity)
+                        polarity = block_upscale_image(polarity, h, w)
+                        polarity = polarity.reshape(h, w, 1)
+                        color = magenta * (1.-polarity) + cyan * polarity
+                        
+                        frame = (
+                            frame * 0.5 * (1. - location) +
+                            color * location).astype(numpy.uint8)
+                    
+                    y, x = frame_action['%s_cursor'%region]['position']
+                    y, x = int(y), int(x)
+                    draw_box(
+                        frame, x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255))
+                    
+                    pos_snaps = seq['observation']['%s_pos_snap_render'%region]
+                    pos_snap = pos_snaps[frame_id,:,:,0]
+                    pos_snap = color_index_to_byte(pos_snap)
+                    pos_snap = block_upscale_image(pos_snap, h, w)
+                    draw_box(
+                        pos_snap,
+                        x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255),
+                    )
+                    
+                    neg_snaps = seq['observation']['%s_neg_snap_render'%region]
+                    neg_snap = neg_snaps[frame_id,:,:,0]
+                    neg_snap = color_index_to_byte(neg_snap)
+                    neg_snap = block_upscale_image(neg_snap, h, w)
+                    draw_box(
+                        neg_snap,
+                        x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255),
+                    )
+                    
+                    return frame, pos_snap, neg_snap
+                        
+                table_frame, table_pos, table_neg = draw_cursor('table')
+                hand_frame, hand_pos, hand_neg = draw_cursor('hand')
+                
                 th, tw = table_frame.shape[:2]
                 hh, hw = hand_frame.shape[:2]
                 w = tw + hw
-                joined_image = numpy.zeros((th, w, 3), dtype=numpy.uint8)
-                joined_image[:,:tw] = table_frame
-                joined_image[th-hh:,tw:] = hand_frame
+                joined_image = numpy.zeros((th*3, w, 3), dtype=numpy.uint8)
+                joined_image[:th,:tw] = table_frame
+                joined_image[th-hh:th,tw:] = hand_frame
                 
-                frame_action = index_hierarchy(seq['action'], frame_id)
-                #frame_mode = int(frame_action['mode'])
-                #frame_shape_id = int(frame_action['shape'])
-                #frame_color_id = int(frame_action['color'])
+                joined_image[th:th*2,:tw] = table_pos
+                joined_image[th*2-hh:th*2,tw:] = hand_pos
                 
-                ty, tx = frame_action['table_cursor']['position']
-                ty = int(ty)
-                tx = int(tx)
-                hy, hx = frame_action['hand_cursor']['position']
-                hy = int(hy)
-                hx = int(hx)
-                
-                joined_image[ty*4:(ty+1)*4, tx*4:(tx+1)*4] = (0,0,0)
-                yy = th - hh
-                joined_image[
-                    yy+hy*4:yy+(hy+1)*4, tw+(hx)*4:tw+(hx+1)*4] = (0,0,0)
+                joined_image[th*2:th*3,:tw] = table_neg
+                joined_image[th*3-hh:th*3,tw:] = hand_neg
                 
                 if frame_action['insert_brick']['shape']:
                     shape = frame_action['insert_brick']['shape']
                     color = frame_action['insert_brick']['color']
                     mode_string = 'Insert Brick [%i] [%i]'%(shape, color)
                 elif frame_action['pick_and_place'] == 1:
-                    mode_string = 'Pick And Place [%i,%i] [%i,%i]'%(ty,tx,hy,hx)
+                    mode_string = 'Pick And Place'
                 elif frame_action['pick_and_place'] == 2:
-                    mode_string = 'Pick And Place ORIGIN [%i,%i]'%(hy,hx)
+                    mode_string = 'Pick And Place ORIGIN'
                 elif frame_action['rotate']:
-                    mode_string = 'Rotate [%i] [%i,%i]'%(
-                        frame_action['rotate'], ty, tx)
+                    mode_string = 'Rotate [%i]'%frame_action['rotate']
                 elif frame_action['disassembly']:
-                    mode_string = 'Disassembly [%i,%i]'%(ty,tx)
+                    mode_string = 'Disassembly'
                 elif frame_action['table_viewpoint']:
                     mode_string = 'Table Viewpoint [%i]'%(
                         frame_action['table_viewpoint'])
@@ -331,3 +399,171 @@ class BreakAndMakeInterface:
                     'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
                 )
                 save_image(joined_image, frame_path)
+    
+    def test_episodes(self, episodes, test_log):
+        disassembly_n = 0
+        disassembly_correct = 0
+        nonconsecutive_disassembly_n = 0
+        pick_and_place_n = 0
+        pick_and_place_correct = 0
+        rotation_n = 0
+        rotation_correct = 0
+        phase_n = 0
+        phase_correct = 0
+        
+        brick_correct = 0
+        end_in_phase_0 = 0
+        
+        for i in range(episodes.num_seqs()):
+            seq = episodes.get_seq(i)
+            seq_len = len_hierarchy(seq)
+            disassembly_failed = False
+            
+            # are the number of produced bricks correct?
+            first_step = index_hierarchy(seq, 0)
+            initial_table_assembly = (
+                first_step['observation']['initial_table_assembly'])
+            correct_shape_colors = set()
+            num_bricks = initial_table_assembly['shape'].shape[0]
+            for k in range(num_bricks):
+                shape = initial_table_assembly['shape'][k]
+                color = initial_table_assembly['color'][k]
+                if shape:
+                    correct_shape_colors.add((shape, color))
+            
+            last_step = index_hierarchy(seq, seq_len-1)
+            last_assembly = (
+                last_step['observation']['table_assembly'])
+            last_shape_colors = set()
+            num_bricks = last_assembly['shape'].shape[0]
+            for k in range(num_bricks):
+                shape = last_assembly['shape'][k]
+                color = last_assembly['color'][k]
+                if shape:
+                    last_shape_colors.add((shape, color))
+            
+            brick_correct += (correct_shape_colors == last_shape_colors)
+            
+            # what phase did the episode end in?
+            last_phase = last_step['observation']['phase']
+            if last_phase == 0:
+                end_in_phase_0 += 1
+            
+            # make the good edges for pick and place checking later
+            table_edges = initial_table_assembly['edges']
+            n_edges = table_edges.shape[1]
+            good_edges = set()
+            for k in range(n_edges):
+                a_i, b_i, a_s, b_s = table_edges[:,k]
+                if a_i == 0 or b_i == 0:
+                    continue
+                a_shape = initial_table_assembly['shape'][a_i]
+                a_color = initial_table_assembly['color'][a_i]
+                b_shape = initial_table_assembly['shape'][b_i]
+                b_color = initial_table_assembly['color'][b_i]
+                good_edges.add(
+                    (a_shape, a_color, a_s, b_shape, b_color, b_s))
+            
+            for j in range(seq_len):
+                step = index_hierarchy(seq, j)
+                if step['action']['disassembly']:
+                    # was this a good disassembly action?
+                    disassembly_n += 1
+                    if not disassembly_failed:
+                        nonconsecutive_disassembly_n += 1
+                    if j != seq_len-1:
+                        next_step = index_hierarchy(seq, j+1)
+                        instances_now = numpy.sum(
+                            step['observation']['table_assembly']['shape'] != 0)
+                        instances_next = numpy.sum(
+                            next_step['observation']['table_assembly']['shape']
+                            != 0)
+                        if instances_next < instances_now:
+                            disassembly_correct += 1
+                            disassembly_failed=False
+                        else:
+                            disassembly_failed=True
+                    else:
+                        disassembly_failed = True
+                else:
+                    disassembly_failed = False
+                
+                if step['action']['pick_and_place'] == 1:
+                    # was this a good pick and place action?
+                    pick_and_place_n += 1
+                    hand_y, hand_x = step['action']['hand_cursor']['position']
+                    hand_p = step['action']['hand_cursor']['polarity']
+                    table_y, table_x = (
+                        step['action']['table_cursor']['position'])
+                    table_p = step['action']['table_cursor']['polarity']
+                    if hand_p:
+                        hand_snap_map = (
+                            step['observation']['hand_pos_snap_render'])
+                    else:
+                        hand_snap_map = (
+                            step['observation']['hand_neg_snap_render'])
+                    hand_instance_id, hand_snap_id = hand_snap_map[
+                        hand_y, hand_x]
+                    hand_assembly = step['observation']['hand_assembly']
+                    hand_shape = hand_assembly['shape'][hand_instance_id]
+                    hand_color = hand_assembly['color'][hand_instance_id]
+                    
+                    if table_p:
+                        table_snap_map = (
+                            step['observation']['table_pos_snap_render'])
+                    else:
+                        table_snap_map = (
+                            step['observation']['table_neg_snap_render'])
+                    table_instance_id, table_snap_id = table_snap_map[
+                        table_y, table_x]
+                    table_assembly = step['observation']['table_assembly']
+                    table_shape = table_assembly['shape'][table_instance_id]
+                    table_color = table_assembly['color'][table_instance_id]
+                    
+                    edge_a = (
+                        hand_shape, hand_color, hand_snap_id,
+                        table_shape, table_color, table_snap_id,
+                    )
+                    edge_b = (
+                        table_shape, table_color, table_snap_id,
+                        hand_shape, hand_color, hand_snap_id,
+                    )
+                    
+                    if edge_a in good_edges or edge_b in good_edges:
+                        pick_and_place_correct += 1
+                
+                if step['action']['rotate']:
+                    # was this a good rotate action?
+                    # Nevermind, this is hard... how do you make sure you're
+                    # comparing the right thing if both bricks have the same
+                    # pose and shape?  Anyway, we have enough to do to figure
+                    # out better pick and place anyway, so let's focus on that.
+                    # Plus, once we figure that out, this will be easier to
+                    # analyze anyway.
+                    #if j != seq_len - 1:
+                    #    initial_shape_1 = initial_table_assembly['shape'][1]
+                    #    initial_color_1 = initial_table_assembly['color'][1]
+                    #    initial_pose_1 =  initial_table_assembly['pose'][1]
+                    #    initial_shape_2 = initial_table_assembly['shape'][2]
+                    #    initial_color_2 = initial_table_assembly['color'][2]
+                    #    initial_pose_2 =  initial_table_assembly['pose'][2]
+                    #    
+                    #    next_step = index_hierarchy(seq, j+1)
+                    #    next_table_assembly = next_step['table_assembly']
+                    #    next_shape_1 = next_table_assembly['shape'][1]
+                    #    next_color_1 = next_table_assembly['color'][1]
+                    #    next_pose_1 =  next_table_assembly['pose'][1]
+                    #    next_shape_2 = next_table_assembly['shape'][2]
+                    #    next_color_2 = next_table_assembly['color'][2]
+                    #    next_pose_2 =  next_table_assembly['pose'][2]
+                    pass
+                        
+        
+        print('Correct Bricks: %.04f'%(brick_correct / episodes.num_seqs()))
+        print('Switched to Disassembly: %.04f'%(
+            1. - end_in_phase_0 / episodes.num_seqs()))
+        print('Disassembly: %.04f'%(disassembly_correct / disassembly_n))
+        print('Nonconsecutive Disassembly: %.04f'%(
+            disassembly_correct / nonconsecutive_disassembly_n))
+        print('Pick and Place: %.04f'%(
+            pick_and_place_correct / pick_and_place_n))
