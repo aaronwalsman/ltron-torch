@@ -69,7 +69,8 @@ class BreakAndMakeBCConfig(
     
     num_test_envs = 4
     
-    num_modes = 23 # 7 + 7 + 3 + 2 + 1 + 2 + 1
+    #num_modes = 23 # 7 + 7 + 3 + 2 + 1 + 2 + 1 (+2 for factored cursor)
+    factor_cursor_distribution = False
     num_shapes = 6
     num_colors = 6
     
@@ -109,6 +110,11 @@ def train_break_and_make_bc(config=None):
         train_log_checkpoint = None
         test_log_checkpoint = None
         start_epoch = 1
+    
+    if config.factor_cursor_distribution:
+        config.num_modes = 25
+    else:
+        config.num_modes = 23
     
     device = torch.device(config.device)
     

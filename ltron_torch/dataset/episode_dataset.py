@@ -16,8 +16,6 @@ class EpisodeDatasetConfig(Config):
     split = 'train_episodes'
     subset = None
     
-    #first_phase_only = False
-    
     batch_size = 4
     loader_workers = 4
     shuffle = True
@@ -35,11 +33,6 @@ class EpisodeDataset(Dataset):
     def __getitem__(self, i):
         path = self.episode_paths[i]
         data = numpy.load(path, allow_pickle=True)['episode'].item()
-        
-        #if self.config.first_phase_only:
-        #    i = numpy.where(data['actions']['phase'])[0]
-        #    if len(i):
-        #        data = index_hierarchy(data, slice(0, i[0]+1))
         
         return data
 

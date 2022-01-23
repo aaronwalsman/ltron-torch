@@ -29,6 +29,11 @@ class BreakAndMakeHandTableTransformerInterfaceConfig(
     hand_h = 96
     hand_w = 96
     
+    table_decode_h = 64
+    table_decode_w = 64
+    hand_decode_h = 24
+    hand_decode_w = 24
+    
     def set_dependents(self):
         assert self.table_h % self.tile_h == 0
         assert self.table_w % self.table_w == 0
@@ -77,7 +82,28 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         x['hand_pad'] = torch.LongTensor(hand_pad).to(device)
         
         # process token x/t/pad
-        x['token_x'] = torch.LongTensor(observation['phase']).to(device)
+        x['phase_x'] = torch.LongTensor(observation['phase']).to(device)
+        if self.config.factor_cursor_distribution:
+            # this too needs to change if we properly combine these together
+            # in the env/component later on.
+            table_yx = observation['table_cursor']['position']
+            table_yx = (
+                table_yx[:,:,0] * self.config.table_decode_w + table_yx[:,:,1])
+            x['table_cursor_yx'] = torch.LongTensor(table_yx).to(device)
+            x['table_cursor_p'] = torch.LongTensor(
+                observation['table_cursor']['polarity']).to(device)
+            
+            hand_yx = observation['hand_cursor']['position']
+            hand_yx = (
+                hand_yx[:,:,0] * self.config.hand_decode_w + hand_yx[:,:,1])
+            x['hand_cursor_yx'] = torch.LongTensor(hand_yx).to(device)
+            x['hand_cursor_p'] = torch.LongTensor(
+                observation['hand_cursor']['polarity']).to(device)
+        else:
+            x['table_cursor_yx'] = None
+            x['table_cursor_p'] = None
+            x['hand_cursor_yx'] = None
+            x['hand_cursor_p'] = None
         x['token_t'] = torch.LongTensor(observation['step']).to(device)
         x['token_pad'] = torch.LongTensor(pad).to(device)
         

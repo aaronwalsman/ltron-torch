@@ -140,8 +140,25 @@ class HandTableTransformer(Module):
             config.encoder_channels,
             config.embedding_dropout,
         )
-        self.token_embedding = TokenEmbedding(
+        self.phase_embedding = TokenEmbedding(
             2, config.encoder_channels, config.embedding_dropout)
+        
+        if self.config.factor_cursor_distribution:
+            self.table_cursor_embedding = TokenEmbedding(
+                config.table_decoder_pixels,
+                config.encoder_channels,
+                config.embedding_dropout,
+            )
+            self.table_polarity_embedding = TokenEmbedding(
+                2, config.encoder_channels, config.embedding_dropout)
+            
+            self.hand_cursor_embedding = TokenEmbedding(
+                config.hand_decoder_pixels,
+                config.encoder_channels,
+                config.embedding_dropout,
+            )
+            self.hand_polarity_embedding = TokenEmbedding(
+                2, config.encoder_channels, config.embedding_dropout)
         
         self.mask_embedding = Embedding(1, config.encoder_channels)
         
@@ -182,7 +199,12 @@ class HandTableTransformer(Module):
         #tile_x, tile_t, tile_yx, tile_pad,
         table_tiles, table_t, table_yx, table_pad,
         hand_tiles, hand_t, hand_yx, hand_pad,
-        token_x, token_t, token_pad,
+        phase_x,
+        table_cursor_yx,
+        table_cursor_p,
+        hand_cursor_yx,
+        hand_cursor_p,
+        token_t, token_pad,
         decode_t, decode_pad,
         use_memory=None,
     ):
@@ -206,9 +228,39 @@ class HandTableTransformer(Module):
         tile_x = tile_x + tile_pt + tile_pyx
         
         # make the tokens
-        token_x = self.token_embedding(token_x)
+        token_x = self.phase_embedding(phase_x)
         token_pt = self.temporal_position_encoding(token_t)
         token_x = token_x + token_pt
+        
+        if self.config.factor_cursor_distribution:
+            table_cursor_yx = self.table_cursor_embedding(table_cursor_yx)
+            table_cursor_yx = table_cursor_yx + token_pt
+            table_cursor_p = self.table_polarity_embedding(table_cursor_p)
+            table_cursor_p = table_cursor_p + token_pt
+            hand_cursor_yx = self.hand_cursor_embedding(hand_cursor_yx)
+            hand_cursor_yx = hand_cursor_yx + token_pt
+            hand_cursor_p = self.hand_polarity_embedding(hand_cursor_p)
+            hand_cursor_p = hand_cursor_p + token_pt
+            
+            # all these cat_padded_seqs could probably be done more efficiently
+            # in a single function that rolls them all together at once
+            table_x, table_pad = cat_padded_seqs(
+                table_cursor_yx, table_cursor_p, token_pad, token_pad)
+            table_t, _ = cat_padded_seqs(
+                token_t, token_t, token_pad, token_pad)
+            hand_x, hand_pad = cat_padded_seqs(
+                hand_cursor_yx, hand_cursor_p, token_pad, token_pad)
+            hand_t, _ = cat_padded_seqs(
+                token_t, token_t, token_pad, token_pad)
+            
+            cursor_x, cursor_pad = cat_padded_seqs(
+                table_x, hand_x, table_pad, hand_pad)
+            cursor_t, _ = cat_padded_seqs(
+                table_t, hand_t, table_pad, hand_pad)
+            token_x, token_pad = cat_padded_seqs(
+                token_x, cursor_x, token_pad, cursor_pad)
+            token_t, _ = cat_padded_seqs(
+                token_t, cursor_t, token_pad, cursor_pad)
         
         # concatenate the tile and discrete tokens
         x, pad = cat_padded_seqs(tile_x, token_x, tile_pad, token_pad)

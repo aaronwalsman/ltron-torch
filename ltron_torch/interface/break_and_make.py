@@ -33,6 +33,8 @@ class BreakAndMakeInterfaceConfig(Config):
     hand_spatial_loss_weight = 1.
     hand_polarity_loss_weight = 1.
     
+    factor_cursor_distribution = False
+    
     visualization_seqs = 10
 
 class BreakAndMakeInterface:
@@ -100,13 +102,16 @@ class BreakAndMakeInterface:
         y_mode[action['table_viewpoint'] == 5] = 13
         y_mode[action['table_viewpoint'] == 6] = 14
         y_mode[action['table_viewpoint'] == 7] = 15
-        y_mode[action['hand_viewpoint'] == 1] == 16
-        y_mode[action['hand_viewpoint'] == 2] == 17
-        y_mode[action['hand_viewpoint'] == 3] == 18
-        y_mode[action['hand_viewpoint'] == 4] == 19
-        y_mode[action['hand_viewpoint'] == 5] == 20
-        y_mode[action['hand_viewpoint'] == 6] == 21
-        y_mode[action['hand_viewpoint'] == 7] == 22
+        y_mode[action['hand_viewpoint'] == 1] = 16
+        y_mode[action['hand_viewpoint'] == 2] = 17
+        y_mode[action['hand_viewpoint'] == 3] = 18
+        y_mode[action['hand_viewpoint'] == 4] = 19
+        y_mode[action['hand_viewpoint'] == 5] = 20
+        y_mode[action['hand_viewpoint'] == 6] = 21
+        y_mode[action['hand_viewpoint'] == 7] = 22
+        if self.config.factor_cursor_distribution:
+            y_mode[action['table_cursor']['activate']] = 23
+            y_mode[action['hand_cursor']['activate']] = 24
         y['mode'] = torch.LongTensor(y_mode).to(device)
         
         for region in 'table', 'hand':
@@ -120,7 +125,7 @@ class BreakAndMakeInterface:
             
             # get the click polarity
             y['%s_p'%region] = torch.LongTensor(
-                action[region + '_cursor']['polarity']).to(device)
+                action['%s_cursor'%region]['polarity']).to(device)
         
         y['insert_i'] = y['mode'] == 8
         y['shape'] = torch.LongTensor(
@@ -217,12 +222,10 @@ class BreakAndMakeInterface:
         shape_action = categorical_or_max(x_shape, mode=mode).cpu().numpy()
         color_action = categorical_or_max(x_color, mode=mode).cpu().numpy()
         
-        #import pdb
-        #pdb.set_trace()
-        
-        region_yx = []
-        region_polarity = []
-        for region in 'table', 'hand':
+        #region_yx = []
+        #region_polarity = []
+        #for region in 'table', 'hand':
+        def get_cursor(region):
             h, w = x[region].shape[-2:]
             x_region = x[region].view(b, 2, h, w)
             
@@ -231,16 +234,21 @@ class BreakAndMakeInterface:
             region_y, region_x = categorical_or_max_2d(x_spatial, mode=mode)
             region_y = region_y.cpu().numpy()
             region_x = region_x.cpu().numpy()
-            region_yx.append((region_y, region_x))
+            #region_yx.append((region_y, region_x))
+            #region_yx = (region_y, region_x)
             
             # polarity
             x_polarity = x_region[:,1]
             x_polarity = x_polarity[range(b), region_y, region_x]
             polarity = bernoulli_or_max(x_polarity, mode=mode).cpu().numpy()
-            region_polarity.append(polarity)
+            #region_polarity.append(polarity)
+            
+            return region_y, region_x, polarity
         
-        (table_y, table_x), (hand_y, hand_x) = region_yx
-        table_polarity, hand_polarity = region_polarity
+        #(table_y, table_x), (hand_y, hand_x) = region_yx
+        #table_polarity, hand_polarity = region_polarity
+        table_y, table_x, table_polarity = get_cursor('table')
+        hand_y, hand_x, hand_polarity = get_cursor('hand')
         
         actions = []
         for i in range(b):
@@ -252,30 +260,42 @@ class BreakAndMakeInterface:
                 action['phase'] = 2
             elif mode == 2: # disassembly
                 action['disassembly'] = 1
-                action['table_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['table_cursor']['activate'] = True
             elif mode == 3:
                 action['pick_and_place'] = 1
-                action['table_cursor']['activate'] = True
-                action['hand_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['table_cursor']['activate'] = True
+                    action['hand_cursor']['activate'] = True
             elif mode == 4:
                 action['pick_and_place'] = 2
-                action['hand_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['hand_cursor']['activate'] = True
             elif mode == 5:
                 action['rotate'] = 1
-                action['table_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['table_cursor']['activate'] = True
             elif mode == 6:
                 action['rotate'] = 2
-                action['table_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['table_cursor']['activate'] = True
             elif mode == 7:
                 action['rotate'] = 3
-                action['table_cursor']['activate'] = True
+                if not self.config.factor_cursor_distribution:
+                    action['table_cursor']['activate'] = True
             elif mode == 8:
                 action['insert_brick']['shape'] = shape_action[i] + 1
                 action['insert_brick']['color'] = color_action[i] + 1
             elif mode >= 9 and mode < 16:
                 action['table_viewpoint'] = mode - 8
-            elif mode >= 16:
+            elif mode >= 16 and mode < 23:
                 action['hand_viewpoint'] = mode - 15
+            elif mode == 23:
+                assert self.config.factor_cursor_distribution
+                action['table_cursor']['activate'] = True
+            elif mode == 24:
+                assert self.config.factor_cursor_distribution
+                action['hand_cursor']['activate'] = True
             
             if action['table_cursor']['activate']:
                 action['table_cursor']['position'] = numpy.array(
@@ -588,15 +608,19 @@ class BreakAndMakeInterface:
                     pass
                         
         
-        print('Correct Bricks: %.04f'%(brick_correct / episodes.num_seqs()))
-        print('Switched to Disassembly: %.04f'%(
-            1. - end_in_phase_0 / episodes.num_seqs()))
-        print('Disassembly: %.04f'%(disassembly_correct / disassembly_n))
-        print('Nonconsecutive Disassembly: %.04f'%(
-            disassembly_correct / nonconsecutive_disassembly_n))
-        print('Pick and Place: %.04f'%(
-            pick_and_place_correct / pick_and_place_n))
-        print('Pick and Place One Correct: %.04f'%(
-            pick_and_place_one_correct / pick_and_place_n))
-        print('Pick and Place Both Correct: %.04f'%(
-            pick_and_place_both_correct / pick_and_place_n))
+        if episodes.num_seqs():
+            print('Correct Bricks: %.04f'%(brick_correct / episodes.num_seqs()))
+            print('Switched to Disassembly: %.04f'%(
+                1. - end_in_phase_0 / episodes.num_seqs()))
+        if disassembly_n:
+            print('Disassembly: %.04f'%(disassembly_correct / disassembly_n))
+        if nonconsecutive_disassembly_n:
+            print('Nonconsecutive Disassembly: %.04f'%(
+                disassembly_correct / nonconsecutive_disassembly_n))
+        if pick_and_place_n:
+            print('Pick and Place: %.04f'%(
+                pick_and_place_correct / pick_and_place_n))
+            print('Pick and Place One Correct: %.04f'%(
+                pick_and_place_one_correct / pick_and_place_n))
+            print('Pick and Place Both Correct: %.04f'%(
+                pick_and_place_both_correct / pick_and_place_n))
