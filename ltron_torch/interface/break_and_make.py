@@ -358,7 +358,10 @@ class BreakAndMakeInterface:
                     y, x = frame_action['%s_cursor'%region]['position']
                     y, x = int(y), int(x)
                     draw_box(
-                        frame, x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255))
+                        frame,
+                        x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                        (255, 255, 255),
+                    )
                     
                     pos_snaps = seq['observation']['%s_pos_snap_render'%region]
                     pos_snap = pos_snaps[frame_id,:,:,0]
@@ -366,7 +369,7 @@ class BreakAndMakeInterface:
                     pos_snap = block_upscale_image(pos_snap, h, w)
                     draw_box(
                         pos_snap,
-                        x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255),
+                        x*4, y*4, (x+1)*4-1, (y+1)*4-1, (255, 255, 255),
                     )
                     
                     neg_snaps = seq['observation']['%s_neg_snap_render'%region]
@@ -375,7 +378,7 @@ class BreakAndMakeInterface:
                     neg_snap = block_upscale_image(neg_snap, h, w)
                     draw_box(
                         neg_snap,
-                        x*4-1, y*4-1, (x+1)*4, (y+1)*4, (255, 255, 255),
+                        x*4, y*4, (x+1)*4-1, (y+1)*4-1, (255, 255, 255),
                     )
                     
                     return frame, pos_snap, neg_snap

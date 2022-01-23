@@ -160,7 +160,7 @@ class HandTableTransformer(Module):
             self.hand_polarity_embedding = TokenEmbedding(
                 2, config.encoder_channels, config.embedding_dropout)
         
-        self.mask_embedding = Embedding(1, config.encoder_channels)
+        #self.mask_embedding = Embedding(1, config.encoder_channels)
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
@@ -257,10 +257,11 @@ class HandTableTransformer(Module):
                 table_x, hand_x, table_pad, hand_pad)
             cursor_t, _ = cat_padded_seqs(
                 table_t, hand_t, table_pad, hand_pad)
-            token_x, token_pad = cat_padded_seqs(
+            token_x, new_token_pad = cat_padded_seqs(
                 token_x, cursor_x, token_pad, cursor_pad)
             token_t, _ = cat_padded_seqs(
                 token_t, cursor_t, token_pad, cursor_pad)
+            token_pad = new_token_pad
         
         # concatenate the tile and discrete tokens
         x, pad = cat_padded_seqs(tile_x, token_x, tile_pad, token_pad)
