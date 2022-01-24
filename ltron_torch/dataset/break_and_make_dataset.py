@@ -119,6 +119,9 @@ class BreakAndMakeDataset(EpisodeDataset):
             rotate_ids = numpy.where(sequence['actions']['rotate'])[0]
             sequence = expand_steps(sequence, 'rotate', rotate_ids)
             
+            sequence['observations']['step'] = numpy.arange(
+                sequence['observations']['step'].shape[0])
+            
             '''
             # expand disassembly steps
             disassembly_ids = numpy.where(data['actions']['disassembly'])[0]

@@ -76,6 +76,8 @@ class BreakAndMakeBCConfig(
     
     table_channels = 2
     hand_channels = 2
+    
+    async_ltron = True
 
 def train_break_and_make_bc(config=None):
     if config is None:
@@ -164,7 +166,11 @@ def train_break_and_make_bc(config=None):
     print('-'*80)
     print('Building Test Env')
     test_config = BreakAndMakeBCConfig.translate(config, split='test_split')
-    test_env = async_ltron(
+    if config.async_ltron:
+        vector_ltron = async_ltron
+    else:
+        vector_ltron = sync_ltron
+    test_env = vector_ltron(
         config.num_test_envs,
         BreakAndMakeEnv,
         test_config,
