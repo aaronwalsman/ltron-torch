@@ -110,8 +110,8 @@ class BreakAndMakeInterface:
         y_mode[action['hand_viewpoint'] == 6] = 21
         y_mode[action['hand_viewpoint'] == 7] = 22
         if self.config.factor_cursor_distribution:
-            y_mode[action['table_cursor']['activate']] = 23
-            y_mode[action['hand_cursor']['activate']] = 24
+            y_mode[action['table_cursor']['activate'] == 1] = 23
+            y_mode[action['hand_cursor']['activate'] == 1] = 24
         y['mode'] = torch.LongTensor(y_mode).to(device)
         
         for region in 'table', 'hand':
@@ -399,34 +399,41 @@ class BreakAndMakeInterface:
                 joined_image[th*2:th*3,:tw] = table_neg
                 joined_image[th*3-hh:th*3,tw:] = hand_neg
                 
+                mode_string = []
                 if frame_action['insert_brick']['shape']:
                     shape = frame_action['insert_brick']['shape']
                     color = frame_action['insert_brick']['color']
-                    mode_string = 'Insert Brick [%i] [%i]'%(shape, color)
+                    mode_string.append('Insert Brick [%i] [%i]'%(shape, color))
                 elif frame_action['pick_and_place'] == 1:
-                    mode_string = 'Pick And Place'
+                    mode_string.append('Pick And Place')
                 elif frame_action['pick_and_place'] == 2:
-                    mode_string = 'Pick And Place ORIGIN'
+                    mode_string.append('Pick And Place ORIGIN')
                 elif frame_action['rotate']:
-                    mode_string = 'Rotate [%i]'%frame_action['rotate']
+                    mode_string.append('Rotate [%i]'%frame_action['rotate'])
                 elif frame_action['disassembly']:
-                    mode_string = 'Disassembly'
+                    mode_string.append('Disassembly')
                 elif frame_action['table_viewpoint']:
-                    mode_string = 'Table Viewpoint [%i]'%(
-                        frame_action['table_viewpoint'])
+                    mode_string.append('Table Viewpoint [%i]'%(
+                        frame_action['table_viewpoint']))
                 elif frame_action['hand_viewpoint']:
-                    mode_string = 'Hand Viewpoint [%i]'%(
-                        frame_action['hand_viewpoint'])
+                    mode_string.append('Hand Viewpoint [%i]'%(
+                        frame_action['hand_viewpoint']))
                 elif frame_action['phase']:
-                    mode_string = 'Phase [%i]'%frame_action['phase']
+                    mode_string.append('Phase [%i]'%frame_action['phase'])
+                elif frame_action['table_cursor']['activate']:
+                    mode_string.append('Table Cursor')
+                elif frame_action['hand_cursor']['activate']:
+                    mode_string.append('Hand Cursor')
                 else:
-                    mode_string = 'UNWRITTEN'
+                    mode_string.append('UNKNOWN ACTION')
                 
                 if frame_id:
                     reward = seq['reward'][frame_id-1]
                 else:
                     reward = 0.
-                mode_string += '\nReward: %.04f'%reward
+                mode_string.append('Reward: %.04f'%reward)
+                
+                mode_string = '\n'.join(mode_string)
                 
                 try:
                     joined_image = write_text(joined_image, mode_string)
