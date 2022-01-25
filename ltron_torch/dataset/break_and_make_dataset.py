@@ -101,6 +101,11 @@ class BreakAndMakeDataset(EpisodeDataset):
                     make_activated_cursor_observations(step, activated)
                     expanded_steps.append(step)
                     
+                    # turn off all tiles except for the first
+                    for step in expanded_steps[1:]:
+                        step['observations']['table_tile_mask'][:] = 0
+                        step['observations']['hand_tile_mask'][:] = 0
+                    
                     # join everything together
                     seq = concatenate_numpy_hierarchies(
                         index_hierarchy(seq, slice(None, i)),
