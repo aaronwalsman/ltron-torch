@@ -163,47 +163,53 @@ class BreakAndMakeInterface:
             i = y['%s_i'%region].view(-1)
             x_region = x[region].reshape(s*b, 2, h*w)[i]
             
-            # spatial
-            x_spatial = x_region[:,0]
-            y_y = y['%s_yx'%region][:,:,0]
-            y_x = y['%s_yx'%region][:,:,1]
-            y_spatial = (y_y * w + y_x).view(-1)[i]
-            spatial_loss = cross_entropy(x_spatial, y_spatial)
-            spatial_loss = spatial_loss * getattr(
-                self.config, '%s_spatial_loss_weight'%region)
-            loss = loss + spatial_loss
-            
-            # polarity
-            x_p = x_region[:,1].view(-1, h*w)
-            x_p = x_p[range(x_p.shape[0]), y_spatial]
-            y_p = y['%s_p'%region].view(-1)[i].float()
-            polarity_loss = binary_cross_entropy_with_logits(x_p, y_p)
-            polarity_loss = polarity_loss * getattr(
-                self.config, '%s_polarity_loss_weight'%region)
-            loss = loss + polarity_loss
-            
-            if log is not None:
-                #log.add_scalar(
-                #    'train/%s_spatial_loss'%region, spatial_loss, clock[0])
-                #log.add_scalar(
-                #    'train/%s_polarity_loss'%region, polarity_loss, clock[0])
-                log.log(**{'%s_spatial_loss'%region:spatial_loss})
-                log.log(**{'%s_polarity_loss'%region:spatial_loss})
+            if x_region.shape[0]:
+                # spatial
+                x_spatial = x_region[:,0]
+                y_y = y['%s_yx'%region][:,:,0]
+                y_x = y['%s_yx'%region][:,:,1]
+                y_spatial = (y_y * w + y_x).view(-1)[i]
+                spatial_loss = cross_entropy(x_spatial, y_spatial)
+                spatial_loss = spatial_loss * getattr(
+                    self.config, '%s_spatial_loss_weight'%region)
+                loss = loss + spatial_loss
+                
+                # polarity
+                x_p = x_region[:,1].view(-1, h*w)
+                x_p = x_p[range(x_p.shape[0]), y_spatial]
+                y_p = y['%s_p'%region].view(-1)[i].float()
+                polarity_loss = binary_cross_entropy_with_logits(x_p, y_p)
+                polarity_loss = polarity_loss * getattr(
+                    self.config, '%s_polarity_loss_weight'%region)
+                loss = loss + polarity_loss
+                
+                if log is not None:
+                    #log.add_scalar(
+                    #    'train/%s_spatial_loss'%region, spatial_loss, clock[0])
+                    #log.add_scalar(
+                    #    'train/%s_polarity_loss'%region,
+                    #    polarity_loss,
+                    #    clock[0],
+                    #)
+                    log.log(**{'%s_spatial_loss'%region:spatial_loss})
+                    log.log(**{'%s_polarity_loss'%region:spatial_loss})
         
         # shape and color loss
         i = y['insert_i'].view(-1)
         for region in 'shape', 'color':
             n = x[region].shape[-1]
             x_region = x[region].view(s*b, n)[i]
-            y_region = y[region].view(-1)[i]
-            region_loss = cross_entropy(x_region, y_region)
-            region_loss = region_loss * getattr(
-                self.config, '%s_loss_weight'%region)
-            loss = loss + region_loss
-            
-            if log is not None:
-                #log.add_scalar('train/%s_loss'%region, region_loss, clock[0])
-                log.log(**{'%s_loss'%region:region_loss})
+            if x_region.shape[0]:
+                y_region = y[region].view(-1)[i]
+                region_loss = cross_entropy(x_region, y_region)
+                region_loss = region_loss * getattr(
+                    self.config, '%s_loss_weight'%region)
+                loss = loss + region_loss
+                
+                if log is not None:
+                    #log.add_scalar(
+                    #   'train/%s_loss'%region, region_loss, clock[0])
+                    log.log(**{'%s_loss'%region:region_loss})
         
         if log is not None:
             #log.add_scalar('train/total_loss', loss, clock[0])
@@ -323,6 +329,8 @@ class BreakAndMakeInterface:
             seq_len = len_hierarchy(seq)
             for frame_id in range(seq_len):
                 frame_action = index_hierarchy(seq['action'], frame_id)
+                frame_observation = index_hierarchy(
+                    seq['observation'], frame_id)
                 
                 magenta = numpy.array([255,0,255]).reshape(1,1,3)
                 cyan = numpy.array([0,255,255]).reshape(1,1,3)
@@ -354,14 +362,27 @@ class BreakAndMakeInterface:
                         frame = (
                             frame * 0.5 * (1. - location) +
                             color * location).astype(numpy.uint8)
+                        
+                        y, x = frame_action['%s_cursor'%region]['position']
+                        y, x = int(y), int(x)
+                        p = frame_action['%s_cursor'%region]['polarity']
+                        p = int(p)
+                        draw_box(
+                            frame,
+                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                            (255*(1-p), 0, 255*p),
+                        )
                     
-                    y, x = frame_action['%s_cursor'%region]['position']
-                    y, x = int(y), int(x)
-                    draw_box(
-                        frame,
-                        x*4, y*4, (x+1)*4-1, (y+1)*4-1,
-                        (255, 255, 255),
-                    )
+                    else:
+                        y, x = frame_observation['%s_cursor'%region]['position']
+                        y, x = int(y), int(x)
+                        p = frame_observation['%s_cursor'%region]['polarity']
+                        p = int(p)
+                        draw_box(
+                            frame,
+                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                            (255*(1-p), 0, 255*p),
+                        )
                     
                     pos_snaps = seq['observation']['%s_pos_snap_render'%region]
                     pos_snap = pos_snaps[frame_id,:,:,0]
