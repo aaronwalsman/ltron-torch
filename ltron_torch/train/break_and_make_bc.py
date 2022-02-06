@@ -1,3 +1,7 @@
+import random
+
+import numpy
+
 import torch
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
@@ -78,12 +82,19 @@ class BreakAndMakeBCConfig(
     hand_channels = 2
     
     async_ltron = True
+    
+    seed = 1234567890
 
 def train_break_and_make_bc(config=None):
     if config is None:
         print('='*80)
         print('Loading Config')
         config = BreakAndMakeBCConfig.from_commandline()
+    
+    random.seed(config.seed)
+    numpy.random.seed(config.seed)
+    torch.manual_seed(config.seed)
+    torch.cuda.manual_seed_all(config.seed)
     
     if config.load_checkpoint is not None:
         print('-'*80)
@@ -162,7 +173,7 @@ def train_break_and_make_bc(config=None):
     else:
         assert False, 'bad task: "%s"'%config.task
     train_loader = build_episode_loader(train_config, train_dataset)
-
+    
     print('-'*80)
     print('Building Test Env')
     test_config = BreakAndMakeBCConfig.translate(config, split='test_split')
