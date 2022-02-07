@@ -227,6 +227,10 @@ class HandTableTransformer(Module):
         tile_pyx = self.spatial_position_encoding(tile_yx)
         tile_x = tile_x + tile_pt + tile_pyx
         
+        # DIFFERENT
+        #print('new tile_x')
+        #print(torch.sum(tile_x).cpu())
+        
         # make the tokens
         token_x = self.phase_embedding(phase_x)
         token_pt = self.temporal_position_encoding(token_t)
@@ -270,11 +274,25 @@ class HandTableTransformer(Module):
         # use the encoder to encode
         x = self.encoder(x, t, pad, use_memory=use_memory)
         
+        # DIFFERENT
+        #print('new x')
+        #print(torch.sum(x).cpu())
+        
         # convert encoder channels to decoder channels
         x = self.encode_to_decode(x)
         
+        #print('new enc to dec x')
+        #print(torch.sum(x).cpu())
+        
         # use the decoder to decode
         x = self.decoder(decode_t, decode_pad, x, t, pad, use_memory=use_memory)
+        
+        #print('new mode/shape/color/table/hand x')
+        #print('   ', torch.sum(x['mode']).cpu())
+        #print('   ', torch.sum(x['shape']).cpu())
+        #print('   ', torch.sum(x['color']).cpu())
+        #print('   ', torch.sum(x['table']).cpu())
+        #print('   ', torch.sum(x['hand']).cpu())
         
         return x
 

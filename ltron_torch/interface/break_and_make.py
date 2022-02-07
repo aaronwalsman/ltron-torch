@@ -152,6 +152,11 @@ class BreakAndMakeInterface:
         mode_loss = mode_loss.view(s,b) * loss_mask
         mode_loss = mode_loss.mean() * self.config.mode_loss_weight
         loss = loss + mode_loss
+        #print('new mode loss')
+        #print('   ', mode_loss.cpu())
+        #print('   ', torch.sum(x['mode']))
+        #print('   ', torch.sum(y['mode']))
+        #print(y['mode'])
         
         if log is not None:
             #log.add_scalar('train/mode_loss', mode_loss, clock[0])
@@ -173,6 +178,10 @@ class BreakAndMakeInterface:
                 spatial_loss = spatial_loss * getattr(
                     self.config, '%s_spatial_loss_weight'%region)
                 loss = loss + spatial_loss
+                #print('new %s spatial loss'%region)
+                #print('   ', spatial_loss.cpu())
+                #print('   ', torch.sum(x_spatial).cpu())
+                #print('   ', torch.sum(y_spatial).cpu())
                 
                 # polarity
                 x_p = x_region[:,1].view(-1, h*w)
@@ -182,6 +191,10 @@ class BreakAndMakeInterface:
                 polarity_loss = polarity_loss * getattr(
                     self.config, '%s_polarity_loss_weight'%region)
                 loss = loss + polarity_loss
+                #print('new %s polarity loss'%region)
+                #print('   ', polarity_loss.cpu())
+                #print('   ', torch.sum(x_p).cpu())
+                #print('   ', torch.sum(y_p).cpu())
                 
                 if log is not None:
                     #log.add_scalar(
@@ -192,7 +205,7 @@ class BreakAndMakeInterface:
                     #    clock[0],
                     #)
                     log.log(**{'%s_spatial_loss'%region:spatial_loss})
-                    log.log(**{'%s_polarity_loss'%region:spatial_loss})
+                    log.log(**{'%s_polarity_loss'%region:polarity_loss})
         
         # shape and color loss
         i = y['insert_i'].view(-1)
@@ -215,6 +228,8 @@ class BreakAndMakeInterface:
             #log.add_scalar('train/total_loss', loss, clock[0])
             log.log(total_loss=loss)
         
+        #print('new loss')
+        #print(loss.cpu())
         return loss
     
     def tensor_to_actions(self, x, env, mode='sample'):
