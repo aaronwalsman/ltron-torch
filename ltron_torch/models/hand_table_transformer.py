@@ -32,17 +32,11 @@ from ltron_torch.models.transformer import (
     init_weights,
 )
 from ltron_torch.models.heads import LinearMultiheadDecoder
+from ltron_torch.models.hand_table_embedding import (
+    HandTableEmbeddingConfig, HandTableEmbedding)
 #from ltron_torch.interface.utils import categorical_or_max, categorical_or_max_2d
 
-class HandTableTransformerConfig(Config):
-    tile_h = 16
-    tile_w = 16
-    tile_c = 3
-    table_h = 256
-    table_w = 256
-    hand_h = 96
-    hand_w = 96
-    
+class HandTableTransformerConfig(HandTableEmbeddingConfig):
     table_decode_tokens_h = 16
     table_decode_tokens_w = 16
     table_decode_h = 64
@@ -55,8 +49,6 @@ class HandTableTransformerConfig(Config):
     global_tokens = 1
     
     max_sequence_length = 1024
-    
-    embedding_dropout = 0.1
     
     nonlinearity = 'gelu'
     
@@ -82,20 +74,6 @@ class HandTableTransformerConfig(Config):
     init_weights = True
     
     def set_dependents(self):
-        assert self.table_h % self.tile_h == 0
-        assert self.table_w % self.table_w == 0
-        self.table_tiles_h = self.table_h // self.tile_h
-        self.table_tiles_w = self.table_w // self.tile_w
-        self.table_tiles = self.table_tiles_h * self.table_tiles_w
-        
-        assert self.hand_h % self.tile_h == 0
-        assert self.hand_w % self.tile_w == 0
-        self.hand_tiles_h = self.hand_h // self.tile_h
-        self.hand_tiles_w = self.hand_w // self.tile_w
-        self.hand_tiles = self.hand_tiles_h * self.hand_tiles_w
-        
-        self.spatial_tiles = self.table_tiles + self.hand_tiles
-        
         assert self.table_decode_h % self.table_decode_tokens_h == 0, (
             '%i, %i'%(self.table_decode_tokens_h, self.table_decode_h))
         assert self.table_decode_w % self.table_decode_tokens_w == 0
@@ -117,56 +95,14 @@ class HandTableTransformerConfig(Config):
         self.hand_decoder_pixels = self.hand_decode_h * self.hand_decode_w
         self.decoder_pixels = (
             self.table_decoder_pixels + self.hand_decoder_pixels)
-        
-        #assert self.table_decode_h % self.table_tiles_h == 0
-        #assert self.table_decode_w % self.table_tiles_w == 0
-        #self.upsample_h = self.table_decode_h // self.table_tiles_h
-        #self.upsample_w = self.table_decode_w // self.table_tiles_w
-        #assert self.hand_decode_h // self.hand_tiles_h == self.upsample_h
-        #assert self.hand_decode_w // self.hand_tiles_w == self.upsample_w
-        
-        #self.global_tokens = self.num_modes + self.num_shapes + self.num_colors
 
 class HandTableTransformer(Module):
     def __init__(self, config, checkpoint=None):
         super().__init__()
         self.config = config
         
-        # build the tokenizers
-        self.tile_embedding = TileEmbedding(
-            config.tile_h,
-            config.tile_w,
-            config.tile_c,
-            config.encoder_channels,
-            config.embedding_dropout,
-        )
-        self.phase_embedding = TokenEmbedding(
-            2, config.encoder_channels, config.embedding_dropout)
-        
-        if self.config.factor_cursor_distribution:
-            self.table_cursor_embedding = TokenEmbedding(
-                config.table_decoder_pixels,
-                config.encoder_channels,
-                config.embedding_dropout,
-            )
-            self.table_polarity_embedding = TokenEmbedding(
-                2, config.encoder_channels, config.embedding_dropout)
-            
-            self.hand_cursor_embedding = TokenEmbedding(
-                config.hand_decoder_pixels,
-                config.encoder_channels,
-                config.embedding_dropout,
-            )
-            self.hand_polarity_embedding = TokenEmbedding(
-                2, config.encoder_channels, config.embedding_dropout)
-        
-        #self.mask_embedding = Embedding(1, config.encoder_channels)
-        
-        # build the positional encodings
-        self.spatial_position_encoding = LearnedPositionalEncoding(
-            config.encoder_channels, config.spatial_tiles)
-        self.temporal_position_encoding = LearnedPositionalEncoding(
-            config.encoder_channels, config.max_sequence_length)
+        # build the token embedding
+        self.embedding = HandTableEmbedding(config)
         
         # build the transformer
         encoder_config = TransformerConfig.translate(
@@ -191,6 +127,12 @@ class HandTableTransformer(Module):
         if checkpoint is not None:
             if isinstance(checkpoint, str):
                 checkpoint = torch.load(checkpoint)
+            if 'token_embedding.embedding.weight' in checkpoint:
+                checkpoint['phase_embedding.embedding.weight'] = checkpoint[
+                    'token_embedding.embedding.weight']
+                del(checkpoint['token_embedding.embedding.weight'])
+            if 'mask_embedding.weight' in checkpoint:
+                del(checkpoint['mask_embedding.weight'])
             self.load_state_dict(checkpoint)
         elif config.init_weights:
             self.apply(init_weights)
@@ -208,64 +150,16 @@ class HandTableTransformer(Module):
         decode_t, decode_pad,
         use_memory=None,
     ):
-        
-        # linearize table_yx and hand_yx
-        table_w = self.config.table_tiles_w
-        table_yx = table_yx[...,0] * table_w + table_yx[...,1]
-        hand_w = self.config.hand_tiles_w
-        hand_yx = hand_yx[...,0] * hand_w + hand_yx[...,1]
-        
-        # cat table and hand tiles
-        tile_x, tile_pad = cat_padded_seqs(
-            table_tiles, hand_tiles, table_pad, hand_pad)
-        tile_t, _ = cat_padded_seqs(table_t, hand_t, table_pad, hand_pad)
-        tile_yx, _ = cat_padded_seqs(table_yx, hand_yx, table_pad, hand_pad)
-        
-        # make the tile embeddings
-        tile_x = self.tile_embedding(tile_x)
-        tile_pt = self.temporal_position_encoding(tile_t)
-        tile_pyx = self.spatial_position_encoding(tile_yx)
-        tile_x = tile_x + tile_pt + tile_pyx
-        
-        # make the tokens
-        token_x = self.phase_embedding(phase_x)
-        token_pt = self.temporal_position_encoding(token_t)
-        token_x = token_x + token_pt
-        
-        if self.config.factor_cursor_distribution:
-            table_cursor_yx = self.table_cursor_embedding(table_cursor_yx)
-            table_cursor_yx = table_cursor_yx + token_pt
-            table_cursor_p = self.table_polarity_embedding(table_cursor_p)
-            table_cursor_p = table_cursor_p + token_pt
-            hand_cursor_yx = self.hand_cursor_embedding(hand_cursor_yx)
-            hand_cursor_yx = hand_cursor_yx + token_pt
-            hand_cursor_p = self.hand_polarity_embedding(hand_cursor_p)
-            hand_cursor_p = hand_cursor_p + token_pt
-            
-            # all these cat_padded_seqs could probably be done more efficiently
-            # in a single function that rolls them all together at once
-            table_x, table_pad = cat_padded_seqs(
-                table_cursor_yx, table_cursor_p, token_pad, token_pad)
-            table_t, _ = cat_padded_seqs(
-                token_t, token_t, token_pad, token_pad)
-            hand_x, hand_pad = cat_padded_seqs(
-                hand_cursor_yx, hand_cursor_p, token_pad, token_pad)
-            hand_t, _ = cat_padded_seqs(
-                token_t, token_t, token_pad, token_pad)
-            
-            cursor_x, cursor_pad = cat_padded_seqs(
-                table_x, hand_x, table_pad, hand_pad)
-            cursor_t, _ = cat_padded_seqs(
-                table_t, hand_t, table_pad, hand_pad)
-            token_x, new_token_pad = cat_padded_seqs(
-                token_x, cursor_x, token_pad, cursor_pad)
-            token_t, _ = cat_padded_seqs(
-                token_t, cursor_t, token_pad, cursor_pad)
-            token_pad = new_token_pad
-        
-        # concatenate the tile and discrete tokens
-        x, pad = cat_padded_seqs(tile_x, token_x, tile_pad, token_pad)
-        t, _ = cat_padded_seqs(tile_t, token_t, tile_pad, token_pad)
+        x, t, pad = self.embedding(
+            table_tiles, table_t, table_yx, table_pad,
+            hand_tiles, hand_t, hand_yx, hand_pad,
+            phase_x,
+            table_cursor_yx,
+            table_cursor_p,
+            hand_cursor_yx,
+            hand_cursor_p,
+            token_t, token_pad,
+        )
         
         # use the encoder to encode
         x = self.encoder(x, t, pad, use_memory=use_memory)
