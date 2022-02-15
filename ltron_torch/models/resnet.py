@@ -3,37 +3,67 @@ import torchvision.models.resnet
 from torch.nn import BatchNorm1d, BatchNorm2d, BatchNorm3d
 
 class ResnetBackbone(torch.nn.Module):
+    
+    order = {
+        'maxpool' : 0,
+        'layer1' : 1,
+        'layer2' : 2,
+        'layer3' : 3,
+        'layer4' : 4,
+        'avgpool' : 5,
+    }
+    
     def __init__(self,
         resnet,
         *output_layers,
         frozen_weights=False,
         frozen_batchnorm=False,
     ):
+        
         super(ResnetBackbone, self).__init__()
         self.resnet = resnet
-        del(self.resnet.fc) # remove the fc layer to free up memory
+        # remove the fc layer to free up memory
+        del(self.resnet.fc)
+        
+        # TODO: Make output_layers a regular argument with a tuple default
+        # instead of a *args
+        if not len(output_layers):
+            output_layers = list(self.order.keys())
         self.output_layers = output_layers
+        # remove all unnecessary layers to free up memory
+        for i, l in sorted([(v,k) for k,v in self.order.items()], reverse=True):
+            self.last_layer = l
+            if l in output_layers:
+                break
+            else:
+                delattr(self.resnet, l)
+        
         self.frozen_weights = frozen_weights
-        self.frozen_batchnorm = frozen_batchnorm
         if self.frozen_weights:
             for p in self.parameters():
                 p.requires_grad = False
+        
+        self.frozen_batchnorm = frozen_batchnorm
     
     def forward(self, x):
         x = self.resnet.conv1(x)
         x = self.resnet.bn1(x)
         x = self.resnet.relu(x)
         f = {}
-        f['layer0'] = self.resnet.maxpool(x)
+        f['maxpool'] = self.resnet.maxpool(x)
         
-        f['layer1'] = self.resnet.layer1(f['layer0'])
-        f['layer2'] = self.resnet.layer2(f['layer1'])
-        f['layer3'] = self.resnet.layer3(f['layer2'])
-        f['layer4'] = self.resnet.layer4(f['layer3'])
+        if self.order[self.last_layer] >= self.order['layer1']:
+            f['layer1'] = self.resnet.layer1(f['maxpool'])
+        if self.order[self.last_layer] >= self.order['layer2']:
+            f['layer2'] = self.resnet.layer2(f['layer1'])
+        if self.order[self.last_layer] >= self.order['layer3']:
+            f['layer3'] = self.resnet.layer3(f['layer2'])
+        if self.order[self.last_layer] >= self.order['layer4']:
+            f['layer4'] = self.resnet.layer4(f['layer3'])
         
-        if 'pool' in self.output_layers:
-            f['pool'] = self.resnet.avgpool(f['layer4'])
-            f['pool'] = torch.flatten(f['pool'], 1)
+        if self.order[self.last_layer] >= self.order['avgpool']:
+            f['avgpool'] = self.resnet.avgpool(f['layer4'])
+            f['avgpool'] = torch.flatten(f['avgpool'], 1)
         
         if not len(self.output_layers):
             return f
