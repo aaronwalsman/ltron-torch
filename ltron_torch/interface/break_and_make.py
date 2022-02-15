@@ -33,7 +33,10 @@ class BreakAndMakeInterfaceConfig(Config):
     hand_spatial_loss_weight = 1.
     hand_polarity_loss_weight = 1.
     
+    disable_camera_losses = False
+    
     factor_cursor_distribution = False
+    spatial_loss_mode = 'cross_entropy'
     
     visualization_seqs = 10
 
@@ -150,6 +153,11 @@ class BreakAndMakeInterface:
         mode_loss = cross_entropy(
             x['mode'].view(-1,m), y['mode'].view(-1), reduction='none')
         mode_loss = mode_loss.view(s,b) * loss_mask
+        
+        if self.config.disable_camera_losses:
+            noncamera_actions = y['mode'] <= 8
+            mode_loss = mode_loss * noncamera_actions
+        
         mode_loss = mode_loss.mean() * self.config.mode_loss_weight
         loss = loss + mode_loss
         
@@ -169,9 +177,21 @@ class BreakAndMakeInterface:
                 y_y = y['%s_yx'%region][:,:,0]
                 y_x = y['%s_yx'%region][:,:,1]
                 y_spatial = (y_y * w + y_x).view(-1)[i]
-                spatial_loss = cross_entropy(x_spatial, y_spatial)
-                spatial_loss = spatial_loss * getattr(
-                    self.config, '%s_spatial_loss_weight'%region)
+                if self.config.spatial_loss_mode == 'cross_entropy':
+                    spatial_loss = cross_entropy(x_spatial, y_spatial)
+                    spatial_loss = spatial_loss * getattr(
+                        self.config, '%s_spatial_loss_weight'%region)
+                elif self.config.spatial_loss_mode in ('bce', 'bse_plus'):
+                    dense_y_spatial = torch.zeros_like(x_spatial)
+                    y_y = y_y.view(-1)[i]
+                    y_x = y_x.view(-1)[i]
+                    ny = dense_y_spatial.shape[0]
+                    dense_y_spatial[range(ny), (y_y * w + y_x)] = 1.
+                    spatial_loss = binary_cross_entropy_with_logits(
+                        x_spatial, dense_y_spatial)
+                    spatial_loss = spatial_loss * getattr(
+                        self.config, '%s_spatial_loss_weight'%region)
+                
                 loss = loss + spatial_loss
                 
                 # polarity
@@ -192,7 +212,7 @@ class BreakAndMakeInterface:
                     #    clock[0],
                     #)
                     log.log(**{'%s_spatial_loss'%region:spatial_loss})
-                    log.log(**{'%s_polarity_loss'%region:spatial_loss})
+                    log.log(**{'%s_polarity_loss'%region:polarity_loss})
         
         # shape and color loss
         i = y['insert_i'].view(-1)
