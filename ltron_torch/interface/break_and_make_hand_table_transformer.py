@@ -82,7 +82,7 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         x['hand_pad'] = torch.LongTensor(hand_pad).to(device)
         
         # process token x/t/pad
-        x['phase_x'] = torch.LongTensor(observation['phase']).to(device)
+        x['token_x'] = torch.LongTensor(observation['phase']).to(device)
         if self.config.factor_cursor_distribution:
             # this too needs to change if we properly combine these together
             # in the env/component later on.
