@@ -100,7 +100,10 @@ def train_break_and_make_bc(config=None):
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
             config = BreakAndMakeBCConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
-        optimizer_checkpoint = checkpoint['optimizer']
+        if config.train_frequency:
+            optimizer_checkpoint = checkpoint['optimizer']
+        else:
+            optimizer_checkpoint = None
         scheduler_checkpoint = checkpoint['scheduler']
         train_log_checkpoint = checkpoint.get('train_log', None)
         test_log_checkpoint = checkpoint.get('test_log', None)
