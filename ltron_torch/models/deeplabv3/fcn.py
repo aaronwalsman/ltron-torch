@@ -5,6 +5,7 @@ from torch import nn
 from ltron_torch.models.deeplabv3 import resnet
 from ltron_torch.models.deeplabv3.feature_extraction import create_feature_extractor
 from ltron_torch.models.deeplabv3._utils import _SimpleSegmentationModel, _load_weights
+from typing import Optional, Dict
 
 
 __all__ = ["FCN", "fcn_resnet50", "fcn_resnet101"]
@@ -50,6 +51,9 @@ def _fcn_resnet(
     backbone: resnet.ResNet,
     num_classes: int,
     aux: Optional[bool],
+    heads: Dict[str, int],
+    target_shape: int,
+    
 ) -> FCN:
     return_layers = {"layer4": "out"}
     if aux:
@@ -57,8 +61,11 @@ def _fcn_resnet(
     backbone = create_feature_extractor(backbone, return_layers)
 
     aux_classifier = FCNHead(1024, num_classes) if aux else None
-    classifier = FCNHead(2048, num_classes)
-    return FCN(backbone, classifier, aux_classifier)
+    # classifier = FCNHead(2048, num_classes)
+    classifier = nn.ModuleDict()
+    for name, num_class in heads.items():
+        classifier[name] = FCNHead(2048, num_class)
+    return FCN(backbone, classifier, aux_classifier, target_shape)
 
 
 def fcn_resnet50(
@@ -67,6 +74,8 @@ def fcn_resnet50(
     num_classes: int = 21,
     aux_loss: Optional[bool] = None,
     pretrained_backbone: bool = True,
+    heads: Dict[str, int] = None,
+    target_shape: int = 64,
 ) -> FCN:
     """Constructs a Fully-Convolutional Network model with a ResNet-50 backbone.
     Args:
@@ -82,7 +91,7 @@ def fcn_resnet50(
         pretrained_backbone = False
 
     backbone = resnet.resnet50(pretrained=pretrained_backbone, replace_stride_with_dilation=[False, True, True])
-    model = _fcn_resnet(backbone, num_classes, aux_loss)
+    model = _fcn_resnet(backbone, num_classes, aux_loss, heads=heads, target_shape=target_shape)
 
     if pretrained:
         arch = "fcn_resnet50_coco"

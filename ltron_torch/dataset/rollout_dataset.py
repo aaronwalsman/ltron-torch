@@ -62,9 +62,9 @@ class rolloutFrames(Dataset):
         table = rollout['table_color_render']
         pos_snap_reduced = numpy.where(rollout['table_pos_snap_render'][:, :, 0] > 0, 1, 0)
         neg_snap_reduced = numpy.where(rollout['table_neg_snap_render'][:, :, 0] > 0, 1, 0)
-        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['assembly']['shape'])
-        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['assembly']['color'])
-        stacked_label = numpy.stack([class_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
+        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['config']['shape'])
+        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['config']['color'])
+        stacked_label = numpy.stack([shape_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
         # if numpy.unique(color_ids).shape[0] > 2:
         #     pdb.set_trace()
         # if numpy.sum(rollout['assembly']['class'] > 0) > len(numpy.unique(rollout['assembly']['class']))-1:

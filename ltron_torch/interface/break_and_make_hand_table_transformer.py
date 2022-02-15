@@ -108,8 +108,19 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         x['token_pad'] = torch.LongTensor(pad).to(device)
         
         # process decode t/pad
+        # THIS COULD BE TOTALLY BAD.  ARE WE DECODING AT MULTIPLE SPOTS IN FACTORED AND THAT'S WHY WE NEED SMALLER BATCH SIZE???  Actually, it looks ok, the copying happens in the model, but we should double-check.  Oh but you know what, because the sequences are longer, that means our decode does get longer... I wonder if there's a way to tell it to only decode densely at certain locations, because we will only giving it a loss at those locations anyway.  This would mean making a 'table_decode_t' and a 'hand_decode_t' or something like that, and setting it equal to the locations where the hand or table is activated.  This would probably save a TON of memory in the normal setting too!  Yeah, definitely do this.  This could be huge for longer sequences too.
         x['decode_t'] = x['token_t'].clone()
         x['decode_pad'] = x['token_pad'].clone()
+        
+        #print('new')
+        #for key, xx in x.items():
+        #    if xx is not None:
+        #        print(key, ':', xx.view(-1)[0].cpu())
+        #print('table_tiles shape :', x['table_tiles'].shape)
+        #print('hand_tiles shape :', x['hand_tiles'].shape)
+        #print('table_color_render shape',
+        #    observation['table_color_render'].shape)
+        #print(numpy.sum(observation['table_color_render']))
         
         return x
     

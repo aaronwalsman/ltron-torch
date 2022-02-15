@@ -127,42 +127,6 @@ class BreakAndMakeDataset(EpisodeDataset):
             sequence['observations']['step'] = numpy.arange(
                 sequence['observations']['step'].shape[0])
             
-            '''
-            # expand disassembly steps
-            disassembly_ids = numpy.where(data['actions']['disassembly'])[0]
-            for disassembly_id in sorted(disassembly_ids, reverse=True):
-                # extract the original step
-                original_step = index_hierarchy(data, [disassembly_id])
-                
-                # make the table cursor step
-                cursor_step = copy.deepcopy(original_step)
-                cursor_step['actions']['disassembly'] = (
-                    numpy.array([0], dtype=numpy.long))
-                
-                # make the disassembly step
-                disassembly_step = copy.deepcopy(original_step)
-                disassembly_step['actions']['table_cursor']['activate'] = (
-                    numpy.array([0], dtype=numpy.long))
-                disassembly_step['actions']['table_cursor']['position'] = (
-                    numpy.array([[0,0]], dtype=numpy.long))
-                disassembly_step['actions']['table_cursor']['polarity'] = (
-                    numpy.array([0], dtype=numpy.long))
-                disassembly_step['observations']['table_cursor']['position'] = [
-                    cursor_step['actions']['table_cursor']['position'][:,0],
-                    cursor_step['actions']['table_cursor']['position'][:,1],
-                ]
-                disassembly_step['observations']['table_cursor']['polarity'] = (
-                    cursor_step['actions']['table_cursor']['polarity'])
-                
-                # join everything together
-                data = concatenate_numpy_hierarchies(
-                    index_hierarchy(data, slice(None, disassembly_id)),
-                    cursor_step,
-                    disassembly_step,
-                    index_hierarchy(data, slice(disassembly_id+1, None)),
-                )
-            '''
-        
         return sequence
 
 class BreakOnlyDataset(BreakAndMakeDataset):

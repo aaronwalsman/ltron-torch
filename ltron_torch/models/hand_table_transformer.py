@@ -164,11 +164,25 @@ class HandTableTransformer(Module):
         # use the encoder to encode
         x = self.encoder(x, t, pad, use_memory=use_memory)
         
+        # DIFFERENT
+        #print('new x')
+        #print(torch.sum(x).cpu())
+        
         # convert encoder channels to decoder channels
         x = self.encode_to_decode(x)
         
+        #print('new enc to dec x')
+        #print(torch.sum(x).cpu())
+        
         # use the decoder to decode
         x = self.decoder(decode_t, decode_pad, x, t, pad, use_memory=use_memory)
+        
+        #print('new mode/shape/color/table/hand x')
+        #print('   ', torch.sum(x['mode']).cpu())
+        #print('   ', torch.sum(x['shape']).cpu())
+        #print('   ', torch.sum(x['color']).cpu())
+        #print('   ', torch.sum(x['table']).cpu())
+        #print('   ', torch.sum(x['hand']).cpu())
         
         return x
 
