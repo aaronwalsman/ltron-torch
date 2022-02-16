@@ -32,6 +32,31 @@ def cat_padded_seqs(a, b, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     
     return ab, ab_pad
 
+def decat_padded_seq(ab, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
+    # compute lengths
+    max_a_pad = torch.max(a_pad)
+    max_b_pad = torch.max(b_pad)
+    
+    a_shape = (*ab.shape[:seq_dim], max_a_pad, *ab.shape[seq_dim+1:])
+    b_shape = (*ab.shape[:seq_dim], max_b_pad, *ab.shape[seq_dim+1:])
+    
+    # construct a using the first block of the tensor
+    a_slices = [slice(None) for _ in ab.shape]
+    a_slices[seq_dim] = slice(max_a_pad)
+    a = ab[a_slices].clone()
+    a_mask = make_padding_mask(a_pad, a.shape, seq_dim, batch_dim)
+    a[a_mask] = pad_value
+    
+    # construct b using careful indexing
+    ai = get_seq_range_indices(a_pad, a_pad+b_pad)
+    bi, bj = get_seq_batch_indices(b_pad)
+    ab_index = get_index_tuple(ai, bj, len(ab.shape), seq_dim, batch_dim)
+    b_index = get_index_tuple(bi, bj, len(ab.shape), seq_dim, batch_dim)
+    b = torch.full(b_shape, pad_value, dtype=ab.dtype, device=ab.device)
+    b[b_index] = ab[ab_index]
+    
+    return a, b
+
 def linearize_padded_seq(x, pad, seq_dim=0, batch_dim=1):
     '''
     12__
