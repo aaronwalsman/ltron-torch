@@ -110,7 +110,7 @@ def behavior_cloning(
                 model,
                 interface,
                 'test',
-                visualize,
+                True,
                 visualize,
             )
         

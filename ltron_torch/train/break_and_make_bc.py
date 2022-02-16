@@ -16,6 +16,10 @@ from ltron_torch.models.hand_table_transformer import (
     HandTableTransformerConfig,
     HandTableTransformer,
 )
+from ltron_torch.models.stubnet_transformer import (
+    StubnetTransformerConfig,
+    StubnetTransformer,
+)
 from ltron_torch.models.hand_table_lstm import (
     HandTableLSTMConfig,
     HandTableLSTM,
@@ -23,6 +27,10 @@ from ltron_torch.models.hand_table_lstm import (
 from ltron_torch.interface.break_and_make_hand_table_transformer import (
     BreakAndMakeHandTableTransformerInterfaceConfig,
     BreakAndMakeHandTableTransformerInterface,
+)
+from ltron_torch.interface.break_and_make_stubnet_transformer import (
+    BreakAndMakeStubnetTransformerInterfaceConfig,
+    BreakAndMakeStubnetTransformerInterface,
 )
 from ltron_torch.interface.break_and_make_hand_table_lstm import (
     BreakAndMakeHandTableLSTMInterface,
@@ -54,7 +62,9 @@ class BreakAndMakeBCConfig(
     BreakAndMakeDatasetConfig,
     BreakAndMakeEnvConfig,
     BreakAndMakeHandTableTransformerInterfaceConfig,
+    BreakAndMakeStubnetTransformerInterfaceConfig,
     HandTableTransformerConfig,
+    StubnetTransformerConfig,
     HandTableLSTMConfig,
     OptimizerConfig,
     BehaviorCloningConfig,
@@ -138,11 +148,15 @@ def train_break_and_make_bc(config=None):
     print('Building Model (%s)'%config.model)
     if config.model == 'transformer':
         model = HandTableTransformer(config, model_checkpoint).to(device)
+    elif config.model == 'stubnet':
+        model = StubnetTransformer(config, model_checkpoint).to(device)
     elif config.model == 'lstm':
         model = HandTableLSTM(config, model_checkpoint).to(device)
     else:
         raise ValueError(
-            'config "model" parameter must be either "transformer" or "lstm"')
+            'config "model" parameter ("%s") must be either '
+            '"transformer", "stubnet" or "lstm"'%config.model
+        )
     
     print('-'*80)
     print('Building Optimizer')
@@ -152,6 +166,9 @@ def train_break_and_make_bc(config=None):
     print('Building Interface (%s)'%config.model)
     if config.model == 'transformer':
         interface = BreakAndMakeHandTableTransformerInterface(
+            config, model, optimizer)
+    elif config.model == 'stubnet':
+        interface = BreakAndMakeStubnetTransformerInterface(
             config, model, optimizer)
     elif config.model == 'lstm':
         interface = BreakAndMakeHandTableLSTMInterface(
