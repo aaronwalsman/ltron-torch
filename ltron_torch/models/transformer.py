@@ -10,7 +10,7 @@ from ltron_torch.models.mask import padded_causal_mask
 
 class TransformerConfig(Config):
     nonlinearity = 'gelu'
-    num_blocks = 12
+    blocks = 12
     channels = 768
     residual_channels = None
     num_heads = 12
@@ -71,7 +71,7 @@ class Transformer(Module):
         super(Transformer, self).__init__()
         
         self.blocks = ModuleList(
-            [TransformerBlock(config) for _ in range(config.num_blocks)])
+            [TransformerBlock(config) for _ in range(config.blocks)])
         
         if config.init_weights:
             self.apply(init_weights)
