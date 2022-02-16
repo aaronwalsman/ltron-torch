@@ -1,36 +1,11 @@
-import os
-
-import numpy
-
 import torch
-from torch.nn import Module, Embedding, Linear, LayerNorm, Sequential
-
-import tqdm
-
-from splendor.image import save_image
+from torch.nn import Module
 
 from ltron.config import Config
-from ltron.hierarchy import len_hierarchy, index_hierarchy
-from ltron.gym.envs.blocks_env import BlocksEnv
-from ltron.compression import (
-    batch_deduplicate_tiled_seqs, batch_deduplicate_from_masks)
-from ltron.visualization.drawing import write_text
 
-from ltron_torch.gym_tensor import default_tile_transform
-from ltron_torch.models.embedding import (
-    TileEmbedding,
-    TokenEmbedding,
-)
-from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
-from ltron_torch.models.mask import padded_causal_mask
+from ltron_torch.models.padding import cat_padded_seqs
 from ltron_torch.models.positional_encoding import LearnedPositionalEncoding
 from ltron_torch.models.embedding import TileEmbedding, TokenEmbedding
-from ltron_torch.models.transformer import (
-    TransformerConfig,
-    Transformer,
-    TransformerBlock,
-    init_weights,
-)
 from ltron_torch.models.heads import LinearMultiheadDecoder
 
 class HandTableEmbeddingConfig(Config):
@@ -77,7 +52,7 @@ class HandTableEmbedding(Module):
             config.embedding_dropout,
         )
         self.token_embedding = TokenEmbedding(
-            config.discrete_vocabulary,
+            config.token_vocabulary,
             config.encoder_channels,
             config.embedding_dropout,
         )
@@ -99,8 +74,6 @@ class HandTableEmbedding(Module):
             )
             self.hand_polarity_embedding = TokenEmbedding(
                 2, config.encoder_channels, config.embedding_dropout)
-        
-        #self.mask_embedding = Embedding(1, config.encoder_channels)
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
