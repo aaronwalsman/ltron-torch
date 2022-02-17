@@ -83,7 +83,7 @@ class HandTableTransformer(Module):
         #tile_x, tile_t, tile_yx, tile_pad,
         table_tiles, table_t, table_yx, table_pad,
         hand_tiles, hand_t, hand_yx, hand_pad,
-        phase_x,
+        token_x,
         table_cursor_yx,
         table_cursor_p,
         hand_cursor_yx,
@@ -95,7 +95,7 @@ class HandTableTransformer(Module):
         x, t, pad = self.embedding(
             table_tiles, table_t, table_yx, table_pad,
             hand_tiles, hand_t, hand_yx, hand_pad,
-            phase_x,
+            token_x,
             table_cursor_yx,
             table_cursor_p,
             hand_cursor_yx,

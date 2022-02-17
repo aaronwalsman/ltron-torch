@@ -68,34 +68,34 @@ class CrossAttentionDecoder(Module):
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
-            config.decoder_channels,
+            config.channels,
             config.decode_tokens + config.global_tokens,
         )
         self.temporal_position_encoding = LearnedPositionalEncoding(
-            config.decoder_channels, config.max_sequence_length)
+            config.channels, config.max_sequence_length)
         
         # build the cross-attention block
         self.block = TransformerBlock(config)
         
         # output
-        self.norm = LayerNorm(config.decoder_channels)
+        self.norm = LayerNorm(config.channels)
         
         upsample_channels = (
             config.cursor_channels * config.upsample_h * config.upsample_w)
         self.table_decoder = Linear(
-            config.decoder_channels, upsample_channels)
+            config.channels, upsample_channels)
         self.hand_decoder = Linear(
-            config.decoder_channels, upsample_channels)
+            config.channels, upsample_channels)
         
         #self.mode_decoder = Linear(
-        #    config.decoder_channels, config.global_channels)
+        #    config.channels, config.global_channels)
         global_head_spec = {
             'mode' : config.num_modes,
             'shape' : config.num_shapes,
             'color' : config.num_colors,
         }
         self.global_decoder = LinearMultiheadDecoder(
-            config.decoder_channels,
+            config.channels,
             global_head_spec,
         )
     
