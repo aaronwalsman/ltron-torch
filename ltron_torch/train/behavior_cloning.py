@@ -37,10 +37,10 @@ class BehaviorCloningConfig(Config):
     train_frequency = 1
     test_frequency = 1
     checkpoint_frequency = 10
-    visualization_frequency = 1
+    visualization_frequency = 0
     
     #test_rollout_steps_per_epoch = 2048
-    test_episodes_per_epoch = 1024
+    test_episodes_per_epoch = 64
     
     checkpoint_directory = './checkpoint'
     
