@@ -48,7 +48,8 @@ class BreakAndMakeInterface:
         dummy_env = BreakAndMakeEnv(config)
         self.no_op_action = dummy_env.no_op_action()
     
-    def make_train_log(self, config, checkpoint=None):
+    @staticmethod
+    def make_train_log(checkpoint=None):
         train_log = SynchronousConsecutiveLog(
             'table_spatial_loss',
             'table_polarity_loss',
@@ -66,7 +67,8 @@ class BreakAndMakeInterface:
         
         return train_log
     
-    def make_test_log(self, config, checkpoint=None):
+    @staticmethod
+    def make_test_log(checkpoint=None):
         test_log = SynchronousConsecutiveLog(
             'terminal_reward',
             compressed = False,

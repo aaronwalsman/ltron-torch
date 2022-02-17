@@ -1,8 +1,11 @@
 import random
+import argparse
 
 import numpy
 
 import torch
+
+from conspiracy.log import SynchronousConsecutiveLog
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
 from ltron.gym.envs.break_and_make_env import (
@@ -24,6 +27,7 @@ from ltron_torch.models.hand_table_lstm import (
     HandTableLSTMConfig,
     HandTableLSTM,
 )
+from ltron_torch.interface.break_and_make import BreakAndMakeInterface
 from ltron_torch.interface.break_and_make_hand_table_transformer import (
     BreakAndMakeHandTableTransformerInterfaceConfig,
     BreakAndMakeHandTableTransformerInterface,
@@ -176,8 +180,8 @@ def train_break_and_make_bc(config=None):
     
     print('-'*80)
     print('Building Logs')
-    train_log = interface.make_train_log(config, train_log_checkpoint)
-    test_log = interface.make_test_log(config, test_log_checkpoint)
+    train_log = interface.make_train_log(train_log_checkpoint)
+    test_log = interface.make_test_log(test_log_checkpoint)
     
     print('-'*80)
     print('Building Scheduler')
@@ -220,3 +224,29 @@ def train_break_and_make_bc(config=None):
         test_log,
         start_epoch=start_epoch,
     )
+
+def plot_break_and_make_bc(checkpoint=None):
+    if checkpoint is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument('checkpoint', type=str)
+        args = parser.parse_args()
+        checkpoint = args.checkpoint
+    
+    data = torch.load(open(checkpoint, 'rb'), map_location='cpu')
+    train_log = BreakAndMakeInterface.make_train_log()
+    train_log.set_state(data['train_log'])
+    test_log = BreakAndMakeInterface.make_test_log()
+    test_log.set_state(data['test_log'])
+    
+    train_chart = train_log.plot_grid(
+        topline=True, legend=True, minmax_y=True, height=40, width=72)
+    print('='*80)
+    print('Train Plots')
+    print(train_chart)
+    
+    test_chart = test_log.plot_sequential(
+        legend=True, minmax_y=True, height=60, width=160)
+    print('='*80)
+    print('Test Plots')
+    print('-'*80)
+    print(test_chart)

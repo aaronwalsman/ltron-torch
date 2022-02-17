@@ -11,8 +11,6 @@ from torch.distributions import Categorical
 from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 #from torch.utils.tensorboard import SummaryWriter
 
-from conspiracy.log import SynchronousConsecutiveLog
-
 from splendor.image import save_image
 
 from ltron.config import Config

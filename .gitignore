@@ -4,3 +4,4 @@ checkpoint
 *.swp
 *.swo
 *.egg-info
+.idea
