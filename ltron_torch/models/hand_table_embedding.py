@@ -124,7 +124,7 @@ class HandTableEmbedding(Module):
             if table_cursor_yx.shape[0] == token_pt.shape[0]//2:
                 table_pt = token_pt[::2]
                 table_t = token_t[::2]
-                table_pad = token_pad/2
+                table_pad = (token_pad/2).long()
             else:
                 table_pt = token_pt
                 table_t = token_t
@@ -138,7 +138,7 @@ class HandTableEmbedding(Module):
             if hand_cursor_yx.shape[0] == token_pt.shape[0]//2:
                 hand_pt = token_pt[::2]
                 hand_t = token_t[::2]
-                hand_pad = token_pad/2
+                hand_pad = (token_pad/2).long()
             else:
                 hand_pt = token_pt
                 hand_t = token_t
