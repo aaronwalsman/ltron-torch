@@ -33,6 +33,7 @@ class BreakAndMakeDataset(EpisodeDataset):
                     sequence['observations']['hand_cursor']['position'][1],
                 ), axis=-1))
         
+        '''
         if self.config.factor_cursor_distribution:
             
             # expand spatial steps
@@ -126,7 +127,7 @@ class BreakAndMakeDataset(EpisodeDataset):
             
             sequence['observations']['step'] = numpy.arange(
                 sequence['observations']['step'].shape[0])
-            
+        '''    
         return sequence
 
 class BreakOnlyDataset(BreakAndMakeDataset):
