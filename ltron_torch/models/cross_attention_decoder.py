@@ -99,7 +99,16 @@ class CrossAttentionDecoder(Module):
             global_head_spec,
         )
     
-    def forward(self, tq, pad_q, xk, tk, pad_k, use_memory=None):
+    def forward(self,
+        tq,
+        pad_q,
+        xk,
+        tk,
+        pad_k,
+        #table_cursor_activate,
+        #hand_cursor_activate,
+        use_memory=None
+    ):
         
         # use the positional encoding to generate the query tokens
         x_spatial = self.spatial_position_encoding.encoding
@@ -108,8 +117,21 @@ class CrossAttentionDecoder(Module):
         hw, c = x_spatial.shape
         xq = x_temporal.view(s, 1, b, c) + x_spatial.view(1, hw, 1, c)
         xq = xq.view(s*hw, b, c)
+        #table_s, table_b = torch.where(table_cursor_activate)
+        #hand_s, hand_b = torch.where(hand_cursor_activate)
+        #table_xq = xq[table_s,:,table_b]
+        #hand_xq = xq[hand_s,:,hand_b]
+        # OK, first pass of including activations doesn't work.
+        # I can't simply merge sparse s and b dimensions into one long dimension
+        # because I need the batch dimension to remain so that the transformer
+        # can keep the different batch entries from talking to each other.
+        # So I need to go back and try again using padding.  Not a huge deal,
+        # but a little more complicated than what I tried above.
+        
         tq = tq.view(s, 1, b).expand(s, hw, b).reshape(s*hw, b)
         pad_q = pad_q * hw
+        #table_tq = tq[table_s, table_b]
+        #hand_tq = tq[hand_s, hand_b]
         
         # compute the mask
         mask = padded_causal_mask(tq, pad_q, tk, pad_k)
