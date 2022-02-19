@@ -149,7 +149,7 @@ def train_epoch(
         actions = batch['actions']
         
         # convert observations to model tensors
-        x = interface.observation_to_tensors(observations, pad)
+        x = interface.observation_to_tensors(observations, actions, pad)
         y = interface.action_to_tensors(actions, pad)
         
         if hasattr(interface, 'augment'):
@@ -238,7 +238,7 @@ def rollout_epoch(
                 # move observations to torch and cuda
                 pad = numpy.ones(b, dtype=numpy.long)
                 observation = stack_numpy_hierarchies(observation)
-                x = interface.observation_to_tensors(observation, pad)
+                x = interface.observation_to_tensors(observation, None, pad)
                 
                 # compute actions ----------------------------------------------
                 if hasattr(model, 'initialize_memory'):
@@ -270,7 +270,8 @@ def rollout_epoch(
                 
                 if store_activations:
                     a = {
-                        key:value.cpu().numpy().squeeze(axis=0)
+                        key:(value.cpu().numpy().squeeze(axis=0)
+                            if value.shape[0] == 1 else value.cpu().numpy())
                         for key, value in x.items()
                     }
                     activation_storage.append_batch(activations=a)

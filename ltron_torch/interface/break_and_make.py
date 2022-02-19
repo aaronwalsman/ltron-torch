@@ -176,7 +176,13 @@ class BreakAndMakeInterface:
         for region in 'table', 'hand':
             h, w = x[region].shape[-2:]
             i = y['%s_i'%region].view(-1)
-            x_region = x[region].reshape(s*b, 2, h*w)[i]
+            
+            # if the output contains all elements of s,b
+            if len(x[region].shape) == 5:
+                x_region = x[region].reshape(s*b, 2, h*w)[i]
+            # if a subset of s,b has already been selected from the output
+            elif len(x[region].shape) == 4:
+                x_region = x[region].reshape(-1, 2, h*w)
             
             if x_region.shape[0]:
                 # spatial
