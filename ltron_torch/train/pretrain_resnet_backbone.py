@@ -146,16 +146,17 @@ def build_model_fcn(config, frozen_batchnorm=True):
     print('Building FCN model')
     info = get_dataset_info(config.dataset)
     class_num = max(info['class_ids'].values())+1
-    # model = fcn.fcn_resnet50(pretrained_backbone=True, pretrained=False, \
-    #   num_classes=class_num, heads={"class":7, "pos_snap":1, "neg_snap":1})
-    model = fcn.fcn_resnet50(pretrained_backbone=True, pretrained=False, \
-       num_classes=class_num, heads={"class":7})
+    # Pretrained resnet backbone, but not freezing weight
+    model = fcn.fcn_resnet18(pretrained_backbone=True, pretrained=False, \
+       num_classes=class_num, heads={"class":7, "pos_snap":1, "neg_snap":1})
+    #model = fcn.fcn_resnet50(pretrained_backbone=True, pretrained=False, \
+    #   num_classes=class_num, heads={"class":7})
     if frozen_batchnorm:
         for m in model.modules():
             if isinstance(m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
                 m.eval()
     print(model)
-    
+
     return model.cuda()
 
 def fake_train_pass(model, train_loader):
@@ -184,11 +185,11 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
         # pdb.set_trace()
         # class_id = torch.nn.functional.interpolate(class_id, (64,64), mode="bilinear")
         # class_id, pos_snap, neg_snap, color_pred = output["class"], output['pos_snap'], output['neg_snap'], output['color']
-        # class_id, pos_snap, neg_snap = output["class"], output['pos_snap'], output['neg_snap']
-        class_id = output["class"]
+        class_id, pos_snap, neg_snap = output["class"], output['pos_snap'], output['neg_snap']
+        # class_id = output["class"]
 
-        # pos_snap = pos_snap.view(pos_snap.shape[0], pos_snap.shape[2], pos_snap.shape[3])
-        # neg_snap = neg_snap.view(neg_snap.shape[0], neg_snap.shape[2], neg_snap.shape[3])
+        pos_snap = pos_snap.view(pos_snap.shape[0], pos_snap.shape[2], pos_snap.shape[3])
+        neg_snap = neg_snap.view(neg_snap.shape[0], neg_snap.shape[2], neg_snap.shape[3])
 
         # pos_snap = torch.squeeze(pos_snap)
         # neg_snap = torch.squeeze(neg_snap)
@@ -197,8 +198,8 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
         # loss -----------------------------------------------------------------
         label = label.cuda()
         id_label = label[:, :, :, 0]
-        # pos_label = label[:, :, :, 1]
-        # neg_label = label[:, :, :, 2]
+        pos_label = label[:, :, :, 1]
+        neg_label = label[:, :, :, 2]
 
         # color_label = label[:, :, :, 3]
         id_weight = torch.ones(class_id.shape[1]).cuda()
@@ -207,26 +208,26 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
         # color_weight[0] = 0.03
         # pdb.set_trace()
 
-        # pos_weight = torch.ones(1).cuda()
-        # neg_weight = torch.ones(1).cuda()
-        # pos_weight[0] = 3
-        # neg_weight[0] = 3
-        # loss_id, loss_pos, loss_neg = cross_entropy(class_id, id_label, weight=id_weight), binary_cross_entropy_with_logits(pos_snap, pos_label.float(), pos_weight=pos_weight), \
-        #                          binary_cross_entropy_with_logits(neg_snap, neg_label.float(), pos_weight=neg_weight)
+        pos_weight = torch.ones(1).cuda()
+        neg_weight = torch.ones(1).cuda()
+        pos_weight[0] = 3
+        neg_weight[0] = 3
+        loss_id, loss_pos, loss_neg = cross_entropy(class_id, id_label, weight=id_weight), binary_cross_entropy_with_logits(pos_snap, pos_label.float(), pos_weight=pos_weight), \
+                                 binary_cross_entropy_with_logits(neg_snap, neg_label.float(), pos_weight=neg_weight)
 
-        loss_id = cross_entropy(class_id, id_label, weight=id_weight)
+        # loss_id = cross_entropy(class_id, id_label, weight=id_weight)
         # loss_id_t, loss_pos_t, loss_neg_t = cross_entropy(class_id, id_label,
         #                                             weight=id_weight), binary_cross_entropy_with_logits(pos_snap,
         #                                                                                                 pos_label.float(),), \
         #                               binary_cross_entropy_with_logits(neg_snap, neg_label.float(),)
-        # loss = loss_id + loss_pos + loss_neg
+        loss = loss_id + loss_pos + loss_neg
         # loss_color = cross_entropy(color_pred, color_label, weight=color_weight)
-        loss_id.backward()
-        # loss.backward()
+        # loss_id.backward()
+        loss.backward()
         optimizer.step()
         log.add_scalar('train/class_loss', loss_id*1000, clock[0])
-        # log.add_scalar('train/pos_loss', loss_pos*1000, clock[0])
-        # log.add_scalar('train/neg_loss', loss_neg*1000, clock[0])
+        log.add_scalar('train/pos_loss', loss_pos*1000, clock[0])
+        log.add_scalar('train/neg_loss', loss_neg*1000, clock[0])
         # log.add_scalar('train/color_loss', loss_color*1000, clock[0])
         clock[0] += 1
 
@@ -242,29 +243,33 @@ def train_pass(train_config, model, optimizer, train_loader, log, clock, step, m
             non_back_cum = 0
         if counter == 12:
             id_pred = torch.argmax(class_id, dim=1)
-            # pos_pred = torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0)
-            # neg_pred = torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0)
+
+            pos_pred = torch.squeeze(torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0))
+            neg_pred = torch.squeeze(torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0))
+
             # color_pred = torch.argmax(color_pred, dim=1)
             non_back = torch.sum(torch.where(label[:,:,:,0]>0, 1, 0))
             id_corr = torch.sum(torch.where((label[:,:,:,0] == id_pred) & (label[:,:,:,0] != 0), 1, 0))
-            # pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
-            # neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
+
+            pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
+            neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
+
             # color_corr = torch.sum(torch.where((label[:, :, :, 3] == color_pred) & (label[:, :, :, 0] != 0), 1, 0))
             log.add_scalar("train/id_acc", id_corr/non_back, clock[0])
-            # log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
-            # log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
+            log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
+            log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
             # log.add_scalar("train/color_acc", color_corr / non_back, clock[0], step)
             counter = 0
     log.add_scalar("train/id_acc", id_corr / non_back, clock[0], step)
-    # log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
-    # log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
+    log.add_scalar("train/pos_acc", pos_corr / non_back, clock[0], step)
+    log.add_scalar("train/neg_acc", neg_corr / non_back, clock[0], step)
     # log.add_scalar("train/color_acc", color_corr / non_back, clock[0], step)
+    test_acc, pos_test_acc, neg_test_acc = test_model(train_config, model_deeplab)
+    test_acc, pos_test_acc, neg_test_acc = test_model(train_config, model_deeplab)
+    log.add_scalar("test/id_acc", test_acc, clock[0], step)
+    log.add_scalar("test/pos_acc", pos_test_acc, clock[0], step)
+    log.add_scalar("test/neg_acc", neg_test_acc, clock[0], step)
     step += 1
-    # test_acc, pos_test_acc, neg_test_acc = test_model(train_config, model_deeplab)
-    test_acc = test_model(train_config, model_deeplab)
-    log.add_scalar("test/id_acc", test_acc, clock[0])
-    # log.add_scalar("test/pos_acc", pos_test_acc, clock[0])
-    # log.add_scalar("test/neg_acc", neg_test_acc, clock[0])
 
     # torch.save(model.state_dict(), "pretrain_models/standard_fcn.pth")
     # torch.save(optimizer.state_dict(), "pretrain_models/standard_fcn_optim.pth")
@@ -282,22 +287,22 @@ def test_model(test_config, model):
             workspace = workspace.cuda()
             label = label.cuda()
             output = model(workspace)
-            class_id = output['class']
-            # class_id, pos_snap, neg_snap = output["class"], output['pos_snap'], output['neg_snap']
+            # class_id = output['class']
+            class_id, pos_snap, neg_snap = output["class"], output['pos_snap'], output['neg_snap']
             non_back = torch.sum(torch.where(label[:,:,:,0] > 0, 1, 0))
             id_pred = torch.argmax(class_id, dim=1)
-            # pos_pred = torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0)
-            # neg_pred = torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0)
+            pos_pred = torch.squeeze(torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0))
+            neg_pred = torch.squeeze(torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0))
             id_corr = torch.sum(torch.where((id_pred == label[:,:,:,0]) & (label[:,:,:,0]!=0), 1,0))
-            # pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
-            # neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
+            pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
+            neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
             non_back_cum += non_back
             id_corr_cum += id_corr
-            # pos_corr_cum += pos_corr
-            # neg_corr_cum += neg_corr
+            pos_corr_cum += pos_corr
+            neg_corr_cum += neg_corr
     
-    # return id_corr_cum/non_back_cum, pos_corr_cum/non_back_cum, neg_corr_cum/non_back_cum
-    return id_corr_cum/non_back_cum
+    return id_corr_cum/non_back_cum, pos_corr_cum/non_back_cum, neg_corr_cum/non_back_cum
+    # return id_corr_cum/non_back_cum
 
 
 
@@ -323,33 +328,44 @@ def save_checkpoint(train_config, epoch, model, optimizer, log, clock):
 def visualization(train_config, model_path):
     # model = build_model_deeplab(train_config, frozen_batchnorm=True)
     model = build_model_fcn(train_config)
-    train_config.train_split = train_config.test_split
+    # temp = train_config.train_split
+    # train_config.train_split = train_config.test_split
     model.load_state_dict(torch.load(model_path))
+    pdb.set_trace()
     model.eval()
     test_loader = build_rolloutFrames_train_loader(train_config, batch_overload=None)
-    print(len(test_loader))
-    destination = "model_outcome_color"
+    # print(temp)
+    # train_config.train_split = temp
+    # test_loader_rc66 = build_rolloutFrames_train_loader(train_config, batch_overload=None)
+    # print(len(test_loader))
+    destination = "model_first"
     shutil.rmtree(destination)
     Path(destination).mkdir(parents=False, exist_ok=True)
     counter = 0
     with torch.no_grad():
         for workspace, label in test_loader:
-            # for i in range(workspace.shape[0]):
+            # if counter == 1:
+            #     c = 0
+            #     for w, l in test_loader_rc66:
+            #         if c == 2:
+            #             pdb.set_trace()
+            #         c += 1
+            #     pdb.set_trace()
             workspace = workspace.cuda()
             label = label.cuda()
             output = model(workspace)
-            class_id = output['class']
-            # class_id, pos_snap, neg_snap = output['class'], output['pos_snap'], output['neg_snap']
+            # class_id = output['class']
+            class_id, pos_snap, neg_snap = output['class'], output['pos_snap'], output['neg_snap']
             non_back = torch.sum(torch.where(label[:,:,:,0] > 0, 1, 0))
             id_pred = torch.argmax(class_id, dim=1)
             id_corr = torch.sum(torch.where((id_pred == label[:,:,:,0]) & (label[:,:,:,0]!=0), 1,0))
-            # pos_pred = torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0)
-            # neg_pred = torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0)
-            # pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
-            # neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
-            print(id_corr/non_back)
-            # print(pos_corr/non_back)
-            # print(neg_corr/non_back)
+            pos_pred = torch.squeeze(torch.where(torch.sigmoid(pos_snap) > 0.5, 1, 0))
+            neg_pred = torch.squeeze(torch.where(torch.sigmoid(neg_snap) > 0.5, 1, 0))
+            pos_corr = torch.sum(torch.where((label[:,:,:,1] == pos_pred) & (label[:,:,:,0] != 0), 1, 0))
+            neg_corr = torch.sum(torch.where((label[:, :, :, 2] == neg_pred) & (label[:, :, :, 0] != 0), 1, 0))
+            print("Idacc: {}".format(id_corr/non_back))
+            print("Posacc: {}".format(pos_corr/non_back))
+            print("Negacc: {}".format(neg_corr/non_back))
             workspace = workspace.cuda()
             output = model(workspace)
             for i in range(workspace.shape[0]):
@@ -375,22 +391,24 @@ def visualization(train_config, model_path):
                 save_image(im, destination + "/" + str(counter) + str(i) + "id_pred.png")
                 im = default_image_untransform(workspace[i])
                 save_image(im, destination + "/" + str(counter) + str(i) + "workspace.png")
+
                 # im = default_image_untransform(pos_pred[i, :, :])
-                # im = splendor.masks.color_index_to_byte(pos_pred[i, :, :].cpu())
-                # save_image(im, destination + "/" + str(counter) + "pos_snap.png")
+                im = splendor.masks.color_index_to_byte(pos_pred[i, :, :].cpu())
+                save_image(im, destination + "/" + str(counter) + str(i) + "pos_snap.png")
                 # im = default_image_untransform(neg_pred[i, :, :])
-                # im = splendor.masks.color_index_to_byte(neg_pred[i, :, :].cpu())
-                # save_image(im, destination + "/" + str(counter) + "neg_snap.png")
-                # plt.imshow(pos_pred, cmap="gray", interpolation="nearest")
-                # plt.clim(0, 1)
-                # plt.colorbar()
-                # plt.savefig(destination + "/" + str(counter) + "pos_snap_c.png")
-                # plt.clf()
-                # plt.imshow(neg_pred, cmap="gray", interpolation="nearest")
-                # plt.clim(0, 1)
-                # plt.colorbar()
-                # plt.savefig(destination + "/" + str(counter) + "neg_snap_c.png")
-                # plt.clf()
+                im = splendor.masks.color_index_to_byte(neg_pred[i, :, :].cpu())
+                save_image(im, destination + "/" + str(counter) + str(i) + "neg_snap.png")
+
+                plt.imshow(torch.sigmoid(pos_snap[i, 0, :, :]).cpu(), cmap="gray", interpolation="none")
+                plt.clim(0, 1)
+                plt.colorbar()
+                plt.savefig(destination + "/" + str(counter) + str(i) + "pos_snap_c.png")
+                plt.clf()
+                plt.imshow(torch.sigmoid(neg_snap[i, 0, :, :]).cpu(), cmap="gray", interpolation="none")
+                plt.clim(0, 1)
+                plt.colorbar()
+                plt.savefig(destination + "/" + str(counter) + str(i) + "neg_snap_c.png")
+                plt.clf()
                 # im = default_image_untransform(label[0,:,:,0])
                 # save_image(im, destination + "/" + str(counter) + "id_label.png")
                 # im = default_image_untransform(label[0,:,:,1])
@@ -399,10 +417,11 @@ def visualization(train_config, model_path):
                 # save_image(im, destination + "/" + str(counter) + "neg_label.png")
                 im = splendor.masks.color_index_to_byte(label[i, :, :, 0].cpu())
                 save_image(im, destination + "/" + str(counter) + str(i) + "id_label.png")
-                # im = splendor.masks.color_index_to_byte(label[0, :, :, 1].cpu())
-                # save_image(im, destination + "/" + str(counter) + "pos_label.png")
-                # im = splendor.masks.color_index_to_byte(label[0, :, :, 2].cpu())
-                # save_image(im, destination + "/" + str(counter) + "neg_label.png")
+                im = splendor.masks.color_index_to_byte(label[i, :, :, 1].cpu())
+                save_image(im, destination + "/" + str(counter) + str(i) + "pos_label.png")
+                im = splendor.masks.color_index_to_byte(label[i, :, :, 2].cpu())
+                save_image(im, destination + "/" + str(counter) + str(i) + "neg_label.png")
+
                 # im = default_image_untransform(label[0, :, :, 3])
                 # im = splendor.masks.color_index_to_byte(label[0, :, :, 3].cpu())
                 # save_image(im, destination + "/" + str(counter) + "color_label.png")
@@ -410,7 +429,7 @@ def visualization(train_config, model_path):
                 # im = splendor.masks.color_index_to_byte(color_pred.cpu())
                 # save_image(im, destination + "/" + str(counter) + "color_pred.png")
             counter += 1
-            if counter == 12:
+            if counter == 5:
                 exit()
 
 def main():
@@ -420,4 +439,4 @@ def main():
 if __name__ == '__main__' :
     config = PretrainResnetBackboneConfig.load_config("../../experiments/pretrainbackbone_resnet/settings.cfg")
     main()
-    # visualization(config, model_path="./checkpoint/Jan27_15-44-11_patillo/model_0050.pt")
+    # visualization(config, model_path="./checkpoint/Jan29_08-37-01_patillo/model_0005.pt")

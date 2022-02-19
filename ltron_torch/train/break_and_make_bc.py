@@ -74,7 +74,7 @@ class BreakAndMakeBCConfig(
     BehaviorCloningConfig,
 ):
     device = 'cuda'
-    model = 'transformer'
+    model = 'lstm'
     
     load_checkpoint = None
     use_checkpoint_config = False
@@ -98,13 +98,14 @@ class BreakAndMakeBCConfig(
     async_ltron = True
     
     seed = 1234567890
+    epochs = 6
 
 def train_break_and_make_bc(config=None):
     if config is None:
         print('='*80)
         print('Loading Config')
         config = BreakAndMakeBCConfig.from_commandline()
-    
+
     random.seed(config.seed)
     numpy.random.seed(config.seed)
     torch.manual_seed(config.seed)

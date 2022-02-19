@@ -1,4 +1,5 @@
 import random
+import os
 
 import numpy
 
@@ -17,6 +18,9 @@ from ltron_torch.models.resnet import named_backbone, named_encoder_channels
 from ltron_torch.models.mlp import conv2d_stack
 from ltron_torch.models.simple_fcn import SimpleDecoder
 
+from ltron_torch.models.deeplabv3 import resnet
+from ltron_torch.models.deeplabv3.feature_extraction import create_feature_extractor
+
 # build functions ==============================================================
 
 class HandTableLSTMConfig(Config):
@@ -26,7 +30,7 @@ class HandTableLSTMConfig(Config):
     table_channels = 2
     hand_channels = 2
     
-    resnet_backbone = 'resnet18'
+    resnet_backbone = 'resnet50'
     pretrain_resnet = True
     freeze_resnet = False
     compact_visual_channels = 64
@@ -41,6 +45,17 @@ class HandTableLSTMConfig(Config):
     hand_shape = (3,3)
 
 class HandTableLSTM(Module):
+
+    def load_fcn_backbone(self):
+        backbone = resnet.resnet50(pretrained=False, replace_stride_with_dilation=[False, True, True])
+        backbone = create_feature_extractor(backbone, {"layer4": "out"})
+        pretrained_fcn = torch.load(os.path.expanduser(
+            "~/Research/ltron-torch/ltron_torch/train/checkpoint/Jan29_08-37-01_patillo/model_0005.pt"))
+        model_dict = backbone.state_dict()
+        filtered_dict = {k[9:]:v for k, v in pretrained_fcn.items() if k[9:] in model_dict}
+        model_dict.update(filtered_dict)
+        return backbone
+
     def __init__(self, config, checkpoint=None):
         # intiialization and storage
         super().__init__()
@@ -55,6 +70,14 @@ class HandTableLSTM(Module):
             pretrained=config.pretrain_resnet,
             frozen_weights=config.freeze_resnet,
         )
+        pretrained_fcn = torch.load(os.path.expanduser(
+            "~/Research/ltron-torch/ltron_torch/train/checkpoint/Jan29_08-37-01_patillo/model_0005.pt"))
+        model_dict = self.visual_backbone.state_dict()
+        filtered_dict = {("resnet." + k[9:]):v for k, v in pretrained_fcn.items() if "resnet." + k[9:] in model_dict}
+        # print(len(filtered_dict.keys()))
+        model_dict.update(filtered_dict)
+
+        #self.visual_backbone = self.load_fcn_backbone()
         
         # visual feature extractor
         resnet_channels = named_encoder_channels(config.resnet_backbone)
@@ -64,6 +87,9 @@ class HandTableLSTM(Module):
             hidden_channels=resnet_channels[0]//2,
             out_channels=config.compact_visual_channels,
         )
+
+        # import pdb
+        # pdb.set_trace()
         
         # visual dropout
         self.visual_dropout = Dropout(config.visual_dropout)
@@ -154,6 +180,8 @@ class HandTableLSTM(Module):
             s, b, c, h, w = x.shape
             x_layer = self.visual_backbone(x.view(s*b, c, h, w))
             x_layers.append(x_layer)
+            # import pdb
+            # pdb.set_trace()
             x = self.visual_stack(x_layer[0])
             sb, c, h, w = x.shape
             xs.append(x.view(s, b, c, h, w))
