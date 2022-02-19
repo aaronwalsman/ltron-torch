@@ -90,6 +90,8 @@ class HandTableTransformer(Module):
         hand_cursor_p,
         token_t, token_pad,
         decode_t, decode_pad,
+        #table_cursor_activate,
+        #hand_cursor_activate,
         use_memory=None,
     ):
         x, t, pad = self.embedding(
