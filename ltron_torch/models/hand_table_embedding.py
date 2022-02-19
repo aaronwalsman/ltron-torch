@@ -117,24 +117,44 @@ class HandTableEmbedding(Module):
         
         if self.config.factor_cursor_distribution:
             table_cursor_yx = self.table_cursor_embedding(table_cursor_yx)
-            table_cursor_yx = table_cursor_yx + token_pt
+            #table_cursor_yx = table_cursor_yx + token_pt
             table_cursor_p = self.table_polarity_embedding(table_cursor_p)
-            table_cursor_p = table_cursor_p + token_pt
+            #table_cursor_p = table_cursor_p + token_pt
+            # THIS IS ALL SO GROSS
+            if table_cursor_yx.shape[0] == token_pt.shape[0]//2:
+                table_pt = token_pt[::2]
+                table_t = token_t[::2]
+                table_pad = token_pad/2
+            else:
+                table_pt = token_pt
+                table_t = token_t
+                table_pad = token_pad
+            table_x = table_cursor_yx + table_cursor_p + table_pt
+            
             hand_cursor_yx = self.hand_cursor_embedding(hand_cursor_yx)
-            hand_cursor_yx = hand_cursor_yx + token_pt
+            #hand_cursor_yx = hand_cursor_yx + token_pt
             hand_cursor_p = self.hand_polarity_embedding(hand_cursor_p)
-            hand_cursor_p = hand_cursor_p + token_pt
+            #hand_cursor_p = hand_cursor_p + token_pt
+            if hand_cursor_yx.shape[0] == token_pt.shape[0]//2:
+                hand_pt = token_pt[::2]
+                hand_t = token_t[::2]
+                hand_pad = token_pad/2
+            else:
+                hand_pt = token_pt
+                hand_t = token_t
+                hand_pad = token_pad
+            hand_x = hand_cursor_yx + hand_cursor_p + hand_pt
             
             # all these cat_padded_seqs could probably be done more efficiently
             # in a single function that rolls them all together at once
-            table_x, table_pad = cat_padded_seqs(
-                table_cursor_yx, table_cursor_p, token_pad, token_pad)
-            table_t, _ = cat_padded_seqs(
-                token_t, token_t, token_pad, token_pad)
-            hand_x, hand_pad = cat_padded_seqs(
-                hand_cursor_yx, hand_cursor_p, token_pad, token_pad)
-            hand_t, _ = cat_padded_seqs(
-                token_t, token_t, token_pad, token_pad)
+            #table_x, table_pad = cat_padded_seqs(
+            #    table_cursor_yx, table_cursor_p, token_pad, token_pad)
+            #table_t, _ = cat_padded_seqs(
+            #    token_t, token_t, token_pad, token_pad)
+            #hand_x, hand_pad = cat_padded_seqs(
+            #    hand_cursor_yx, hand_cursor_p, token_pad, token_pad)
+            #hand_t, _ = cat_padded_seqs(
+            #    token_t, token_t, token_pad, token_pad)
             
             cursor_x, cursor_pad = cat_padded_seqs(
                 table_x, hand_x, table_pad, hand_pad)
