@@ -50,7 +50,7 @@ class BreakAndMakeStubnetTransformerInterfaceConfig(
 
 class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
     
-    def observation_to_tensors(self, observation, pad):
+    def observation_to_tensors(self, observation, action, pad):
         
         # initialize x
         x = {}
@@ -62,17 +62,45 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         s, b, h, w, c = observation['table_color_render'].shape
         table_color_render = observation['table_color_render'].reshape(
             s*b, h, w, c)
+        if action is not None:
+            table_activate = action['table_cursor']['activate'].reshape(-1)
+            table_activate = table_activate.astype(numpy.bool)
+        else:
+            table_activate = numpy.ones(s*b, dtype=numpy.bool)
+        #table_image = torch.stack([
+        #    default_image_transform(image) for image in table_color_render
+        #]).reshape(s*b, c, h, w).to(device)
         x['table_image'] = torch.stack([
-            default_image_transform(image) for image in table_color_render
-        ]).reshape(s, b, c, h, w).to(device)
+            default_image_transform(image)
+            for a, image in zip(table_activate, table_color_render)
+            if a
+        ]).to(device)
+        x['table_cursor_activate'] = torch.BoolTensor(
+            table_activate).view(s, b).to(device)
+        
+        #table_activate = torch.LongTensor(
+        #    action['table_cursor']['activate']).to(device)
+        #x['table_image'] = table_image[table_activate.view(-1)]
         
         # process hand images
         s, b, h, w, c = observation['hand_color_render'].shape
         hand_color_render = observation['hand_color_render'].reshape(
             s*b, h, w, c)
+        if action is not None:
+            hand_activate = action['hand_cursor']['activate'].reshape(-1)
+            hand_activate = hand_activate.astype(numpy.bool)
+        else:
+            hand_activate = numpy.ones(s*b, dtype=numpy.bool)
+        #hand_image = torch.stack([
+        #    default_image_transform(image) for image in hand_color_render
+        #]).reshape(s, b, c, h, w).to(device)
         x['hand_image'] = torch.stack([
-            default_image_transform(image) for image in hand_color_render
-        ]).reshape(s, b, c, h, w).to(device)
+            default_image_transform(image)
+            for a, image in zip(hand_activate, hand_color_render)
+            if a
+        ]).to(device)
+        x['hand_cursor_activate'] = torch.BoolTensor(
+            hand_activate).view(s, b).to(device)
         
         # process table tiles
         table_tiles, table_tyx, table_pad = batch_deduplicate_from_masks(
@@ -136,8 +164,8 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         
         # process decode t/pad
         # THIS COULD BE TOTALLY BAD.  ARE WE DECODING AT MULTIPLE SPOTS IN FACTORED AND THAT'S WHY WE NEED SMALLER BATCH SIZE???  Actually, it looks ok, the copying happens in the model, but we should double-check.  Oh but you know what, because the sequences are longer, that means our decode does get longer... I wonder if there's a way to tell it to only decode densely at certain locations, because we will only giving it a loss at those locations anyway.  This would mean making a 'table_decode_t' and a 'hand_decode_t' or something like that, and setting it equal to the locations where the hand or table is activated.  This would probably save a TON of memory in the normal setting too!  Yeah, definitely do this.  This could be huge for longer sequences too.
-        x['decode_t'] = token_t
-        x['decode_pad'] = token_pad
+        #x['decode_t'] = token_t
+        #x['decode_pad'] = token_pad
         
         #print('new')
         #for key, xx in x.items():

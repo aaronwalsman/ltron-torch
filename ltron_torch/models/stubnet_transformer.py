@@ -74,7 +74,8 @@ class StubnetTransformer(Module):
         hand_cursor_yx,
         hand_cursor_p,
         token_t, token_pad,
-        decode_t, decode_pad,
+        table_cursor_activate,
+        hand_cursor_activate,
         use_memory=None,
     ):
     
@@ -97,7 +98,23 @@ class StubnetTransformer(Module):
         tile_encode_x, token_encode_x = decat_padded_seq(x, tile_pad, token_pad)
         decode_x = token_encode_x[1::2]
         
+        # need to select out the necessary locations using
+        # table_cursor_activate and hand_cursor_activate
+        # then modify observations_to_tensors to only pass in
+        # table_image and hand_image for the locations where the cursors are
+        # being decoded
+        #s, b, c = decode_x.shape
+        #hand_table_decode_x = decode_x.reshape(s*b, c)
+        #table_decode_x = hand_table_decode_x[table_cursor_activate.view(-1)]
+        #hand_decode_x = hand_table_decode_x[hand_cursor_activate.view(-1)]
+        
         # use the decoder to decode
-        x = self.decoder(decode_x, decode_pad, table_image, hand_image)
+        x = self.decoder(
+            decode_x,
+            table_cursor_activate,
+            table_image,
+            hand_cursor_activate,
+            hand_image,
+        )
         
         return x

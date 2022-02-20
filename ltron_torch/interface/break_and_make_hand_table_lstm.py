@@ -19,7 +19,7 @@ from ltron_torch.interface.utils import (
 from ltron_torch.interface.break_and_make import BreakAndMakeInterface
 
 class BreakAndMakeHandTableLSTMInterface(BreakAndMakeInterface):
-    def observation_to_tensors(self, observation, pad):
+    def observation_to_tensors(self, observation, action, pad):
         # get the device
         device = next(self.model.parameters()).device
         
