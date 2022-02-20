@@ -30,7 +30,7 @@ class HandTableLSTMConfig(Config):
     table_channels = 2
     hand_channels = 2
     
-    resnet_backbone = 'resnet50'
+    resnet_backbone = 'resnet18'
     pretrain_resnet = True
     freeze_resnet = False
     compact_visual_channels = 64
@@ -71,9 +71,9 @@ class HandTableLSTM(Module):
             frozen_weights=config.freeze_resnet,
         )
         pretrained_fcn = torch.load(os.path.expanduser(
-            "~/Research/ltron-torch/ltron_torch/train/checkpoint/Jan29_08-37-01_patillo/model_0005.pt"))
+            "~/Research/ltron-torch/ltron_torch/train/checkpoint/simplefcn_resnet18/model_0015.pt"))
         model_dict = self.visual_backbone.state_dict()
-        filtered_dict = {("resnet." + k[9:]):v for k, v in pretrained_fcn.items() if "resnet." + k[9:] in model_dict}
+        filtered_dict = {(k[8:]):v for k, v in pretrained_fcn.items() if k[8:] in model_dict}
         # print(len(filtered_dict.keys()))
         model_dict.update(filtered_dict)
 

@@ -59,11 +59,11 @@ class rolloutFrames(Dataset):
         
         path = self.rollout_paths[i]
         rollout = numpy.load(path, allow_pickle=True)['rollout'].item()
-        table = rollout['table_color_render']
+        table = rollout['table_color_render'].astype(float)
         pos_snap_reduced = numpy.where(rollout['table_pos_snap_render'][:, :, 0] > 0, 1, 0)
         neg_snap_reduced = numpy.where(rollout['table_neg_snap_render'][:, :, 0] > 0, 1, 0)
-        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['assembly']['shape'])
-        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['assembly']['color'])
+        shape_ids = self.id_mapping(rollout['table_mask_render'], rollout['config']['shape'])
+        color_ids = self.color_mapping(rollout['table_mask_render'], rollout['config']['color'])
         stacked_label = numpy.stack([shape_ids, pos_snap_reduced, neg_snap_reduced, color_ids], axis=2)
         # if numpy.unique(color_ids).shape[0] > 2:
         #     pdb.set_trace()
@@ -81,7 +81,7 @@ class rolloutFrames(Dataset):
 
         return table, stacked_label
 
-def build_rolloutFrames_train_loader(config, batch_overload=None):
+def build_rolloutFrames_train_loader(config, batch_overload=None, shuffle=True):
     print('-'*80)
     print("Building single frame data loader")
     dataset = rolloutFrames(
@@ -95,7 +95,7 @@ def build_rolloutFrames_train_loader(config, batch_overload=None):
             dataset,
             batch_size = batch_overload if batch_overload else config.batch_size,
             num_workers = config.loader_workers,
-            shuffle=False,
+            shuffle=shuffle,
     )
     
     return loader
