@@ -16,7 +16,7 @@ class EpisodeDatasetConfig(Config):
     split = 'train_episodes'
     subset = None
     
-    batch_size = 2
+    batch_size = 4
     loader_workers = 4
     shuffle = True
 
