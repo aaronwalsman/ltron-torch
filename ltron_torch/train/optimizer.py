@@ -23,6 +23,13 @@ class OptimizerConfig(Config):
 
 def build_optimizer(config, model, checkpoint=None):
     
+    print('learning rate: %f'%config.learning_rate)
+    print('weight decay: %f'%config.weight_decay)
+    print('betas: %f, %f'%config.betas)
+    print('cosine decay start: %f'%config.cosine_decay_start)
+    print('cosine decay stop: %f'%config.cosine_decay_stop)
+    print('min learning rate scale: %f'%config.min_learning_rate_scale)
+    
     decay_params = []
     no_decay_params = []
     no_decay_modules = (

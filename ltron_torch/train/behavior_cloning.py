@@ -37,10 +37,10 @@ class BehaviorCloningConfig(Config):
     train_frequency = 1
     test_frequency = 1
     checkpoint_frequency = 10
-    visualization_frequency = 0
+    visualization_frequency = 1
     
     #test_rollout_steps_per_epoch = 2048
-    test_episodes_per_epoch = 64
+    test_episodes_per_epoch = 1024
     
     checkpoint_directory = './checkpoint'
     
@@ -103,6 +103,7 @@ def behavior_cloning(
         
         if test or visualize:
             episodes = rollout_epoch(
+                epoch,
                 config,
                 test_env,
                 model,
@@ -171,6 +172,7 @@ def train_epoch(
         train_log.step()
 
 def rollout_epoch(
+    epoch,
     config,
     env,
     model,
@@ -269,11 +271,12 @@ def rollout_epoch(
                 )
                 
                 if store_activations:
-                    a = {
-                        key:(value.cpu().numpy().squeeze(axis=0)
-                            if value.shape[0] == 1 else value.cpu().numpy())
-                        for key, value in x.items()
-                    }
+                    #a = {
+                    #    key:(value.cpu().numpy().squeeze(axis=0)
+                    #        if value.shape[0] == 1 else value.cpu().numpy())
+                    #    for key, value in x.items()
+                    #}
+                    a = interface.numpy_activations(x)
                     activation_storage.append_batch(activations=a)
                 
                 update = action_reward_storage.num_finished_seqs() - progress.n

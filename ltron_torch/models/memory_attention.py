@@ -158,6 +158,12 @@ class MemoryAttention(Module):
     def clear_all_memory(self):
         self.memory_length.fill_(0)
     
+    def zero_all_memory(self):
+        self.clear_all_memory()
+        b = self.memory_kv.shape[1]
+        self.memory_kv = torch.zeros(0, b, self.h, 2*self.hc).to(
+            self.memory_kv.device)
+    
     def train(self, mode=True):
         super(MemoryAttention, self).train(mode)
         self.clear_all_memory()

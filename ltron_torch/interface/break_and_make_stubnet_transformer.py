@@ -242,7 +242,7 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
                 x['table_t'][:,i] = encode_shift_map[x['table_t'][:,i]]
                 x['hand_t'][:,i] = encode_shift_map[x['hand_t'][:,i]]
                 x['token_t'][:,i] = encode_shift_map[x['token_t'][:,i]]
-                x['decode_t'][:,i] = decode_shift_map[x['decode_t'][:,i]]
+                #x['decode_t'][:,i] = decode_shift_map[x['decode_t'][:,i]]
         
         return x, y
     
@@ -250,3 +250,13 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         device = x['table_tiles'].device
         use_memory = torch.BoolTensor(~terminal).to(device)
         return self.model(**x, use_memory=use_memory)
+    
+    def numpy_activations(self, x):
+        a = {
+            key:value.cpu().numpy().squeeze(axis=0)
+            for key, value in x.items()
+            if key not in ('table', 'hand')
+        }
+        a['table'] = x['table'].cpu().numpy()
+        a['hand'] = x['hand'].cpu().numpy()
+        return a

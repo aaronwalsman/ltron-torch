@@ -84,6 +84,10 @@ class Transformer(Module):
         
         return x
     
+    def zero_all_memory(self):
+        for block in self.blocks:
+            block.attention.zero_all_memory()
+    
 def init_weights(module):
     if isinstance(module, (Linear, Embedding)):
         module.weight.data.normal_(mean=0., std=0.02)

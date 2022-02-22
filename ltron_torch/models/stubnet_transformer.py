@@ -64,6 +64,9 @@ class StubnetTransformer(Module):
         elif config.init_weights:
             self.apply(init_weights)
     
+    def zero_all_memory(self):
+        self.encoder.zero_all_memory()
+    
     def forward(self,
         table_image, hand_image,
         table_tiles, table_t, table_yx, table_pad,

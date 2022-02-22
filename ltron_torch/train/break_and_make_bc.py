@@ -74,7 +74,7 @@ class BreakAndMakeBCConfig(
     BehaviorCloningConfig,
 ):
     device = 'cuda'
-    model = 'lstm'
+    model = 'transformer'
     
     load_checkpoint = None
     use_checkpoint_config = False
@@ -98,7 +98,6 @@ class BreakAndMakeBCConfig(
     async_ltron = True
     
     seed = 1234567890
-    epochs = 6
 
 def train_break_and_make_bc(config=None):
     if config is None:
@@ -133,7 +132,7 @@ def train_break_and_make_bc(config=None):
         scheduler_checkpoint = checkpoint['scheduler']
         train_log_checkpoint = checkpoint.get('train_log', None)
         test_log_checkpoint = checkpoint.get('test_log', None)
-        start_epoch = checkpoint.get('epoch', 1)
+        start_epoch = checkpoint.get('epoch', 0) + 1
     else:
         model_checkpoint = None
         optimizer_checkpoint = None
