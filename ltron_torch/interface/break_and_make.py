@@ -699,7 +699,7 @@ class BreakAndMakeInterface:
             print('Pick and Place Both Correct: %.04f'%(
                 pick_and_place_both_correct / pick_and_place_n))
     
-    def activations_to_numpy(self, x):
+    def numpy_activations(self, x):
         a = {
             key:value.cpu().numpy().squeeze(axis=0)
             for key, value in x.items()
