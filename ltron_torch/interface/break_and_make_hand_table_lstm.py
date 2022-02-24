@@ -38,6 +38,14 @@ class BreakAndMakeHandTableLSTMInterface(BreakAndMakeInterface):
         
         return output
     
+    def numpy_activations(self, x):
+        a = {
+            key:value.cpu().numpy().squeeze(axis=0)
+            for key, value in x.items()
+            if key != 'memory'
+        }
+        return a
+    
     #def loss(self, x, pad, y, log=None, clock=None):
     #    return blocks_loss(self.config, x, pad, y, log, clock)
     #    '''
