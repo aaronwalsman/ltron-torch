@@ -39,6 +39,10 @@ class BreakAndMakeInterfaceConfig(Config):
     spatial_loss_mode = 'cross_entropy'
     
     visualization_seqs = 10
+    
+    allow_snap_flip = False
+    
+    split = 'test'
 
 class BreakAndMakeInterface:
     def __init__(self, config, model, optimizer):
@@ -114,9 +118,18 @@ class BreakAndMakeInterface:
         y_mode[action['hand_viewpoint'] == 5] = 20
         y_mode[action['hand_viewpoint'] == 6] = 21
         y_mode[action['hand_viewpoint'] == 7] = 22
+        last_mode = 22
         if self.config.factor_cursor_distribution:
             y_mode[action['table_cursor']['activate'] == 1] = 23
             y_mode[action['hand_cursor']['activate'] == 1] = 24
+            last_mode = 24
+        
+        if self.config.allow_snap_flip:
+            y_mode[action['rotate'] == 4] = last_mode + 1
+            y_mode[action['rotate'] == 5] = last_mode + 2
+            y_mode[action['rotate'] == 6] = last_mode + 3
+            y_mode[action['rotate'] == 7] = last_mode + 4
+        
         y['mode'] = torch.LongTensor(y_mode).to(device)
         
         for region in 'table', 'hand':
@@ -339,12 +352,24 @@ class BreakAndMakeInterface:
                 action['table_viewpoint'] = mode - 8
             elif mode >= 16 and mode < 23:
                 action['hand_viewpoint'] = mode - 15
-            elif mode == 23:
-                assert self.config.factor_cursor_distribution
-                action['table_cursor']['activate'] = True
-            elif mode == 24:
-                assert self.config.factor_cursor_distribution
-                action['hand_cursor']['activate'] = True
+            
+            last_mode = 22
+            
+            if self.config.factor_cursor_distribution:
+                if mode == 23:
+                    action['table_cursor']['activate'] = True
+                if mode == 24:
+                    action['hand_cursor']['activate'] = True
+                last_mode = 24
+            
+            if mode == last_mode + 1:
+                action['rotate'] = 4
+            elif mode == last_mode + 2:
+                action['rotate'] = 5
+            elif mode == last_mode + 3:
+                action['rotate'] = 6
+            elif mode == last_mode + 4:
+                action['rotate'] = 7
             
             if action['table_cursor']['activate']:
                 action['table_cursor']['position'] = numpy.array(

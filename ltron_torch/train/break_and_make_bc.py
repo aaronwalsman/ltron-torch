@@ -98,6 +98,8 @@ class BreakAndMakeBCConfig(
     async_ltron = True
     
     seed = 1234567890
+    
+    allow_snap_flip = False
 
 def train_break_and_make_bc(config=None):
     if config is None:
@@ -145,6 +147,9 @@ def train_break_and_make_bc(config=None):
         config.num_modes = 25
     else:
         config.num_modes = 23
+    
+    if config.allow_snap_flip:
+        config.num_modes += 4
     
     device = torch.device(config.device)
     
