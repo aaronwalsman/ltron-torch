@@ -1,3 +1,5 @@
+import io
+
 import numpy
 
 from torch.utils.data import Dataset, DataLoader
@@ -46,7 +48,9 @@ class EpisodeDataset(Dataset):
             )
         
         name = self.names[i]
-        data = numpy.load(self.zipfile.open(name), allow_pickle=True)
+        #data = numpy.load(self.zipfile.open(name), allow_pickle=True)
+        bytestream = io.BytesIO(self.zipfile.open(name).read())
+        data = numpy.load(bytestream, allow_pickle=True)
         data = data['episode'].item()
         
         return data

@@ -58,8 +58,18 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         # get the device
         device = next(self.model.parameters()).device
         
-        # process table images
+        # shape
         s, b, h, w, c = observation['table_color_render'].shape
+        
+        # get the insert activate frames
+        if action is not None:
+            insert_activate = (action['insert_brick']['shape'] != 0).reshape(-1)
+            insert_activate = insert_activate.astype(numpy.bool)
+        else:
+            insert_activate = numpy.ones(s*b, dtype=numpy.bool)
+        x['insert_activate'] = torch.BoolTensor(insert_activate).to(device)
+        
+        # process table images
         table_color_render = observation['table_color_render'].reshape(
             s*b, h, w, c)
         if action is not None:
@@ -255,8 +265,10 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         a = {
             key:value.cpu().numpy().squeeze(axis=0)
             for key, value in x.items()
-            if key not in ('table', 'hand')
+            if key not in ('table', 'hand', 'shape', 'color')
         }
         a['table'] = x['table'].cpu().numpy()
         a['hand'] = x['hand'].cpu().numpy()
+        a['shape'] = x['shape'].cpu().numpy()
+        a['color'] = x['color'].cpu().numpy()
         return a

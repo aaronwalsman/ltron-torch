@@ -79,6 +79,7 @@ class StubnetTransformer(Module):
         token_t, token_pad,
         table_cursor_activate,
         hand_cursor_activate,
+        insert_activate,
         use_memory=None,
     ):
     
@@ -118,6 +119,7 @@ class StubnetTransformer(Module):
             table_image,
             hand_cursor_activate,
             hand_image,
+            insert_activate,
         )
         
         return x

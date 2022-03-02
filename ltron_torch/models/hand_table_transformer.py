@@ -90,8 +90,9 @@ class HandTableTransformer(Module):
         hand_cursor_p,
         token_t, token_pad,
         decode_t, decode_pad,
-        #table_cursor_activate,
-        #hand_cursor_activate,
+        table_cursor_activate,
+        hand_cursor_activate,
+        insert_activate,
         use_memory=None,
     ):
         x, t, pad = self.embedding(
@@ -119,7 +120,17 @@ class HandTableTransformer(Module):
         #print(torch.sum(x).cpu())
         
         # use the decoder to decode
-        x = self.decoder(decode_t, decode_pad, x, t, pad, use_memory=use_memory)
+        x = self.decoder(
+            decode_t,
+            decode_pad,
+            x,
+            t,
+            pad,
+            table_cursor_activate,
+            hand_cursor_activate,
+            insert_activate,
+            use_memory=use_memory,
+        )
         
         #print('new mode/shape/color/table/hand x')
         #print('   ', torch.sum(x['mode']).cpu())

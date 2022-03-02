@@ -252,7 +252,11 @@ class BreakAndMakeInterface:
         i = y['insert_i'].view(-1)
         for region in 'shape', 'color':
             n = x[region].shape[-1]
-            x_region = x[region].view(s*b, n)[i]
+            if len(x[region].shape) == 3:
+                x_region = x[region].view(s*b, n)[i]
+            else:
+                assert torch.sum(i) == x_region.shape[0]
+                x_region = x[region]
             if x_region.shape[0]:
                 y_region = y[region].view(-1)[i]
                 region_loss = cross_entropy(x_region, y_region)

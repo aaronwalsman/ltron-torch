@@ -55,7 +55,24 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         # get the device
         device = next(self.model.parameters()).device
         
+        # shape
+        s, b, h, w, c = observation['table_color_render'].shape
+        
+        if action is not None:
+            insert_activate = (action['insert_brick']['shape'] != 0).reshape(-1)
+            insert_activate = insert_activate.astype(numpy.bool)
+        else:
+            insert_activate = numpy.ones(s*b, dtype=numpy.bool)
+        x['insert_activate'] = torch.BoolTensor(insert_activate).to(device)
+        
         # process table tiles
+        if action is not None:
+            table_activate = action['table_cursor']['activate'].reshape(-1)
+            table_activate = table_activate.astype(numpy.bool)
+        else:
+            table_activate = numpy.ones(s*b, dtype=numpy.bool)
+        x['table_cursor_activate'] = torch.BoolTensor(
+            table_activate).view(s, b).to(device)
         table_tiles, table_tyx, table_pad = batch_deduplicate_from_masks(
             observation['table_color_render'],
             observation['table_tile_mask'],
@@ -69,6 +86,13 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         x['table_pad'] = torch.LongTensor(table_pad).to(device)
         
         # processs hand tiles
+        if action is not None:
+            hand_activate = action['hand_cursor']['activate'].reshape(-1)
+            hand_activate = hand_activate.astype(numpy.bool)
+        else:
+            hand_activate = numpy.ones(s*b, dtype=numpy.bool)
+        x['hand_cursor_activate'] = torch.BoolTensor(
+            hand_activate).view(s, b).to(device)
         hand_tiles, hand_tyx, hand_pad = batch_deduplicate_from_masks(
             observation['hand_color_render'],
             observation['hand_tile_mask'],
@@ -195,3 +219,16 @@ class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
         device = x['table_tiles'].device
         use_memory = torch.BoolTensor(~terminal).to(device)
         return self.model(**x, use_memory=use_memory)
+    
+    def numpy_activations(self, x):
+        a = {
+            key:value.cpu().numpy().squeeze(axis=0)
+            for key, value in x.items()
+            if key not in ('shape', 'color', 'table', 'hand')
+        }
+        a['table'] = x['table'].cpu().numpy()
+        a['hand'] = x['hand'].cpu().numpy()
+        a['shape'] = x['shape'].cpu().numpy()
+        a['color'] = x['color'].cpu().numpy()
+        return a
+

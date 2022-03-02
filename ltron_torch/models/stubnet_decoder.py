@@ -46,14 +46,29 @@ class StubnetDecoder(Module):
             config.encoder_channels, config.stub_channels*2)
         self.cursor_layer_norm = LayerNorm(config.stub_channels)
         
-        global_head_spec = {
+        #global_head_spec = {
+        #    'mode' : config.num_modes,
+        #    'shape' : config.num_shapes,
+        #    'color' : config.num_colors,
+        #}
+        #self.global_decoder = LinearMultiheadDecoder(
+        #    config.encoder_channels,
+        #    global_head_spec,
+        #)
+        mode_head_spec = {
             'mode' : config.num_modes,
+        }
+        insert_head_spec = {
             'shape' : config.num_shapes,
             'color' : config.num_colors,
         }
-        self.global_decoder = LinearMultiheadDecoder(
+        self.mode_decoder = LinearMultiheadDecoder(
             config.encoder_channels,
-            global_head_spec,
+            mode_head_spec,
+        )
+        self.insert_decoder = LinearMultiheadDecoder(
+            config.encoder_channels,
+            insert_head_spec,
         )
     
     def forward(
@@ -63,6 +78,7 @@ class StubnetDecoder(Module):
         table_image,
         hand_cursor_activate,
         hand_image,
+        insert_activate,
     ):
         
         # run the stubnet on the input images
@@ -100,8 +116,15 @@ class StubnetDecoder(Module):
         hand_x = torch.einsum('bchw,bnc->bnhw', hand_x, hand_cursor_x)
         hand_x = hand_x / (c**0.5)
         
-        # compute the global output and add the table and hand
-        x = self.global_decoder(decode_x)
+        # compute the node output
+        #x = self.global_decoder(decode_x)
+        x = self.mode_decoder(decode_x)
+        
+        # compute the insert output
+        insert_decode_x = decode_x.reshape(s*b,-1)[insert_activate.view(-1)]
+        x.update(self.insert_decoder(insert_decode_x))
+        
+        # add table and hand to x
         x['table'] = table_x
         x['hand'] = hand_x
         
