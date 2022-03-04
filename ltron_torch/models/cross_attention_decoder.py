@@ -198,7 +198,9 @@ class CrossAttentionDecoder(Module):
             
             # compute the mask
             ###mask = padded_causal_mask(tq, pad_q, tk, pad_k)
-            region_mask = padded_causal_mask(region_tq, region_pad, tk, pad_k)
+            region_mask_pad = region_pad * hw
+            region_mask = padded_causal_mask(
+                region_tq, region_mask_pad, tk, pad_k)
             
             # use the transformer block to compute the output
             ###x = self.block(
@@ -262,7 +264,7 @@ class CrossAttentionDecoder(Module):
         
         #x = self.global_decoder(global_x)
         x = self.mode_decoder(global_x)
-        insert_decode_x = global_x.reshape(s*b,-1)[insert_activate.view(-1)]
+        insert_decode_x = global_x.reshape(s*b,c)[insert_activate.view(-1)]
         x.update(self.insert_decoder(insert_decode_x))
         
         x['table'] = table_x
