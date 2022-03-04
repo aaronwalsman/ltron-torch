@@ -44,13 +44,15 @@ class HandTableLSTMConfig(Config):
     table_shape = (8,8)
     hand_shape = (3,3)
 
+    pretrained_fcn_path = None
+
 class HandTableLSTM(Module):
 
     def load_fcn_backbone(self):
         backbone = resnet.resnet50(pretrained=False, replace_stride_with_dilation=[False, True, True])
         backbone = create_feature_extractor(backbone, {"layer4": "out"})
         pretrained_fcn = torch.load(os.path.expanduser(
-            "~/Research/ltron-torch/ltron_torch/train/checkpoint/Jan29_08-37-01_patillo/model_0005.pt"))
+            "/gscratch/raivn/muruz/ltron-torch/ltron_torch/train/checkpoint/Jan29_08-37-01_patillo/model_0005.pt"))
         model_dict = backbone.state_dict()
         filtered_dict = {k[9:]:v for k, v in pretrained_fcn.items() if k[9:] in model_dict}
         model_dict.update(filtered_dict)
@@ -70,14 +72,14 @@ class HandTableLSTM(Module):
             pretrained=config.pretrain_resnet,
             frozen_weights=config.freeze_resnet,
         )
-        pretrained_fcn = torch.load(os.path.expanduser(
-            "~/Research/ltron-torch/ltron_torch/train/checkpoint/simplefcn_resnet18/model_0015.pt"))
-        model_dict = self.visual_backbone.state_dict()
-        filtered_dict = {(k[8:]):v for k, v in pretrained_fcn.items() if k[8:] in model_dict}
-        # print(len(filtered_dict.keys()))
-        model_dict.update(filtered_dict)
+        if config.pretrained_fcn_path:
+            pretrained_fcn = torch.load(os.path.expanduser(config.pretrained_fcn_path))
+            model_dict = self.visual_backbone.state_dict()
+            filtered_dict = { k[8:]:v for k, v in pretrained_fcn.items() if k[8:] in model_dict}
+            print(filtered_dict.keys())
+            model_dict.update(filtered_dict)
 
-        #self.visual_backbone = self.load_fcn_backbone()
+        # self.visual_backbone = self.load_fcn_backbone()
         
         # visual feature extractor
         resnet_channels = named_encoder_channels(config.resnet_backbone)
