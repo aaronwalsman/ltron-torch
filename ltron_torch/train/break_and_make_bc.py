@@ -255,3 +255,8 @@ def plot_break_and_make_bc(checkpoint=None):
     print('Test Plots')
     print('-'*80)
     print(test_chart)
+
+def eval_break_and_make_bc(checkpoint=None):
+    if checkpoint is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument

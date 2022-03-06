@@ -21,6 +21,8 @@ setuptools.setup(
                 'ltron_torch.train.break_and_make_bc:train_break_and_make_bc',
             'plot_break_and_make_bc='
                 'ltron_torch.train.break_and_make_bc:plot_break_and_make_bc',
+            'eval_break_and_make='
+                'ltron_torch.train.break_and_make_eval:break_and_make_eval',
             'train_blocks_bc=ltron_torch.train.blocks_bc:train_blocks_bc',
         ]
     }

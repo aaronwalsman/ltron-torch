@@ -23,6 +23,8 @@ class StubnetDecoderConfig(Config):
     num_colors = 6
     
     pretrained = True
+    
+    old_style = False
 
 class StubnetDecoder(Module):
     def __init__(self, config):
@@ -46,30 +48,32 @@ class StubnetDecoder(Module):
             config.encoder_channels, config.stub_channels*2)
         self.cursor_layer_norm = LayerNorm(config.stub_channels)
         
-        #global_head_spec = {
-        #    'mode' : config.num_modes,
-        #    'shape' : config.num_shapes,
-        #    'color' : config.num_colors,
-        #}
-        #self.global_decoder = LinearMultiheadDecoder(
-        #    config.encoder_channels,
-        #    global_head_spec,
-        #)
-        mode_head_spec = {
-            'mode' : config.num_modes,
-        }
-        insert_head_spec = {
-            'shape' : config.num_shapes,
-            'color' : config.num_colors,
-        }
-        self.mode_decoder = LinearMultiheadDecoder(
-            config.encoder_channels,
-            mode_head_spec,
-        )
-        self.insert_decoder = LinearMultiheadDecoder(
-            config.encoder_channels,
-            insert_head_spec,
-        )
+        if self.config.old_style:
+            global_head_spec = {
+                'mode' : config.num_modes,
+                'shape' : config.num_shapes,
+                'color' : config.num_colors,
+            }
+            self.global_decoder = LinearMultiheadDecoder(
+                config.encoder_channels,
+                global_head_spec,
+            )
+        else:
+            mode_head_spec = {
+                'mode' : config.num_modes,
+            }
+            insert_head_spec = {
+                'shape' : config.num_shapes,
+                'color' : config.num_colors,
+            }
+            self.mode_decoder = LinearMultiheadDecoder(
+                config.encoder_channels,
+                mode_head_spec,
+            )
+            self.insert_decoder = LinearMultiheadDecoder(
+                config.encoder_channels,
+                insert_head_spec,
+            )
     
     def forward(
         self,
@@ -116,13 +120,17 @@ class StubnetDecoder(Module):
         hand_x = torch.einsum('bchw,bnc->bnhw', hand_x, hand_cursor_x)
         hand_x = hand_x / (c**0.5)
         
-        # compute the node output
-        #x = self.global_decoder(decode_x)
-        x = self.mode_decoder(decode_x)
+        if self.config.old_style:
+            # compute the global output
+            x = self.global_decoder(decode_x)
         
-        # compute the insert output
-        insert_decode_x = decode_x.reshape(s*b,-1)[insert_activate.view(-1)]
-        x.update(self.insert_decoder(insert_decode_x))
+        else:
+            # compute the node output
+            x = self.mode_decoder(decode_x)
+            
+            # compute the insert output
+            insert_decode_x = decode_x.reshape(s*b,-1)[insert_activate.view(-1)]
+            x.update(self.insert_decoder(insert_decode_x))
         
         # add table and hand to x
         x['table'] = table_x
