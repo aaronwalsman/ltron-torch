@@ -131,6 +131,7 @@ def break_and_make_eval(config=None):
         first_step = index_hierarchy(seq, 0)
         initial_table_assembly = (
             first_step['observation']['initial_table_assembly'])
+        num_bricks = numpy.sum(initial_table_assembly['shape'] != 0)
         
         last_step = index_hierarchy(seq, seq_len-1)
         final_table_assembly = (
@@ -194,7 +195,7 @@ def break_and_make_eval(config=None):
         
         # edit distance
         if last_phase == 0:
-            assembly_edit_distance = 0
+            assembly_edit_distance = 2 * num_bricks
             initial_to_final_matching = {}
         else:
             assembly_edit_distance, initial_to_final_matching = edit_distance(
