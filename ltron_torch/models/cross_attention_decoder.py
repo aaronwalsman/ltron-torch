@@ -37,6 +37,8 @@ class CrossAttentionDecoderConfig(TransformerConfig):
     num_shapes = 6
     num_colors = 6
     
+    old_style = False
+    
     def set_dependents(self):
         assert self.table_decode_h % self.table_decode_tokens_h == 0, (
             '%i, %i'%(self.table_decode_tokens_h, self.table_decode_h))
@@ -68,22 +70,25 @@ class CrossAttentionDecoder(Module):
         self.config = config
         
         # build the positional encodings
-        #self.spatial_position_encoding = LearnedPositionalEncoding(
-        #    config.channels,
-        #    config.decode_tokens + config.global_tokens,
-        #)
-        self.table_position_encoding = LearnedPositionalEncoding(
-            config.channels,
-            16*16,
-        )
-        self.hand_position_encoding = LearnedPositionalEncoding(
-            config.channels,
-            6*6,
-        )
-        self.global_position_encoding = LearnedPositionalEncoding(
-            config.channels,
-            1,
-        )
+        if self.config.old_style:
+            self.spatial_position_encoding = LearnedPositionalEncoding(
+                config.channels,
+                config.decode_tokens + config.global_tokens,
+            )
+        else:
+            self.table_position_encoding = LearnedPositionalEncoding(
+                config.channels,
+                16*16,
+            )
+            self.hand_position_encoding = LearnedPositionalEncoding(
+                config.channels,
+                6*6,
+            )
+            self.global_position_encoding = LearnedPositionalEncoding(
+                config.channels,
+                1,
+            )
+        
         self.temporal_position_encoding = LearnedPositionalEncoding(
             config.channels, config.max_sequence_length)
         
@@ -100,32 +105,34 @@ class CrossAttentionDecoder(Module):
         self.hand_decoder = Linear(
             config.channels, upsample_channels)
         
-        #self.mode_decoder = Linear(
-        #    config.channels, config.global_channels)
-        #global_head_spec = {
-        #    'mode' : config.num_modes,
-        #    'shape' : config.num_shapes,
-        #    'color' : config.num_colors,
-        #}
-        #self.global_decoder = LinearMultiheadDecoder(
-        #    config.channels,
-        #    global_head_spec,
-        #)
-        mode_head_spec = {
-            'mode' : config.num_modes,
-        }
-        insert_head_spec = {
-            'shape' : config.num_shapes,
-            'color' : config.num_colors,
-        }
-        self.mode_decoder = LinearMultiheadDecoder(
-            config.channels,
-            mode_head_spec,
-        )
-        self.insert_decoder = LinearMultiheadDecoder(
-            config.channels,
-            insert_head_spec,
-        )
+        if self.config.old_style:
+            self.mode_decoder = Linear(
+                config.channels, config.global_channels)
+            global_head_spec = {
+                'mode' : config.num_modes,
+                'shape' : config.num_shapes,
+                'color' : config.num_colors,
+            }
+            self.global_decoder = LinearMultiheadDecoder(
+                config.channels,
+                global_head_spec,
+            )
+        else:
+            mode_head_spec = {
+                'mode' : config.num_modes,
+            }
+            insert_head_spec = {
+                'shape' : config.num_shapes,
+                'color' : config.num_colors,
+            }
+            self.mode_decoder = LinearMultiheadDecoder(
+                config.channels,
+                mode_head_spec,
+            )
+            self.insert_decoder = LinearMultiheadDecoder(
+                config.channels,
+                insert_head_spec,
+            )
     
     def forward(self,
         tq,
@@ -143,10 +150,12 @@ class CrossAttentionDecoder(Module):
         uc = self.config.cursor_channels
         
         # use the positional encoding to generate the query tokens
-        #x_spatial = self.spatial_position_encoding.encoding
-        x_table = self.table_position_encoding.encoding
-        x_hand = self.hand_position_encoding.encoding
-        x_global = self.global_position_encoding.encoding
+        if self.config.old_style:
+            x_spatial = self.spatial_position_encoding.encoding
+        else:
+            x_table = self.table_position_encoding.encoding
+            x_hand = self.hand_position_encoding.encoding
+            x_global = self.global_position_encoding.encoding
         
         x_temporal = self.temporal_position_encoding(tq)
         s, b, c = x_temporal.shape
@@ -219,53 +228,64 @@ class CrossAttentionDecoder(Module):
             
             return region_x, region_pad_s, region_pad_b
         
-        table_x, tps, tpb = compute_attention(table_cursor_activate, x_table)
-        hand_x, hps, hpb = compute_attention(hand_cursor_activate, x_hand)
-        global_activate = torch.ones_like(table_cursor_activate)
-        global_x, _, _ = compute_attention(global_activate, x_global)
+        if not config.old_style:
+            table_x, tps, tpb = compute_attention(
+                table_cursor_activate, x_table)
+            hand_x, hps, hpb = compute_attention(hand_cursor_activate, x_hand)
+            global_activate = torch.ones_like(table_cursor_activate)
+            global_x, _, _ = compute_attention(global_activate, x_global)
         
         # split off the table tokens, upsample and reshape into a rectangle
-        #table_start = 0
-        #table_end = table_start + self.config.table_decode_tokens
-        #table_x = self.table_decoder(x[:,table_start:table_end])
-        table_x = self.table_decoder(table_x)
-        th = self.config.table_decode_tokens_h
-        tw = self.config.table_decode_tokens_w
-        ts = table_x.shape[0]
-        table_x = table_x.view(ts, th, tw, b, uh, uw, uc)
-        table_x = table_x.permute(0, 3, 6, 1, 4, 2, 5)
-        table_x = table_x.reshape(ts, b, uc, th*uh, tw*uw)
-        table_x = table_x[tps, tpb]
+        if config.old_style:
+            table_start = 0
+            table_end = table_start + self.config.table_decode_tokens
+            table_x = self.table_decoder(x[:,table_start:table_end])
+        else:
+            table_x = self.table_decoder(table_x)
+            th = self.config.table_decode_tokens_h
+            tw = self.config.table_decode_tokens_w
+            ts = table_x.shape[0]
+            table_x = table_x.view(ts, th, tw, b, uh, uw, uc)
+            table_x = table_x.permute(0, 3, 6, 1, 4, 2, 5)
+            table_x = table_x.reshape(ts, b, uc, th*uh, tw*uw)
+            table_x = table_x[tps, tpb]
         
         # split off the hand tokens, upsample and reshape into a rectangle
-        #hand_start = table_end
-        #hand_end = hand_start + self.config.hand_decode_tokens
-        #hand_x = self.hand_decoder(x[:,hand_start:hand_end])
-        hand_x = self.hand_decoder(hand_x)
-        hh = self.config.hand_decode_tokens_h
-        hw = self.config.hand_decode_tokens_w
-        hs = hand_x.shape[0]
-        hand_x = hand_x.view(hs, hh, hw, b, uh, uw, uc)
-        hand_x = hand_x.permute(0, 3, 6, 1, 4, 2, 5)
-        hand_x = hand_x.reshape(hs, b, uc, hh*uh, hw*uw)
-        hand_x = hand_x[hps, hpb]
+        if config.old_style:
+            hand_start = table_end
+            hand_end = hand_start + self.config.hand_decode_tokens
+            hand_x = self.hand_decoder(x[:,hand_start:hand_end])
+        else:
+            hand_x = self.hand_decoder(hand_x)
+            hh = self.config.hand_decode_tokens_h
+            hw = self.config.hand_decode_tokens_w
+            hs = hand_x.shape[0]
+            hand_x = hand_x.view(hs, hh, hw, b, uh, uw, uc)
+            hand_x = hand_x.permute(0, 3, 6, 1, 4, 2, 5)
+            hand_x = hand_x.reshape(hs, b, uc, hh*uh, hw*uw)
+            hand_x = hand_x[hps, hpb]
         
         # split off the global tokens
-        #global_start = hand_end
-        #global_end = global_start + self.config.global_tokens
+        if config.old_style:
+            global_start = hand_end
+            global_end = global_start + self.config.global_tokens
         
         assert self.config.global_tokens == 1
-        #global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
-        #s, b, _, c = global_x.shape
-        #global_x = global_x.view(s,b,c)
-        #global_x = x[:,global_start:global_end]
-        s, _, b, c = global_x.shape
-        global_x = global_x.view(s,b,c)
+        if config.old_style:
+            global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
+            s, b, _, c = global_x.shape
+            global_x = global_x.view(s,b,c)
+            global_x = x[:,global_start:global_end]
+        else:
+            s, _, b, c = global_x.shape
+            global_x = global_x.view(s,b,c)
         
-        #x = self.global_decoder(global_x)
-        x = self.mode_decoder(global_x)
-        insert_decode_x = global_x.reshape(s*b,c)[insert_activate.view(-1)]
-        x.update(self.insert_decoder(insert_decode_x))
+        if config.old_style:
+            x = self.global_decoder(global_x)
+        else:
+            x = self.mode_decoder(global_x)
+            insert_decode_x = global_x.reshape(s*b,c)[insert_activate.view(-1)]
+            x.update(self.insert_decoder(insert_decode_x))
         
         x['table'] = table_x
         x['hand'] = hand_x
