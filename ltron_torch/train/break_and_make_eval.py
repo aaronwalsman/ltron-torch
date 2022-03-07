@@ -146,14 +146,48 @@ def break_and_make_eval(config=None):
             final_shape = final_table_assembly['shape']
             final_color = final_table_assembly['color']
             def get_bricks(shapes, colors):
-                return set((s, c) for s, c in zip(shapes, colors) if s != 0)
+                #return set((s, c) for s, c in zip(shapes, colors) if s != 0)
+                out = {}
+                for s, c in zip(shapes, colors):
+                    if s == 0:
+                        continue
+                    if (s,c) not in out:
+                        out[s,c] = 0
+                    out[s,c] += 1
+                return out
             
             initial_bricks = get_bricks(initial_shape, initial_color)
             final_bricks = get_bricks(final_shape, final_color)
-            tp = len(initial_bricks & final_bricks)
-            fp = len(final_bricks - initial_bricks)
-            fn = len(initial_bricks - final_bricks)
-            p, r = precision_recall(tp, fp, fn)
+            
+            def multiset_intersect(a, b):
+                result = {}
+                keys = set()
+                keys |= a.keys()
+                keys |= b.keys()
+                for key in keys:
+                    if key in a and key in b:
+                        result[key] = min(a[key], b[key])
+                
+                return result
+            
+            def multiset_subtract(a, b):
+                result = {}
+                for key in a:
+                    if key in b:
+                        result[key] = max(0, a[key] - b[key])
+                return result
+            
+            def multiset_len(a):
+                return sum(a.values())
+            
+            tp = multiset_intersect(initial_bricks, final_bricks)
+            fp = multiset_subtract(final_bricks, initial_bricks)
+            fn = multiset_subtract(initial_bricks, final_bricks)
+            #tp = len(initial_bricks & final_bricks)
+            #fp = len(final_bricks - initial_bricks)
+            #fn = len(initial_bricks - final_bricks)
+            p, r = precision_recall(
+                multiset_len(tp), multiset_len(fp), multiset_len(fn))
             brick_f1 = f1(p, r)
         
         brick_f1s.append(brick_f1)
