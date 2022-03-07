@@ -203,8 +203,11 @@ def break_and_make_eval(config=None):
             edge_f1 = f1(p,r)
         edge_f1s.append(edge_f1)
         
-        assembly_score, _ = score_assemblies(
-            initial_table_assembly, final_table_assembly, part_names)
+        if last_phase == 0:
+            assembly_score = 0
+        else:
+            assembly_score, _ = score_assemblies(
+                initial_table_assembly, final_table_assembly, part_names)
         assembly_scores.append(assembly_score)
     
     print('Average Brick F1: %f'%(sum(brick_f1s) / len(brick_f1s)))
