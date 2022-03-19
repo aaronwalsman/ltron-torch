@@ -106,8 +106,8 @@ class CrossAttentionDecoder(Module):
             config.channels, upsample_channels)
         
         if self.config.old_style:
-            self.mode_decoder = Linear(
-                config.channels, config.global_channels)
+            #self.mode_decoder = Linear(
+            #    config.channels, config.global_channels)
             global_head_spec = {
                 'mode' : config.num_modes,
                 'shape' : config.num_shapes,
@@ -228,7 +228,25 @@ class CrossAttentionDecoder(Module):
             
             return region_x, region_pad_s, region_pad_b
         
-        if not config.old_style:
+        if self.config.old_style:
+            hw, c = x_spatial.shape
+            xq = x_temporal.view(s, 1, b, c) + x_spatial.view(1, hw, 1, c)
+            xq = xq.view(s*hw, b, c)
+            
+            tq = tq.view(s, 1, b).expand(s, hw, b).reshape(s*hw,b)
+            pad_q = pad_q * hw
+            
+            mask = padded_causal_mask(tq, pad_q, tk, pad_k)
+            
+            x = self.block(xq, pad_k, xk=xk, mask=mask, use_memory=use_memory)
+            
+            uh = self.config.upsample_h
+            uw = self.config.upsample_w
+            uc = self.config.cursor_channels
+            uhwc = uh*uw*c
+            x = x.view(s, hw, b, c)
+        
+        else:
             table_x, tps, tpb = compute_attention(
                 table_cursor_activate, x_table)
             hand_x, hps, hpb = compute_attention(hand_cursor_activate, x_hand)
@@ -236,10 +254,15 @@ class CrossAttentionDecoder(Module):
             global_x, _, _ = compute_attention(global_activate, x_global)
         
         # split off the table tokens, upsample and reshape into a rectangle
-        if config.old_style:
+        if self.config.old_style:
             table_start = 0
             table_end = table_start + self.config.table_decode_tokens
             table_x = self.table_decoder(x[:,table_start:table_end])
+            th = self.config.table_decode_tokens_h
+            tw = self.config.table_decode_tokens_w
+            table_x = table_x.view(s, th, tw, b, uh, uw, uc)
+            table_x = table_x.permute(0, 3, 6, 1, 4, 2, 5)
+            table_x = table_x.reshape(s, b, uc, th*uh, tw*uw)
         else:
             table_x = self.table_decoder(table_x)
             th = self.config.table_decode_tokens_h
@@ -251,10 +274,15 @@ class CrossAttentionDecoder(Module):
             table_x = table_x[tps, tpb]
         
         # split off the hand tokens, upsample and reshape into a rectangle
-        if config.old_style:
+        if self.config.old_style:
             hand_start = table_end
             hand_end = hand_start + self.config.hand_decode_tokens
             hand_x = self.hand_decoder(x[:,hand_start:hand_end])
+            hh = self.config.hand_decode_tokens_h
+            hw = self.config.hand_decode_tokens_w
+            hand_x = hand_x.view(s, hh, hw, b, uh, uw, uc)
+            hand_x = hand_x.permute(0, 3, 6, 1, 4, 2, 5)
+            hand_x = hand_x.reshape(s, b, uc, hh*uh, hw*uw)
         else:
             hand_x = self.hand_decoder(hand_x)
             hh = self.config.hand_decode_tokens_h
@@ -266,21 +294,23 @@ class CrossAttentionDecoder(Module):
             hand_x = hand_x[hps, hpb]
         
         # split off the global tokens
-        if config.old_style:
+        if self.config.old_style:
             global_start = hand_end
             global_end = global_start + self.config.global_tokens
         
         assert self.config.global_tokens == 1
-        if config.old_style:
-            global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
-            s, b, _, c = global_x.shape
-            global_x = global_x.view(s,b,c)
+        if self.config.old_style:
+            #global_x = x[:,global_start:global_end].permute(0, 2, 1, 3)
+            #s, b, _, c = global_x.shape
+            #global_x = global_x.view(s,b,c)
             global_x = x[:,global_start:global_end]
+            s, _, b, c = global_x.shape
+            global_x = global_x.view(s,b,c)
         else:
             s, _, b, c = global_x.shape
             global_x = global_x.view(s,b,c)
         
-        if config.old_style:
+        if self.config.old_style:
             x = self.global_decoder(global_x)
         else:
             x = self.mode_decoder(global_x)
