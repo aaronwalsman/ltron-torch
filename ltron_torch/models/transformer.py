@@ -76,11 +76,19 @@ class Transformer(Module):
         if config.init_weights:
             self.apply(init_weights)
     
-    def forward(self, x, t, pad, use_memory=None):
+    def forward(self, x, t, pad, use_memory=None, output_layers=None):
         mask = padded_causal_mask(t, pad)
         
-        for block in self.blocks:
+        if output_layers is None:
+            output_layers = set()
+        output = {}
+        
+        for i, block in enumerate(self.blocks):
             x = block(x, pad, mask=mask, use_memory=use_memory)
+            if i in output_layers:
+                output[i] = x
+        
+        output[-1] = x
         
         return x
     

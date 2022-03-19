@@ -107,7 +107,7 @@ class HandTableTransformer(Module):
         )
         
         # use the encoder to encode
-        x = self.encoder(x, t, pad, use_memory=use_memory)
+        x = self.encoder(x, t, pad, use_memory=use_memory)[-1]
         
         # DIFFERENT
         #print('new x')
