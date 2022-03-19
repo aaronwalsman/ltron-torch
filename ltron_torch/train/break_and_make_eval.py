@@ -10,6 +10,7 @@ from ltron.gym.envs.break_and_make_env import BreakAndMakeEnv
 from ltron.evaluation import precision_recall, f1
 from ltron.score import score_assemblies, edit_distance
 from ltron.dataset.paths import get_dataset_info, get_dataset_paths
+from ltron.bricks.brick_scene import BrickScene
 
 from ltron_torch.models.hand_table_transformer import (
     HandTableTransformerConfig, HandTableTransformer)
@@ -31,6 +32,7 @@ from ltron_torch.train.behavior_cloning import (
 
 class EvalConfig(BreakAndMakeBCConfig):
     evaluation_subset = None
+    dump_mpd = False
 
 def break_and_make_eval(config=None):
     if config is None:
@@ -124,6 +126,9 @@ def break_and_make_eval(config=None):
     edge_f1s = []
     assembly_scores = []
     
+    if config.dump_mpd:
+        scene = BrickScene()
+    
     for i in range(episodes.num_finished_seqs()):
         seq = episodes.get_seq(i)
         seq_len = len_hierarchy(seq)
@@ -176,6 +181,8 @@ def break_and_make_eval(config=None):
                 for key in a:
                     if key in b:
                         result[key] = max(0, a[key] - b[key])
+                    else:
+                        result[key] = a[key]
                 return result
             
             def multiset_len(a):
@@ -209,9 +216,9 @@ def break_and_make_eval(config=None):
         all_initial_instances = numpy.where(initial_table_assembly['shape'])[0]
         all_final_instances = numpy.where(final_table_assembly['shape'])[0]
         max_final_instance = max(all_final_instances, default=0)
-        for i in all_initial_instances:
-            if i not in initial_to_final_matching:
-                initial_to_final_matching[i] = i + max_final_instance
+        for j in all_initial_instances:
+            if j not in initial_to_final_matching:
+                initial_to_final_matching[j] = j + max_final_instance
         
         # edge f1
         if last_phase == 0:
@@ -244,6 +251,23 @@ def break_and_make_eval(config=None):
             assembly_score, _ = score_assemblies(
                 initial_table_assembly, final_table_assembly, part_names)
         assembly_scores.append(assembly_score)
+        
+        if config.dump_mpd:
+            scene.clear_instances()
+            scene.import_assembly(
+                final_table_assembly,
+                dataset_info['shape_ids'],
+                dataset_info['color_ids'],
+            )
+            scene.export_ldraw('./predicted_%06i.mpd'%i)
+            
+            scene.clear_instances()
+            scene.import_assembly(
+                initial_table_assembly,
+                dataset_info['shape_ids'],
+                dataset_info['color_ids'],
+            )
+            scene.export_ldraw('./target_%06i.mpd'%i)
     
     print('Average Brick F1: %f'%(sum(brick_f1s) / len(brick_f1s)))
     print('Average Edit Distance: %f'%(sum(edit_dists) / len(edit_dists)))
