@@ -202,6 +202,7 @@ def break_and_make_eval(config=None):
         
         # edit distance
         if last_phase == 0:
+            #assembly_edit_distance = 0
             assembly_edit_distance = 2 * num_bricks
             initial_to_final_matching = {}
         else:
