@@ -271,4 +271,7 @@ class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
         a['hand'] = x['hand'].cpu().numpy()
         a['shape'] = x['shape'].cpu().numpy()
         a['color'] = x['color'].cpu().numpy()
+        if len(a['shape'].shape) == 3:
+            a['shape'] = a['shape'].squeeze(axis=0)
+            a['color'] = a['color'].squeeze(axis=0)
         return a
