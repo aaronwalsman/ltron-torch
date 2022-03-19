@@ -431,30 +431,30 @@ class BreakAndMakeInterface:
                         polarity = polarity.reshape(h, w, 1)
                         color = magenta * (1.-polarity) + cyan * polarity
                         
-                        frame = (
-                            frame * 0.5 * (1. - location) +
-                            color * location).astype(numpy.uint8)
+                        #frame = (
+                        #    frame * 0.5 * (1. - location) +
+                        #    color * location).astype(numpy.uint8)
                         
                         y, x = frame_action['%s_cursor'%region]['position']
                         y, x = int(y), int(x)
                         p = frame_action['%s_cursor'%region]['polarity']
                         p = int(p)
-                        draw_box(
-                            frame,
-                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
-                            (255*(1-p), 0, 255*p),
-                        )
+                        #draw_box(
+                        #    frame,
+                        #    x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                        #    (255*(1-p), 0, 255*p),
+                        #)
                     
                     else:
                         y, x = frame_observation['%s_cursor'%region]['position']
                         y, x = int(y), int(x)
                         p = frame_observation['%s_cursor'%region]['polarity']
                         p = int(p)
-                        draw_box(
-                            frame,
-                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
-                            (255*(1-p), 0, 255*p),
-                        )
+                        #draw_box(
+                        #    frame,
+                        #    x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                        #    (255*(1-p), 0, 255*p),
+                        #)
                     
                     pos_snaps = seq['observation']['%s_pos_snap_render'%region]
                     pos_snap = pos_snaps[frame_id,:,:,0]
@@ -482,15 +482,16 @@ class BreakAndMakeInterface:
                 th, tw = table_frame.shape[:2]
                 hh, hw = hand_frame.shape[:2]
                 w = tw + hw
-                joined_image = numpy.zeros((th*3, w, 3), dtype=numpy.uint8)
+                #joined_image = numpy.zeros((th*3, w, 3), dtype=numpy.uint8)
+                joined_image = numpy.zeros((th, w, 3), dtype=numpy.uint8)
                 joined_image[:th,:tw] = table_frame
                 joined_image[th-hh:th,tw:] = hand_frame
                 
-                joined_image[th:th*2,:tw] = table_pos
-                joined_image[th*2-hh:th*2,tw:] = hand_pos
+                #joined_image[th:th*2,:tw] = table_pos
+                #joined_image[th*2-hh:th*2,tw:] = hand_pos
                 
-                joined_image[th*2:th*3,:tw] = table_neg
-                joined_image[th*3-hh:th*3,tw:] = hand_neg
+                #joined_image[th*2:th*3,:tw] = table_neg
+                #joined_image[th*3-hh:th*3,tw:] = hand_neg
                 
                 mode_string = []
                 if frame_action['insert_brick']['shape']:
