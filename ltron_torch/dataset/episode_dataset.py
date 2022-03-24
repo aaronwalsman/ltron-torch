@@ -25,21 +25,14 @@ class EpisodeDatasetConfig(Config):
 class EpisodeDataset(Dataset):
     def __init__(self, config):
         self.config = config
-        #paths = get_dataset_paths(
-        #    config.dataset, config.split, subset=config.subset)
-        #self.episode_paths = paths['episodes']
         self.zipfile = None
         _, self.names = get_zip_paths(
             config.dataset, config.split, subset=config.subset)
     
     def __len__(self):
-        #return len(self.episode_paths)
         return len(self.names)
     
     def __getitem__(self, i):
-        #path = self.episode_paths[i]
-        #data = numpy.load(path, allow_pickle=True)['episode'].item()
-        
         if self.zipfile is None:
             self.zipfile, _ = get_zip_paths(
                 self.config.dataset,
@@ -48,7 +41,6 @@ class EpisodeDataset(Dataset):
             )
         
         name = self.names[i]
-        #data = numpy.load(self.zipfile.open(name), allow_pickle=True)
         bytestream = io.BytesIO(self.zipfile.open(name).read())
         data = numpy.load(bytestream, allow_pickle=True)
         data = data['episode'].item()
