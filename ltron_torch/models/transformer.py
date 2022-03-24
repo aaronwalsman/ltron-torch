@@ -81,16 +81,16 @@ class Transformer(Module):
         
         if output_layers is None:
             output_layers = set()
-        output = {}
+        xs = {}
         
         for i, block in enumerate(self.blocks):
             x = block(x, pad, mask=mask, use_memory=use_memory)
             if i in output_layers:
-                output[i] = x
+                xs[i] = x
         
-        output[-1] = x
+        xs[-1] = x
         
-        return x
+        return xs
     
     def zero_all_memory(self):
         for block in self.blocks:

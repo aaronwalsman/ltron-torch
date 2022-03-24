@@ -37,6 +37,9 @@ class HandTableEmbeddingConfig(Config):
         self.hand_tiles = self.hand_tiles_h * self.hand_tiles_w
         
         self.spatial_tiles = self.table_tiles + self.hand_tiles
+        
+        self.table_decoder_pixels = self.table_tiles_h * self.table_tiles_w * 16
+        self.hand_decoder_pixels = self.hand_tiles_h * self.hand_tiles_w * 16
 
 class HandTableEmbedding(Module):
     def __init__(self, config):
@@ -79,7 +82,7 @@ class HandTableEmbedding(Module):
         self.spatial_position_encoding = LearnedPositionalEncoding(
             config.encoder_channels, config.spatial_tiles)
         self.temporal_position_encoding = LearnedPositionalEncoding(
-            config.encoder_channels, config.max_sequence_length)
+            config.encoder_channels, config.max_sequence_length+1)
     
     def forward(self,
         table_tiles, table_t, table_yx, table_pad,
@@ -90,6 +93,9 @@ class HandTableEmbedding(Module):
         hand_cursor_yx,
         hand_cursor_p,
         token_t, token_pad,
+        #extra_tiles=None,
+        #extra_tile_yx=None,
+        #extra_pad=None,
     ):
         
         # linearize table_yx and hand_yx
@@ -97,12 +103,23 @@ class HandTableEmbedding(Module):
         table_yx = table_yx[...,0] * table_w + table_yx[...,1]
         hand_w = self.config.hand_tiles_w
         hand_yx = hand_yx[...,0] * hand_w + hand_yx[...,1]
+        hand_yx = hand_yx + self.config.table_tiles * (hand_yx != 0)
         
         # cat table and hand tiles
         tile_x, tile_pad = cat_padded_seqs(
             table_tiles, hand_tiles, table_pad, hand_pad)
         tile_t, _ = cat_padded_seqs(table_t, hand_t, table_pad, hand_pad)
         tile_yx, _ = cat_padded_seqs(table_yx, hand_yx, table_pad, hand_pad)
+        
+        #if extra_pad is not None:
+        #    tile_x, new_tile_pad = cat_padded_seqs(
+        #        tile_x, extra_tiles, tile_pad, extra_pad)
+        #    extra_tile_yx = (
+        #        extra_tile_yx[...,0] * table_w + extra_tile_yx[...,1])
+        #    tile_yx, _ = cat_padded_seqs(
+        #        tile_yx, extra_tile_yx, tile_pad, extra_pad)
+        #    extra_t = torch.full(tile_yx.shape
+        #    tile_t, _ = cat_padded_seqs(tile_t, extra_t, 
         
         # make the tile embeddings
         tile_x = self.tile_embedding(tile_x)

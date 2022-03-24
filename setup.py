@@ -20,6 +20,8 @@ setuptools.setup(
         'console_scripts' : [
             'train_break_and_make_bc='
                 'ltron_torch.train.break_and_make_bc:train_break_and_make_bc',
+            'train_edit_bc='
+                'ltron_torch.train.edit_bc:train_edit_bc',
             'plot_break_and_make_bc='
                 'ltron_torch.train.break_and_make_bc:plot_break_and_make_bc',
             'eval_break_and_make='

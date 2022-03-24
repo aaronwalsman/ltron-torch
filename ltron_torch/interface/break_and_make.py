@@ -255,7 +255,7 @@ class BreakAndMakeInterface:
             if len(x[region].shape) == 3:
                 x_region = x[region].view(s*b, n)[i]
             else:
-                assert torch.sum(i) == x_region.shape[0]
+                assert torch.sum(i) == x[region].shape[0]
                 x_region = x[region]
             if x_region.shape[0]:
                 y_region = y[region].view(-1)[i]

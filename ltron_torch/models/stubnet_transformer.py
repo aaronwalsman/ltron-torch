@@ -80,6 +80,7 @@ class StubnetTransformer(Module):
         table_cursor_activate,
         hand_cursor_activate,
         insert_activate,
+        #extra_tiles=None,
         use_memory=None,
     ):
     
