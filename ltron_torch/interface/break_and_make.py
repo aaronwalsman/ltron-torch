@@ -22,7 +22,11 @@ from ltron.visualization.drawing import (
 
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.interface.utils import (
-    bernoulli_or_max, categorical_or_max, categorical_or_max_2d)
+    bernoulli_or_max,
+    categorical_or_max,
+    categorical_or_max_2d,
+    categorical_or_max_nd,
+)
 
 class BreakAndMakeInterfaceConfig(Config):
     mode_loss_weight = 1.
@@ -82,10 +86,13 @@ class BreakAndMakeInterface:
         
         return test_log
     
-    def observation_to_tensors(self, observation, pad):
+    def observation_to_tensors(self, batch, pad):
         raise NotImplementedError
     
-    def action_to_tensors(self, action, pad):
+    def action_to_tensors(self, batch, pad):
+        
+        # pull action out of batch
+        action = batch['actions']
         
         # initialize y
         y = {}
@@ -134,8 +141,8 @@ class BreakAndMakeInterface:
         
         for region in 'table', 'hand':
             # get the active sequence indices
-            y['%s_i'%region] = torch.BoolTensor(
-                action['%s_cursor'%region]['activate']).to(device)
+            active = action['%s_cursor'%region]['activate']
+            y['%s_i'%region] = torch.BoolTensor(active).to(device)
             
             # get the click locations
             y['%s_yx'%region] = torch.LongTensor(
@@ -144,6 +151,15 @@ class BreakAndMakeInterface:
             # get the click polarity
             y['%s_p'%region] = torch.LongTensor(
                 action['%s_cursor'%region]['polarity']).to(device)
+            
+            if 'click_maps' in batch:
+                index = {'table':0, 'hand':1}[region]
+                click_map = torch.BoolTensor(batch['click_maps'][index])
+                s, b, h, w, c = click_map.shape
+                click_map = click_map.permute(0,1,4,2,3)
+                click_map = click_map.view((s*b, c, h, w))[
+                    torch.BoolTensor(active).reshape(-1)]
+                y['%s_click'%region] = click_map.to(device)
         
         y['insert_i'] = y['mode'] == 8
         y['shape'] = torch.LongTensor(
@@ -215,6 +231,13 @@ class BreakAndMakeInterface:
                     dense_y_spatial[range(ny), (y_y * w + y_x)] = 1.
                     spatial_loss = binary_cross_entropy_with_logits(
                         x_spatial, dense_y_spatial)
+                    spatial_loss = spatial_loss * getattr(
+                        self.config, '%s_spatial_loss_weight'%region)
+                elif self.config.spatial_loss_mode == 'click_map':
+                    click_map = y['%s_click'%region]
+                    x_region = x_region.view(-1, 2, h, w)
+                    spatial_loss = binary_cross_entropy_with_logits(
+                        x_region, click_map.float())
                     spatial_loss = spatial_loss * getattr(
                         self.config, '%s_spatial_loss_weight'%region)
                 
@@ -295,19 +318,26 @@ class BreakAndMakeInterface:
             h, w = x[region].shape[-2:]
             x_region = x[region].view(b, 2, h, w)
             
-            # spatial
-            x_spatial = x_region[:,0]
-            region_y, region_x = categorical_or_max_2d(x_spatial, mode=mode)
-            region_y = region_y.cpu().numpy()
-            region_x = region_x.cpu().numpy()
-            #region_yx.append((region_y, region_x))
-            #region_yx = (region_y, region_x)
-            
-            # polarity
-            x_polarity = x_region[:,1]
-            x_polarity = x_polarity[range(b), region_y, region_x]
-            polarity = bernoulli_or_max(x_polarity, mode=mode).cpu().numpy()
-            #region_polarity.append(polarity)
+            if self.config.spatial_loss_mode == 'click_map':
+                polarity, region_y, region_x = categorical_or_max_nd(
+                    x_region, mode, 3)
+                polarity = polarity.bool().cpu().numpy()
+                region_y = region_y.cpu().numpy()
+                region_x = region_x.cpu().numpy()
+            else:
+                # spatial
+                x_spatial = x_region[:,0]
+                region_y, region_x = categorical_or_max_2d(x_spatial, mode=mode)
+                region_y = region_y.cpu().numpy()
+                region_x = region_x.cpu().numpy()
+                #region_yx.append((region_y, region_x))
+                #region_yx = (region_y, region_x)
+                
+                # polarity
+                x_polarity = x_region[:,1]
+                x_polarity = x_polarity[range(b), region_y, region_x]
+                polarity = bernoulli_or_max(x_polarity, mode=mode).cpu().numpy()
+                #region_polarity.append(polarity)
             
             return region_y, region_x, polarity
         
@@ -431,30 +461,30 @@ class BreakAndMakeInterface:
                         polarity = polarity.reshape(h, w, 1)
                         color = magenta * (1.-polarity) + cyan * polarity
                         
-                        #frame = (
-                        #    frame * 0.5 * (1. - location) +
-                        #    color * location).astype(numpy.uint8)
+                        frame = (
+                            frame * 0.5 * (1. - location) +
+                            color * location).astype(numpy.uint8)
                         
                         y, x = frame_action['%s_cursor'%region]['position']
                         y, x = int(y), int(x)
                         p = frame_action['%s_cursor'%region]['polarity']
                         p = int(p)
-                        #draw_box(
-                        #    frame,
-                        #    x*4, y*4, (x+1)*4-1, (y+1)*4-1,
-                        #    (255*(1-p), 0, 255*p),
-                        #)
+                        draw_box(
+                            frame,
+                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                            (255*(1-p), 0, 255*p),
+                        )
                     
                     else:
                         y, x = frame_observation['%s_cursor'%region]['position']
                         y, x = int(y), int(x)
                         p = frame_observation['%s_cursor'%region]['polarity']
                         p = int(p)
-                        #draw_box(
-                        #    frame,
-                        #    x*4, y*4, (x+1)*4-1, (y+1)*4-1,
-                        #    (255*(1-p), 0, 255*p),
-                        #)
+                        draw_box(
+                            frame,
+                            x*4, y*4, (x+1)*4-1, (y+1)*4-1,
+                            (255*(1-p), 0, 255*p),
+                        )
                     
                     pos_snaps = seq['observation']['%s_pos_snap_render'%region]
                     pos_snap = pos_snaps[frame_id,:,:,0]
@@ -482,16 +512,31 @@ class BreakAndMakeInterface:
                 th, tw = table_frame.shape[:2]
                 hh, hw = hand_frame.shape[:2]
                 w = tw + hw
-                #joined_image = numpy.zeros((th*3, w, 3), dtype=numpy.uint8)
-                joined_image = numpy.zeros((th, w, 3), dtype=numpy.uint8)
-                joined_image[:th,:tw] = table_frame
-                joined_image[th-hh:th,tw:] = hand_frame
-                
-                #joined_image[th:th*2,:tw] = table_pos
-                #joined_image[th*2-hh:th*2,tw:] = hand_pos
-                
-                #joined_image[th*2:th*3,:tw] = table_neg
-                #joined_image[th*3-hh:th*3,tw:] = hand_neg
+                if 'initial_table_color_render' in seq['observation']:
+                    joined_image = numpy.zeros((th*4, w, 3), dtype=numpy.uint8)
+                    
+                    target = seq['observation']['initial_table_color_render']
+                    joined_image[:th,:tw] = target[frame_id]
+                    
+                    joined_image[th:th*2,:tw] = table_frame
+                    joined_image[th*2-hh:th*2,tw:] = hand_frame
+                    
+                    joined_image[th*2:th*3,:tw] = table_pos
+                    joined_image[th*3-hh:th*3,tw:] = hand_pos
+                    
+                    joined_image[th*3:th*4,:tw] = table_neg
+                    joined_image[th*4-hh:th*4,tw:] = hand_neg
+                else:
+                    joined_image = numpy.zeros((th*3, w, 3), dtype=numpy.uint8)
+                    #joined_image = numpy.zeros((th, w, 3), dtype=numpy.uint8)
+                    joined_image[:th,:tw] = table_frame
+                    joined_image[th-hh:th,tw:] = hand_frame
+                    
+                    joined_image[th:th*2,:tw] = table_pos
+                    joined_image[th*2-hh:th*2,tw:] = hand_pos
+                    
+                    joined_image[th*2:th*3,:tw] = table_neg
+                    joined_image[th*3-hh:th*3,tw:] = hand_neg
                 
                 mode_string = []
                 if frame_action['insert_brick']['shape']:

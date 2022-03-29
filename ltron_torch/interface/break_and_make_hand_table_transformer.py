@@ -47,7 +47,10 @@ class BreakAndMakeHandTableTransformerInterfaceConfig(
 
 class BreakAndMakeHandTableTransformerInterface(BreakAndMakeInterface):
     
-    def observation_to_tensors(self, observation, action, pad):
+    def observation_to_tensors(self, batch, pad):
+        
+        observation = batch['observations']
+        action = batch['actions']
         
         # initialize x
         x = {}

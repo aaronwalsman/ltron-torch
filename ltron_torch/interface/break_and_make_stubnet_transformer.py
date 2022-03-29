@@ -50,7 +50,11 @@ class BreakAndMakeStubnetTransformerInterfaceConfig(
 
 class BreakAndMakeStubnetTransformerInterface(BreakAndMakeInterface):
     
-    def observation_to_tensors(self, observation, action, pad):
+    def observation_to_tensors(self, batch, pad):
+        
+        # pull observation and action out of the batch
+        observation = batch['observations']
+        action = batch['actions']
         
         # initialize x
         x = {}

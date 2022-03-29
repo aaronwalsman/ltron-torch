@@ -146,12 +146,9 @@ def train_epoch(
     
     for batch, pad in tqdm.tqdm(loader):
         
-        observations = batch['observations']
-        actions = batch['actions']
-        
         # convert observations to model tensors
-        x = interface.observation_to_tensors(observations, actions, pad)
-        y = interface.action_to_tensors(actions, pad)
+        x = interface.observation_to_tensors(batch, pad)
+        y = interface.action_to_tensors(batch, pad)
         
         if hasattr(interface, 'augment'):
             x, y = interface.augment(x, y)
@@ -240,7 +237,9 @@ def rollout_epoch(
                 # move observations to torch and cuda
                 pad = numpy.ones(b, dtype=numpy.long)
                 observation = stack_numpy_hierarchies(observation)
-                x = interface.observation_to_tensors(observation, None, pad)
+                #x = interface.observation_to_tensors(observation, None, pad)
+                x = interface.observation_to_tensors(
+                    {'observations':observation, 'actions':None}, pad)
                 
                 # compute actions ----------------------------------------------
                 if hasattr(model, 'initialize_memory'):
