@@ -244,6 +244,12 @@ class BreakAndMakeInterface:
                         x_region, click_map.float(), pos_weight=self.pos_weight)
                     spatial_loss = spatial_loss * getattr(
                         self.config, '%s_spatial_loss_weight'%region)
+                elif self.config.spatial_loss_mode == 'click_map_mse':
+                    click_map = y['%s_click'%region]
+                    x_region = x_region.view(-1, 2, h, w)
+                    spatial_loss = mse_loss(x_region, click_map.float())
+                    spatial_loss = spatial_loss * getattr(
+                        self.config, '%s_spatial_loss_weight'%region)
                 
                 loss = loss + spatial_loss
                 #print('new %s spatial loss'%region)
