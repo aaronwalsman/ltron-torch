@@ -46,6 +46,8 @@ class BreakAndMakeInterfaceConfig(Config):
     
     allow_snap_flip = False
     
+    pos_loss_weight = 500
+    
     split = 'test'
 
 class BreakAndMakeInterface:
@@ -55,6 +57,8 @@ class BreakAndMakeInterface:
         self.optimizer = optimizer
         dummy_env = BreakAndMakeEnv(config)
         self.no_op_action = dummy_env.no_op_action()
+        d = next(iter(model.parameters())).device
+        self.pos_weight = torch.FloatTensor([config.pos_loss_weight]).to(d)
     
     @staticmethod
     def make_train_log(checkpoint=None):
@@ -237,7 +241,7 @@ class BreakAndMakeInterface:
                     click_map = y['%s_click'%region]
                     x_region = x_region.view(-1, 2, h, w)
                     spatial_loss = binary_cross_entropy_with_logits(
-                        x_region, click_map.float())
+                        x_region, click_map.float(), pos_weight=self.pos_weight)
                     spatial_loss = spatial_loss * getattr(
                         self.config, '%s_spatial_loss_weight'%region)
                 
@@ -248,13 +252,16 @@ class BreakAndMakeInterface:
                 #print('   ', torch.sum(y_spatial).cpu())
                 
                 # polarity
-                x_p = x_region[:,1].view(-1, h*w)
-                x_p = x_p[range(x_p.shape[0]), y_spatial]
-                y_p = y['%s_p'%region].view(-1)[i].float()
-                polarity_loss = binary_cross_entropy_with_logits(x_p, y_p)
-                polarity_loss = polarity_loss * getattr(
-                    self.config, '%s_polarity_loss_weight'%region)
-                loss = loss + polarity_loss
+                if self.config.spatial_loss_mode == 'click_map':
+                    polarity_loss = 0
+                else:
+                    x_p = x_region[:,1].view(-1, h*w)
+                    x_p = x_p[range(x_p.shape[0]), y_spatial]
+                    y_p = y['%s_p'%region].view(-1)[i].float()
+                    polarity_loss = binary_cross_entropy_with_logits(x_p, y_p)
+                    polarity_loss = polarity_loss * getattr(
+                        self.config, '%s_polarity_loss_weight'%region)
+                    loss = loss + polarity_loss
                 #print('new %s polarity loss'%region)
                 #print('   ', polarity_loss.cpu())
                 #print('   ', torch.sum(x_p).cpu())
