@@ -6,8 +6,8 @@ import numpy
 import gym.spaces as spaces
 
 from ltron.gym.spaces import (
-        ImageSpace, SegmentationSpace, StepSpace, ClassLabelSpace,
-        EdgeSpace, InstanceGraphSpace)
+    ImageSpace, IndexMaskSpace, TimeStepSpace, EdgeSpace
+)
 #from ltron.torch.brick_geometric import (
 #        BrickList, BrickGraph, BrickListBatch, BrickGraphBatch)
 
@@ -51,10 +51,10 @@ def gym_space_to_tensors(
                 tensor = torch.stack(
                         tuple(image_transform(image) for image in data))
             return tensor.to(device)
-        elif isinstance(space, SegmentationSpace):
+        elif isinstance(space, IndexMaskSpace):
             return torch.LongTensor(data).to(device)
         
-        elif isinstance(space, StepSpace):
+        elif isinstance(space, TimeStepSpace):
             return torch.LongTensor(data).to(device)
         
         #elif isinstance(space, ClassLabelSpace):
@@ -71,17 +71,6 @@ def gym_space_to_tensors(
                         torch.LongTensor(data['edge_index']).to(device)
             }
             return tensor_dict
-        
-        elif isinstance(space, InstanceGraphSpace):
-            brick_list = recurse(data['instances'], space['instances'])
-            edge_tensor_dict = recurse(data['edges'], space['edges'])
-            edge_index = edge_tensor_dict['edge_index']
-            # TODO: SCORE
-            if isinstance(brick_list, BrickList):
-                return BrickGraph(brick_list, edge_index=edge_index)
-            elif isinstance(brick_list, BrickListBatch):
-                return BrickGraphBatch.from_brick_list_batch(
-                        brick_list, edge_index)
         
         # keep the default spaces last because ltron's custom spaces
         # inherit from them so those cases should be caught first
@@ -120,12 +109,12 @@ def gym_space_list_to_tensors(
             tensor = torch.stack(data, dim=-4)
             return tensor.view(-1, c, h, w)
         
-        elif isinstance(space, SegmentationSpace):
+        elif isinstance(space, IndexMaskSpace):
             h, w = data[0].shape[-2:]
             tensor = torch.stack(data, dim=-3)
             return tensor.view(-1, h, w)
         
-        elif isinstance(space, StepSpace):
+        elif isinstance(space, TimeStepSpace):
             c = data[0].shape[-1]
             tensor = torch.stack(data, dim=-2)
             return tensor.view(-1, c)

@@ -1,5 +1,20 @@
+import random
+import os
+
+import numpy
+
 import torch
 from torch.nn import Module, Linear, LayerNorm, Sequential, ModuleDict
+from torch.distributions import Categorical
+
+import tqdm
+
+from splendor.image import save_image
+
+from ltron.name_span import NameSpan
+from ltron.hierarchy import len_hierarchy, index_hierarchy
+from ltron.gym.spaces import MultiScreenPixelSpace, MaskedTiledImageSpace
+from ltron.visualization.drawing import draw_crosshairs, stack_images_horizontal
 
 from ltron_torch.models.mlp import linear_stack
 from ltron_torch.models.heads import LinearMultiheadDecoder
@@ -206,28 +221,47 @@ class AutoTransformer(Module):
         
         # use the encoder to encode
         x = self.encoder(x, t, pad, use_memory=use_memory)[-1]
+        device = x.device
         s, b, c = x.shape
         
         # extract decoder tokens
-        _, x = decat_padded_seq(x, tile_pad, token_pad)
+        _, x = decat_padded_seq(x, tile_pad+token_pad+cursor_pad, readout_pad)
         
         # use the decoders to decode
         max_seq = torch.max(seq_pad)
-        min_t = torch.min(token_t, dim=0).values
+        min_t = torch.min(readout_t, dim=0).values
         
         head_xs = {}
         
-        #for name,readout_index in self.interface.readout_token_indices.items():
         for name in self.embedding.readout_layout.keys():
-            readout_index = self.embedding.readout_layout.ravel(
-                name, 0)
-            readout_s, readout_b = torch.where(token_x == readout_index)
-            readout_t = (token_t - min_t.view(1,-1))[readout_s, readout_b]
-            r_x = x[readout_s, readout_b]
-            r_x = self.decoders[name](r_x)
-            if name != 'noncursor':
-                r_x = {name:r_x}
+            if name == 'PAD':
+                continue
+            readout_index = self.embedding.readout_layout.ravel(name, 0)
+            readout_s, readout_b = torch.where(readout_x == readout_index)
+            readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
+            name_x = x[readout_s, readout_b]
+            sb = name_x.shape[0]
+            name_x = self.decoders[name](name_x)
+            if name in self.embedding.cursor_names:
+                head_xs[name] = name_x
+            else:
+                head_xs.update(name_x)
             
+            '''
+            for head_name, head_x in name_x.items():
+                sb, *other_dims = head_x.shape
+                padded_x = torch.zeros(
+                    max_seq,
+                    b,
+                    *other_dims,
+                    dtype=head_x.dtype,
+                    device=tile_x.device,
+                )
+                padded_x[readout_i, readout_b] = head_x
+                head_xs[head_name] = padded_x
+            '''
+            
+            '''
             for head_name, head_x in r_x.items():
                 #start, end = self.interface.name_range[head_name]
                 # if this is a cursor, we need to unpack a bit
@@ -245,30 +279,7 @@ class AutoTransformer(Module):
                         screen_x = screen_x.reshape(sb, ch*fh, cw*fw, fc)
                         maps[screen_name] = screen_x
                         total_elements += ch*fh*cw*fw*fc
-                    '''
-                    head_decoder_data = self.decoder_data[head_name]
-                    coarse_x, fine_x, head_i = head_x
-                    sb, c = coarse_x.shape
-                    _, f = fine_x.shape
-                    dense_x = coarse_x.view(sb, c, 1)
-                    dense_x = dense_x.expand(sb, c, f).clone()
-                    dense_x[range(sb), head_i.view(-1)] = (
-                        dense_x[range(sb), head_i.view(-1)] + fine_x)
                     
-                    maps = {}
-                    total_elements = 0
-                    for screen_name, screen_data in head_decoder_data.items():
-                        screen_start = screen_data['start']
-                        screen_end = screen_data['end']
-                        ch, cw = screen_data['coarse_shape']
-                        fh, fw, fc = screen_data['fine_shape']
-                        screen_x = dense_x[:,screen_start:screen_end]
-                        screen_x = screen_x.view(sb, ch, cw, fh, fw, fc)
-                        screen_x = screen_x.permute(0, 1, 3, 2, 4, 5)
-                        screen_x = screen_x.reshape(sb, ch*fh, cw*fw, fc)
-                        maps[screen_name] = screen_x
-                        total_elements += ch*fh*cw*fw*fc
-                    '''
                     head_x = torch.zeros(
                         sb, total_elements+1, device=screen_x.device)
                     cursor_space = self.action_space.subspaces[head_name]
@@ -276,7 +287,15 @@ class AutoTransformer(Module):
                     head_x = head_x[:,1:]
                 
                 head_xs[head_name] = head_x
+            '''
         
+        flat_x = torch.zeros(sb, self.action_space.n, device=device)
+        self.action_space.ravel_subspace(head_xs, out=flat_x)
+        
+        out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
+        out_x[readout_i, readout_b] = flat_x
+        
+        '''
         import pdb
         pdb.set_trace()
         
@@ -294,5 +313,146 @@ class AutoTransformer(Module):
             device=tile_x.device,
         )
         padded_action_x[readout_t, readout_b] = action_x
+        '''
+        #return head_xs
+        return out_x
+    
+    def tensor_to_actions(self, x, mode='sample'):
+        '''
+        coarse_namespan = NameSpan()
+        course_x = []
+        for name in self.embedding.readout_layout.keys():
+            if name in self.embedding.cursor_fine_layout.keys():
+                s,b,*shape = x[name]['coarse_x'].shape
+                coarse_namespan.add_names(**{name:shape})
+                course_x.append(x[name]['coarse_x'].view(s,b,-1))
+            else:
+                for key in x[name]:
+                    s,b,*shape = x[name][key].shape
+                    coarse_namespan.add_names(**{key:shape})
+                    course_x.append(x[name][key].view(s,b,-1))
+        coarse_x = torch.cat(course_x, dim=-1)
+        if mode == 'sample':
+            distribution = Categorical(coarse_x)
+            coarse_actions = distribution.sample().cpu().numpy()
+        elif mode == 'argmax':
+            coarse_actions = torch.argmax(coarse_x, dim=-1)
         
-        return padded_action_x
+        fine_actions = []
+        for a in coarse_actions:
+            name, i = coarse_namespan.unravel(a)
+            if name in self.embedding.cursor_fine_layout.keys():
+                screen, cy, cx = self.decoder[name].coarse_span.unravel(a)
+                if mode == 'sample':
+                    
+                    distribution = Categorical(x[name]['fine_x'])
+            else:
+                fine_action = self.action_space.ravel(name, i)
+            fine_actions.append(fine_action)
+        '''
+        s, b, a = x.shape
+        assert s == 1
+        if mode == 'sample':
+            distribution = Categorical(logits=x)
+            actions = distribution.sample().cpu().view(b).numpy()
+        elif mode == 'max':
+            actions = torch.argmax(x, dim=-1).cpu().view(b).numpy()
+
+        return actions
+
+    
+    def observation_to_labels(self, batch, pad, device):
+        return torch.LongTensor(batch['observation']['expert']).to(device)
+
+    def observation_to_single_label(self, batch, pad, device):
+        labels = batch['observation']['expert']
+        s, b = labels.shape[:2]
+        y = torch.zeros((s,b), dtype=torch.long)
+        for ss in range(s):
+            for bb in range(b):
+                label = [l for l in labels[ss,bb] if l != 0]
+                if len(label):
+                    y[ss,bb] = random.choice(label)
+
+        return y.to(device)
+    
+    def visualize_episodes(
+        self,
+        epoch,
+        episodes,
+        visualization_episodes_per_epoch,
+        visualization_directory,
+    ):
+        num_seqs = min(visualization_episodes_per_epoch, episodes.num_seqs())
+        for seq_id in tqdm.tqdm(range(num_seqs)):
+            seq_path = os.path.join(
+                visualization_directory, 'seq_%06i'%seq_id)
+            if not os.path.exists(seq_path):
+                os.makedirs(seq_path)
+
+            seq = episodes.get_seq(seq_id)
+            seq_len = len_hierarchy(seq)
+
+            seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))
+            seq_action_p = (
+                seq_action_p / numpy.sum(seq_action_p, axis=-1).reshape(-1,1))
+            max_action_p = numpy.max(seq_action_p, axis=-1)
+            
+            subspace_p = self.action_space.unravel_subspace(seq_action_p)
+            cursor_maps = {}
+            for name, space in self.action_space.subspaces.items():
+                if isinstance(space, MultiScreenPixelSpace):
+                    #a = action_space.extract_subspace(seq_action_p, name)
+                    #cursor_space = self.action_space.subspaces[name]
+                    cursor_maps[name] = space.unravel_maps(subspace_p[name])
+            
+            for frame_id in range(seq_len):
+                frame_observation = index_hierarchy(
+                    seq['observation'], frame_id)
+
+                images = {}
+                for name, space in self.observation_space.items():
+                    if isinstance(space, MaskedTiledImageSpace):
+                        image = frame_observation[name]['image']
+                        for map_name, maps in cursor_maps.items():
+                            if name in maps:
+                                colors = self.embedding.cursor_colors[map_name]
+                                m = maps[name][frame_id]
+                                for c in range(m.shape[-1]):
+                                    mc = m[..., c] / max_action_p[frame_id]
+                                    mc = mc.reshape(*mc.shape, 1)
+                                    image = image * (1.-mc) + mc*colors[c]
+
+                        images[name] = image.astype(numpy.uint8)
+
+                action = index_hierarchy(seq['action'], frame_id)
+                action_name, action_index = self.action_space.unravel(action)
+                action_subspace = self.action_space.subspaces[action_name]
+                if isinstance(action_subspace, MultiScreenPixelSpace):
+                    #n, y, x, c = action_subspace.unravel(action_index)
+                    n, *yxc = action_subspace.unravel(action_index)
+                    if n != 'NO_OP':
+                        y, x, c = yxc
+                        action_image = images[n]
+                        color = self.embedding.cursor_colors[action_name][c]
+                        #action_image[y,x] = color
+                        draw_crosshairs(action_image, y, x, 5, color)
+
+                expert = frame_observation['expert']
+                for e in expert:
+                    expert_name, expert_index = self.action_space.unravel(e)
+                    expert_subspace = self.action_space.subspaces[expert_name]
+                    if isinstance(expert_subspace, MultiScreenPixelSpace):
+                        n, y, x, c = expert_subspace.unravel(expert_index)
+                        expert_image = images[n]
+                        color = numpy.array(
+                            self.embedding.cursor_colors[expert_name][c])
+                        pixel_color = expert_image[y,x] * 0.5 + color * 0.5
+                        expert_image[y,x] = pixel_color.astype(numpy.uint8)
+                
+                out_image = stack_images_horizontal(images.values(), spacing=4)
+                frame_path = os.path.join(
+                    seq_path,
+                    'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
+                )
+                save_image(out_image, frame_path)
