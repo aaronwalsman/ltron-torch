@@ -95,9 +95,6 @@ class CoarseToFineCursorDecoder(Module):
         assert sample_mode in ('sample', 'max', 'top4')
         sb, c = x.shape
         
-        if torch.any(torch.isnan(x)):
-            print('x')
-        
         x = self.input_norm(x)
         no_op_x = self.no_op_head(x)
         coarse_x = self.coarse_head(x)
@@ -115,9 +112,6 @@ class CoarseToFineCursorDecoder(Module):
         x = x.view(sb, 1, c).expand(sb, k, c)
         fine_x = torch.cat((x, e), dim=-1)
         fine_x = self.fine_head(fine_x)
-        
-        if torch.any(torch.isnan(fine_x)):
-            print('fine_x')
         
         #return {'coarse_x':coarse_x, 'fine_x':fine_x, 'coarse_i':i}
         
@@ -142,9 +136,6 @@ class CoarseToFineCursorDecoder(Module):
             torch.logsumexp(fine_x, dim=-1).view(-1, 1)
         )
         
-        if torch.any(torch.isnan(x)):
-            print('x later')
-        
         x_out = [no_op_x] #, x.view(b,-1)]
         #x_out.append(torch.zeros(b, 1, device=x.device))
         for name in self.coarse_span.keys():
@@ -157,9 +148,6 @@ class CoarseToFineCursorDecoder(Module):
             x_out.append(x_name)
         
         x_out = torch.cat(x_out, dim=-1)
-        
-        if torch.any(torch.isnan(x_out)):
-            print('x_out')
         
         #for name, (start, stop) in self.coarse_start_stop.items():
         #    x_out[name] = x[:,start:stop].reshape(
