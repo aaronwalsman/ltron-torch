@@ -1,8 +1,0 @@
-#!/bin/sh
-i=40000
-step=100
-end=50000
-while [ $i -ne $end ]; do
-    python /media/awalsman/LEGODrive/ltron-torch/experiments/make_reassembly_dataset/run.py $i $((i + step));
-    i=$(($i+step))
-done
