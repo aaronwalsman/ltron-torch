@@ -45,7 +45,7 @@ class HandTableTransformer(Module):
             blocks='encoder_blocks',
             channels='encoder_channels',
             residual_channels='encoder_residual_channels',
-            num_heads='encoder_heads',
+            heads='encoder_heads',
         )
         self.encoder = Transformer(encoder_config)
         
@@ -61,7 +61,7 @@ class HandTableTransformer(Module):
             blocks='decoder_blocks',
             channels='decoder_channels',
             residual_channels='decoder_residual_channels',
-            num_heads='decoder_heads',
+            heads='decoder_heads',
         )
         self.decoder = CrossAttentionDecoder(decoder_config)
         

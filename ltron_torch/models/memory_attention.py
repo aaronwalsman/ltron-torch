@@ -151,6 +151,11 @@ class MemoryAttention(Module):
             
             new_lengths = torch.zeros(b-mb, dtype=torch.long, device=device)
             self.memory_length = torch.cat((self.memory_length, new_lengths))
+        
+        # if the batch dimension is too big, shrink
+        if b < mb:
+            self.memory_kv = self.memory_kv[:,:b]
+            self.memory_length = self.memory_length[:b]
     
     def clear_memory_entries(self, clear_entries):
         self.memory_length[clear_entries] = 0

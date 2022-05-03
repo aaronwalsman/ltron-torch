@@ -43,7 +43,7 @@ class StubnetTransformer(Module):
             blocks='encoder_blocks',
             channels='encoder_channels',
             residual_channels='encoder_residual_channels',
-            num_heads='encoder_heads',
+            heads='encoder_heads',
         )
         self.encoder = Transformer(encoder_config)
         
@@ -76,6 +76,8 @@ class StubnetTransformer(Module):
         table_cursor_p,
         hand_cursor_yx,
         hand_cursor_p,
+        pick_cursor,
+        place_cursor,
         token_t, token_pad,
         table_cursor_activate,
         hand_cursor_activate,
@@ -92,7 +94,10 @@ class StubnetTransformer(Module):
             table_cursor_p,
             hand_cursor_yx,
             hand_cursor_p,
-            token_t, token_pad,
+            pick_cursor,
+            place_cursor,
+            token_t,
+            token_pad,
         )
         
         # use the encoder to encode

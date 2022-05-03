@@ -1,15 +1,38 @@
 import torch
+from torch.nn import Module, Dropout, ReLU, GELU
+
+def make_nonlinearity(nonlinearity):
+    if nonlinearity == 'relu':
+        nonlinearity = ReLU
+    elif nonlinearity == 'gelu':
+        nonlinearity = GELU
+    return nonlinearity()
+
+class ResidualBlock(Module):
+    def __init__(self, mlp, Norm=None):
+        super().__init__()
+        self.mlp = mlp
+    
+    def forward(self, x):
+        x = x + self.mlp(x)
 
 def stack(
     Layer,
     num_layers,
     in_channels,
-    hidden_channels,
-    out_channels,
-    norm=None,
-    nonlinearity=torch.nn.ReLU,
+    hidden_channels=None,
+    out_channels=None,
+    first_norm=False,
+    Norm=None,
+    nonlinearity='relu',
+    final_nonlinearity=False,
+    hidden_dropout=None,
+    out_dropout=None,
     **kwargs,
 ):
+    hidden_channels = hidden_channels or in_channels
+    out_channels = out_channels or in_channels
+    
     try:
         hidden_channels = [int(hidden_channels)] * (num_layers-1)
     except TypeError:
@@ -18,14 +41,26 @@ def stack(
     features = [in_channels] + hidden_channels + [out_channels]
     
     layers = []
+    if first_norm:
+        assert Norm is not None
+        layers.append(Norm())
+    
     for i, (in_f, out_f) in enumerate(zip(features[:-1], features[1:])):
         layers.append(Layer(in_f, out_f, **kwargs))
         
         if i != num_layers-1:
-            if norm is not None:
-                layers.append(norm())
+            if Norm is not None:
+                layers.append(Norm())
+            if hidden_dropout is not None:
+                layers.append(Dropout(hidden_dropout))
             if nonlinearity is not None:
-                layers.append(nonlinearity())
+                layers.append(make_nonlinearity(nonlinearity))
+        
+        if out_dropout is not None:
+            layers.append(Dropout(out_dropout))
+        
+        if final_nonlinearity:
+            layers.append(make_nonlinearity(nonlinearity))
     
     return torch.nn.Sequential(*layers)
 

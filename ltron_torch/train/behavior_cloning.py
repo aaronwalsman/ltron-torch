@@ -26,6 +26,7 @@ from ltron.visualization.drawing import write_text
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.optimizer import clip_grad
+from ltron_torch.train.rollout import rollout_epoch
 
 # config definitions ===========================================================
 
@@ -104,7 +105,7 @@ def behavior_cloning(
         if test or visualize:
             episodes = rollout_epoch(
                 epoch,
-                config,
+                config.test_episodes_per_epoch,
                 test_env,
                 model,
                 interface,
@@ -168,128 +169,128 @@ def train_epoch(
         
         train_log.step()
 
-def rollout_epoch(
-    epoch,
-    config,
-    env,
-    model,
-    interface,
-    train_mode,
-    store_observations,
-    store_activations,
-):
-    print('-'*80)
-    print('Rolling out episodes')
-    
-    # initialize storage for observations, actions, rewards and activations
-    if train_mode == 'test':
-        num_envs = config.num_test_envs
-    elif train_mode == 'train':
-        num_envs = config.num_train_envs
-    if store_observations:
-        observation_storage = RolloutStorage(num_envs)
-    action_reward_storage = RolloutStorage(num_envs)
-    
-    if store_activations:
-        activation_storage = RolloutStorage(num_envs)
-    
-    # put the model in eval mode
-    model.eval()
-    device = next(model.parameters()).device
-    
-    # use the train mode to determine the number of steps and rollout mode
-    if train_mode == 'train':
-        raise NotImplementedError
-        steps = config.train_batch_rollout_steps_per_epoch
-        rollout_mode = 'sample'
-    elif train_mode == 'test':
-        episodes = config.test_episodes_per_epoch
-        rollout_mode = 'max'
-    b = num_envs
-    
-    # reset
-    observation = env.reset()
-    terminal = numpy.ones(num_envs, dtype=numpy.bool)
-    reward = numpy.zeros(num_envs)
-    
-    with torch.no_grad():
-        if hasattr(model, 'initialize_memory'):
-            memory = model.initialize_memory(b)
-        else:
-            memory = None
-        
-        #for step in tqdm.tqdm(range(steps)):
-        progress = tqdm.tqdm(total=episodes)
-        with progress:
-            while action_reward_storage.num_finished_seqs() < episodes:
-                # prep ---------------------------------------------------------
-                # start new sequences if necessary
-                action_reward_storage.start_new_seqs(terminal)
-                if store_observations:
-                    observation_storage.start_new_seqs(terminal)
-                if store_activations:
-                    activation_storage.start_new_seqs(terminal)
-                
-                # add latest observation to storage
-                if store_observations:
-                    observation_storage.append_batch(observation=observation)
-                
-                # move observations to torch and cuda
-                pad = numpy.ones(b, dtype=numpy.long)
-                observation = stack_numpy_hierarchies(observation)
-                #x = interface.observation_to_tensors(observation, None, pad)
-                x = interface.observation_to_tensors(
-                    {'observations':observation, 'actions':None}, pad)
-                
-                # compute actions ----------------------------------------------
-                if hasattr(model, 'initialize_memory'):
-                    if hasattr(interface, 'forward_rollout'):
-                        x = interface.forward_rollout(
-                            terminal, **x, memory=memory)
-                    else:
-                        x = model(**x, memory=memory)
-                    memory = x['memory']
-                else:
-                    if hasattr(interface, 'forward_rollout'):
-                        x = interface.forward_rollout(terminal, **x)
-                    else:
-                        x = model(**x)
-                actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
-                
-                # step ---------------------------------------------------------
-                observation, reward, terminal, info = env.step(actions)
-                
-                # reset memory -------------------------------------------------
-                if hasattr(model, 'reset_memory'):
-                    model.reset_memory(memory, terminal)
-                
-                # storage ------------------------------------------------------
-                action_reward_storage.append_batch(
-                    action=stack_numpy_hierarchies(*actions),
-                    reward=reward,
-                )
-                
-                if store_activations:
-                    #a = {
-                    #    key:(value.cpu().numpy().squeeze(axis=0)
-                    #        if value.shape[0] == 1 else value.cpu().numpy())
-                    #    for key, value in x.items()
-                    #}
-                    a = interface.numpy_activations(x)
-                    activation_storage.append_batch(activations=a)
-                
-                update = action_reward_storage.num_finished_seqs() - progress.n
-                progress.update(update)
-    
-    if store_observations:
-        episodes = observation_storage | action_reward_storage
-    else:
-        episodes = action_reward_storage
-    
-    if store_activations:
-        episodes = episodes | activation_storage
-    
-    return episodes
+#def rollout_epoch(
+#    epoch,
+#    config,
+#    env,
+#    model,
+#    interface,
+#    train_mode,
+#    store_observations,
+#    store_activations,
+#):
+#    print('-'*80)
+#    print('Rolling out episodes')
+#    
+#    # initialize storage for observations, actions, rewards and activations
+#    if train_mode == 'test':
+#        num_envs = config.num_test_envs
+#    elif train_mode == 'train':
+#        num_envs = config.num_train_envs
+#    if store_observations:
+#        observation_storage = RolloutStorage(num_envs)
+#    action_reward_storage = RolloutStorage(num_envs)
+#    
+#    if store_activations:
+#        activation_storage = RolloutStorage(num_envs)
+#    
+#    # put the model in eval mode
+#    model.eval()
+#    device = next(model.parameters()).device
+#    
+#    # use the train mode to determine the number of steps and rollout mode
+#    if train_mode == 'train':
+#        raise NotImplementedError
+#        steps = config.train_batch_rollout_steps_per_epoch
+#        rollout_mode = 'sample'
+#    elif train_mode == 'test':
+#        episodes = config.test_episodes_per_epoch
+#        rollout_mode = 'max'
+#    b = num_envs
+#    
+#    # reset
+#    observation = env.reset()
+#    terminal = numpy.ones(num_envs, dtype=numpy.bool)
+#    reward = numpy.zeros(num_envs)
+#    
+#    with torch.no_grad():
+#        if hasattr(model, 'initialize_memory'):
+#            memory = model.initialize_memory(b)
+#        else:
+#            memory = None
+#        
+#        #for step in tqdm.tqdm(range(steps)):
+#        progress = tqdm.tqdm(total=episodes)
+#        with progress:
+#            while action_reward_storage.num_finished_seqs() < episodes:
+#                # prep ---------------------------------------------------------
+#                # start new sequences if necessary
+#                action_reward_storage.start_new_seqs(terminal)
+#                if store_observations:
+#                    observation_storage.start_new_seqs(terminal)
+#                if store_activations:
+#                    activation_storage.start_new_seqs(terminal)
+#                
+#                # add latest observation to storage
+#                if store_observations:
+#                    observation_storage.append_batch(observation=observation)
+#                
+#                # move observations to torch and cuda
+#                pad = numpy.ones(b, dtype=numpy.long)
+#                observation = stack_numpy_hierarchies(observation)
+#                #x = interface.observation_to_tensors(observation, None, pad)
+#                x = interface.observation_to_tensors(
+#                    {'observations':observation, 'actions':None}, pad)
+#                
+#                # compute actions ----------------------------------------------
+#                if hasattr(model, 'initialize_memory'):
+#                    if hasattr(interface, 'forward_rollout'):
+#                        x = interface.forward_rollout(
+#                            terminal, **x, memory=memory)
+#                    else:
+#                        x = model(**x, memory=memory)
+#                    memory = x['memory']
+#                else:
+#                    if hasattr(interface, 'forward_rollout'):
+#                        x = interface.forward_rollout(terminal, **x)
+#                    else:
+#                        x = model(**x)
+#                actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
+#                
+#                # step ---------------------------------------------------------
+#                observation, reward, terminal, info = env.step(actions)
+#                
+#                # reset memory -------------------------------------------------
+#                if hasattr(model, 'reset_memory'):
+#                    model.reset_memory(memory, terminal)
+#                
+#                # storage ------------------------------------------------------
+#                action_reward_storage.append_batch(
+#                    action=stack_numpy_hierarchies(*actions),
+#                    reward=reward,
+#                )
+#                
+#                if store_activations:
+#                    #a = {
+#                    #    key:(value.cpu().numpy().squeeze(axis=0)
+#                    #        if value.shape[0] == 1 else value.cpu().numpy())
+#                    #    for key, value in x.items()
+#                    #}
+#                    a = interface.numpy_activations(x)
+#                    activation_storage.append_batch(activations=a)
+#                
+#                update = action_reward_storage.num_finished_seqs() - progress.n
+#                progress.update(update)
+#    
+#    if store_observations:
+#        episodes = observation_storage | action_reward_storage
+#    else:
+#        episodes = action_reward_storage
+#    
+#    if store_activations:
+#        episodes = episodes | activation_storage
+#    
+#    return episodes
 
 #def test_epoch(config, epoch, test_env, model, interface, log, clock):
 def test_episodes(config, epoch, episodes, interface, test_log):

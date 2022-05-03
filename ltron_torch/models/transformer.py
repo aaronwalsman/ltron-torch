@@ -1,10 +1,12 @@
+import torch
 from torch.nn import (
     Module, ModuleList, Sequential, Linear, Dropout, ReLU, GELU,
-    Embedding, LayerNorm,
+    Embedding, LayerNorm, init,
 )
 
 from ltron.config import Config
 
+from ltron_torch.models.mlp import make_nonlinearity
 from ltron_torch.models.memory_attention import MemoryAttention
 from ltron_torch.models.mask import padded_causal_mask
 
@@ -13,7 +15,7 @@ class TransformerConfig(Config):
     blocks = 12
     channels = 768
     residual_channels = None
-    num_heads = 12
+    heads = 12
     
     residual_dropout = 0.1
     attention_dropout = 0.1
@@ -25,12 +27,6 @@ class TransformerConfig(Config):
         if self.residual_channels is None:
             self.residual_channels = 4 * self.channels
 
-def make_nonlinearity(config):
-    if config.nonlinearity == 'relu':
-        return ReLU()
-    elif config.nonlinearity == 'gelu':
-        return GELU()
-
 class TransformerBlock(Module):
     def __init__(self, config):
         super(TransformerBlock, self).__init__()
@@ -38,7 +34,7 @@ class TransformerBlock(Module):
         self.attention_norm = LayerNorm(config.channels)
         self.attention = MemoryAttention(
             config.channels,
-            config.num_heads,
+            config.heads,
             attention_dropout = config.attention_dropout,
             content_dropout = config.content_dropout,
         )
@@ -46,7 +42,7 @@ class TransformerBlock(Module):
         self.projection_residual = Sequential(
             LayerNorm(config.channels),
             Linear(config.channels, config.residual_channels),
-            make_nonlinearity(config),
+            make_nonlinearity(config.nonlinearity),
             Linear(config.residual_channels, config.channels),
             Dropout(config.residual_dropout),
         )
@@ -99,6 +95,7 @@ class Transformer(Module):
 def init_weights(module):
     if isinstance(module, (Linear, Embedding)):
         module.weight.data.normal_(mean=0., std=0.02)
+        #init.kaiming_uniform_(module.weight.data, nonlinearity='relu')
         if isinstance(module, Linear) and module.bias is not None:
             module.bias.data.zero_()
     elif isinstance(module, LayerNorm):

@@ -547,7 +547,7 @@ def train_sparse_pick(
                         yy, xx = x[j, i].cpu().numpy()
                         yy = yy * 4 + 127.5
                         xx = xx * 4 + 127.5
-                        draw_crosshairs(image, xx, yy, 5, [0, 0, 255])
+                        draw_crosshairs(image, yy, xx, 5, [0, 0, 255])
                     
                     image = image.astype(numpy.uint8)
                     Image.fromarray(image).save(
@@ -730,7 +730,7 @@ def train_sparse_pick_and_place(
                         xx2 = round(xx2 * 4 + 127.5)
                         yy, xx = line(yy1, xx1, yy2, xx2)
                         x_image[yy,xx] = [0,0,255]
-                        #draw_crosshairs(image, xx, yy, 5, [0, 0, 255])
+                        #draw_crosshairs(image, yy, xx, 5, [0, 0, 255])
                     
                     x_image = x_image.astype(numpy.uint8)
                     image = numpy.concatenate((q_image, x_image), axis=1)

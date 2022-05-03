@@ -32,6 +32,35 @@ def cat_padded_seqs(a, b, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     
     return ab, ab_pad
 
+def cat_multi_padded_seqs(seqs, pads, seq_dim=0, batch_dim=1, pad_value=0):
+    '''
+    a__   bbb   c_                                     abbbc_
+    aaa   b__   cc                                     aaabcc
+    aa_ , bbb , c_, (1,3,2,1), (3,1,3,2), (1,2,1,1) -> aabbbc , (5, 6, 6, 4)
+    a__   bb_   c_,                                    abbc__
+    '''
+    # compute new lengths
+    cat_pad = sum(pads)
+    
+    # add extra entries required to handle the new maximum length
+    a = seqs[0]
+    max_pad = torch.max(cat_pad)
+    cat_shape = (*a.shape[:seq_dim], max_pad, *a.shape[seq_dim+1:])
+    cat_seqs = torch.zeros(cat_shape, dtype=a.dtype, device=a.device)
+    prev_pad = torch.zeros_like(cat_pad)
+    for seq, pad in zip(seqs, pads):
+        extended_pad = prev_pad + pad
+        cat_t = get_seq_range_indices(prev_pad, extended_pad)
+        prev_pad = extended_pad
+        seq_t, seq_b = get_seq_batch_indices(pad)
+        cat_index = get_index_tuple(
+            cat_t, seq_b, len(cat_seqs.shape), seq_dim, batch_dim)
+        seq_index = get_index_tuple(
+            seq_t, seq_b, len(seq.shape), seq_dim, batch_dim)
+        cat_seqs[cat_index] = seq[seq_index]
+    
+    return cat_seqs, cat_pad
+
 def decat_padded_seq(ab, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     # compute lengths
     max_a_pad = torch.max(a_pad)

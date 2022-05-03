@@ -14,7 +14,9 @@ from splendor.image import save_image
 from ltron.name_span import NameSpan
 from ltron.hierarchy import len_hierarchy, index_hierarchy
 from ltron.gym.spaces import MultiScreenPixelSpace, MaskedTiledImageSpace
-from ltron.visualization.drawing import draw_crosshairs, stack_images_horizontal
+from ltron.visualization.drawing import (
+    draw_crosshairs, draw_box, stack_images_horizontal,
+)
 
 from ltron_torch.models.mlp import linear_stack
 from ltron_torch.models.heads import LinearMultiheadDecoder
@@ -41,28 +43,17 @@ class AutoTransformerConfig(
 class AutoTransformer(Module):
     def __init__(self,
         config,
-        #interface,
         observation_space,
         action_space,
         checkpoint=None
     ):
         super().__init__()
         self.config = config
-        #self.interface = interface
         self.observation_space = observation_space
         self.action_space = action_space
         
         # build the token embedding
         self.embedding = AutoEmbedding(config, observation_space, action_space)
-        '''
-        self.embedding = AutoEmbedding(
-            config,
-            interface.tile_shape,
-            interface.token_vocabulary,
-            interface.tile_spatial_positions,
-            interface.max_time_steps,
-        )
-        '''
         
         # build the transformer
         self.encoder = Transformer(config)
@@ -98,70 +89,6 @@ class AutoTransformer(Module):
         )
         
         self.decoders = ModuleDict(decoders)
-        
-        '''
-        # build the cursor decoders
-        decoders = {}
-        self.decoder_data = {}
-        self.fine_shape = (*interface.tile_shape[:2], 2)
-        for name, cursor_data in interface.cursor_screen_data.items():
-            tile_h, tile_w = interface.tile_shape[:2]
-            total_coarse_positions = 0
-            self.decoder_data[name] = {}
-            coarse_shapes = {}
-            for screen_name, screen_data in cursor_data.items():
-                screen_h, screen_w, screen_c = screen_data['shape']
-                assert screen_h % tile_h == 0
-                assert screen_w % tile_w == 0
-                coarse_h = screen_h // tile_h
-                coarse_w = screen_w // tile_w
-                screen_coarse_positions = coarse_h * coarse_w
-                self.decoder_data[name][screen_name] = {
-                    'start':total_coarse_positions,
-                    'end':total_coarse_positions+screen_coarse_positions,
-                    #'coarse_shape':(coarse_h, coarse_w),
-                    #'fine_shape':(tile_h, tile_w, screen_c),
-                }
-                coarse_shapes[screen_name] = (coarse_h, coarse_w)
-                total_coarse_positions += screen_coarse_positions
-            
-            fine_positions = tile_h * tile_w * screen_c
-            
-            decoders[name] = CoarseToFineCursorDecoder(
-                config, coarse_shapes, fine_positions)
-        '''
-        '''
-        for name, cursor_screen_data in interface.cursor_screen_data.items():
-            for screen_name, screen_data in cursor_screen_data.items():
-                cursor_decoder = CoarseToFineCursorDecoder(
-                    config,
-                    *screen_data['shape'],
-                    *interface.tile_shape[:2],
-                    2,
-                )
-                decoders['%s,%s'%(name, screen_name)] = cursor_decoder
-        '''
-        '''
-        # build the noncursor decoder
-        decoders['noncursor'] = Sequential(
-            linear_stack(
-                2,
-                config.channels,
-                nonlinearity=config.nonlinearity,
-                final_nonlinearity=True,
-                hidden_dropout=config.action_decoder_dropout,
-                out_dropout=config.action_decoder_dropout,
-            ),
-            LinearMultiheadDecoder(
-                config.channels,
-                {name:(b-a)
-                 for name, (a, b) in interface.noncursor_name_range.items()
-                }
-            ),
-        )
-        
-        self.decoders = ModuleDict(decoders)
-        '''
         
         # initialize weights
         if checkpoint is not None:
@@ -247,109 +174,15 @@ class AutoTransformer(Module):
             else:
                 head_xs.update(name_x)
             
-            '''
-            for head_name, head_x in name_x.items():
-                sb, *other_dims = head_x.shape
-                padded_x = torch.zeros(
-                    max_seq,
-                    b,
-                    *other_dims,
-                    dtype=head_x.dtype,
-                    device=tile_x.device,
-                )
-                padded_x[readout_i, readout_b] = head_x
-                head_xs[head_name] = padded_x
-            '''
-            
-            '''
-            for head_name, head_x in r_x.items():
-                #start, end = self.interface.name_range[head_name]
-                # if this is a cursor, we need to unpack a bit
-                if name != 'noncursor':
-                    maps = {}
-                    total_elements = 0
-                    import pdb
-                    pdb.set_trace()
-                    for screen_name, screen_x in head_x.items():
-                        sb, ch, cw = screen_x.shape[:3]
-                        
-                        fh, fw, fc = self.fine_shape
-                        screen_x = screen_x.view(sb, ch, cw, fh, fw, fc)
-                        screen_x = screen_x.permute(0,1,3,2,4,5)
-                        screen_x = screen_x.reshape(sb, ch*fh, cw*fw, fc)
-                        maps[screen_name] = screen_x
-                        total_elements += ch*fh*cw*fw*fc
-                    
-                    head_x = torch.zeros(
-                        sb, total_elements+1, device=screen_x.device)
-                    cursor_space = self.action_space.subspaces[head_name]
-                    cursor_space.ravel_maps(maps, out=head_x)
-                    head_x = head_x[:,1:]
-                
-                head_xs[head_name] = head_x
-            '''
-        
         flat_x = torch.zeros(sb, self.action_space.n, device=device)
         self.action_space.ravel_subspace(head_xs, out=flat_x)
         
         out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
         out_x[readout_i, readout_b] = flat_x
         
-        '''
-        import pdb
-        pdb.set_trace()
-        
-        action_x = torch.zeros(
-            sb,
-            self.action_space.subspace_span.total,
-            device=tile_x.device,
-        )
-        self.action_space.ravel_subspace(head_xs, out=action_x)
-        
-        padded_action_x = torch.zeros(
-            max_seq,
-            b,
-            self.action_space.subspace_span.total,
-            device=tile_x.device,
-        )
-        padded_action_x[readout_t, readout_b] = action_x
-        '''
-        #return head_xs
         return out_x
     
     def tensor_to_actions(self, x, mode='sample'):
-        '''
-        coarse_namespan = NameSpan()
-        course_x = []
-        for name in self.embedding.readout_layout.keys():
-            if name in self.embedding.cursor_fine_layout.keys():
-                s,b,*shape = x[name]['coarse_x'].shape
-                coarse_namespan.add_names(**{name:shape})
-                course_x.append(x[name]['coarse_x'].view(s,b,-1))
-            else:
-                for key in x[name]:
-                    s,b,*shape = x[name][key].shape
-                    coarse_namespan.add_names(**{key:shape})
-                    course_x.append(x[name][key].view(s,b,-1))
-        coarse_x = torch.cat(course_x, dim=-1)
-        if mode == 'sample':
-            distribution = Categorical(coarse_x)
-            coarse_actions = distribution.sample().cpu().numpy()
-        elif mode == 'argmax':
-            coarse_actions = torch.argmax(coarse_x, dim=-1)
-        
-        fine_actions = []
-        for a in coarse_actions:
-            name, i = coarse_namespan.unravel(a)
-            if name in self.embedding.cursor_fine_layout.keys():
-                screen, cy, cx = self.decoder[name].coarse_span.unravel(a)
-                if mode == 'sample':
-                    
-                    distribution = Categorical(x[name]['fine_x'])
-            else:
-                fine_action = self.action_space.ravel(name, i)
-            fine_actions.append(fine_action)
-        '''
         s, b, a = x.shape
         assert s == 1
         if mode == 'sample':
@@ -363,8 +196,41 @@ class AutoTransformer(Module):
     
     def observation_to_labels(self, batch, pad, device):
         return torch.LongTensor(batch['observation']['expert']).to(device)
+        
+        '''
+        s,b = batch['observation']['expert'].shape[:2]
+        color = batch['observation']['table']['image']
+        white = (
+            (color[:,:,:,:,0] == 255) &
+            (color[:,:,:,:,1] == 255) &
+            (color[:,:,:,:,2] == 255)
+        )
+        ss, bb, yy, xx = numpy.where(white)
+        yyxx = yy * 256 * 2 + xx * 2 + 1
+        labels = [[[] for _ in range(b)] for _ in range(s)]
+        for sss, bbb, yx in zip(ss, bb, yyxx):
+            a = self.action_space.ravel('pick_cursor', yx)
+            labels[sss][bbb].append(a)
+        
+        for ss in range(s):
+            for bb in range(b):
+                labels[ss][bb].extend([0] * (256-len(labels[ss][bb])))
+        
+        #position = batch['observation']['table_color_render']
+        #s, b = position.shape[:2]
+        #labels = [[[] for _ in range(b)] for _ in range(s)]
+        #for ss in range(s):
+        #    for bb in range(b):
+        #        p = position[ss,bb,0]
+        #        a = self.action_space.ravel('table_viewpoint', p)
+        #        labels[ss][bb].append(a)
+        
+        labels = torch.LongTensor(labels).to(device)
+        return labels
+        '''
 
     def observation_to_single_label(self, batch, pad, device):
+        '''
         labels = batch['observation']['expert']
         s, b = labels.shape[:2]
         y = torch.zeros((s,b), dtype=torch.long)
@@ -373,8 +239,58 @@ class AutoTransformer(Module):
                 label = [l for l in labels[ss,bb] if l != 0]
                 if len(label):
                     y[ss,bb] = random.choice(label)
+        '''
+        
+        step = batch['observation']['step']
+        s, b = step.shape
+        y = torch.zeros((s,b), dtype=torch.long)
+        for ss in range(s):
+            for bb in range(b):
+                '''
+                screen = ['table','hand'][step[ss,bb] % 2]
+                pick_space = self.action_space.subspaces['pick_cursor']
+                yy = 48
+                xx = 48
+                p = 1
+                pick_action = pick_space.ravel(screen, yy, xx, p)
+                label = self.action_space.ravel('pick_cursor', pick_action)
+                '''
+                '''
+                i = step[ss,bb] % 2 + 1
+                label = self.action_space.ravel('table_viewpoint', i)
+                '''
+                
+                screen = 'table'
+                pick_space = self.action_space.subspaces['pick_cursor']
+                yy, xx = batch['observation']['table_color_render'][ss,bb]
+                p = 1
+                pick_action = pick_space.ravel(screen, yy, xx, p)
+                label = self.action_space.ravel('pick_cursor', pick_action)
+                
+                y[ss, bb] = label
 
         return y.to(device)
+    
+    def observation_to_label_distribution(self, batch, pad, device):
+        # get the labels
+        labels = self.observation_to_labels(batch, pad, device)
+        s, b = labels.shape[:2]
+        
+        # pull out the non-zero values
+        ss, bb, nn = torch.where(labels)
+        ll = labels[ss,bb,nn]
+        y = torch.zeros(
+            (s,b,self.action_space.n), dtype=torch.long, device=device)
+        y[ss,bb,ll] = 1
+        total = torch.sum(y, dim=-1, keepdim=True)
+        total[total == 0] = 1
+        if torch.any(total == 0):
+            print('total zero')
+            import pdb
+            pdb.set_trace()
+        y = y/total
+        
+        return y
     
     def visualize_episodes(
         self,
@@ -402,8 +318,6 @@ class AutoTransformer(Module):
             cursor_maps = {}
             for name, space in self.action_space.subspaces.items():
                 if isinstance(space, MultiScreenPixelSpace):
-                    #a = action_space.extract_subspace(seq_action_p, name)
-                    #cursor_space = self.action_space.subspaces[name]
                     cursor_maps[name] = space.unravel_maps(subspace_p[name])
             
             for frame_id in range(seq_len):
@@ -429,15 +343,20 @@ class AutoTransformer(Module):
                 action_name, action_index = self.action_space.unravel(action)
                 action_subspace = self.action_space.subspaces[action_name]
                 if isinstance(action_subspace, MultiScreenPixelSpace):
-                    #n, y, x, c = action_subspace.unravel(action_index)
                     n, *yxc = action_subspace.unravel(action_index)
                     if n != 'NO_OP':
                         y, x, c = yxc
                         action_image = images[n]
                         color = self.embedding.cursor_colors[action_name][c]
-                        #action_image[y,x] = color
                         draw_crosshairs(action_image, y, x, 5, color)
-
+                
+                for name in self.embedding.cursor_names:
+                    observation_space = self.observation_space['action'][name]
+                    o = frame_observation['action'][name]
+                    n, y, x, p = observation_space.unravel(o)
+                    color = self.embedding.cursor_colors[name][p]
+                    draw_box(images[n], x-3, y-3, x+3, y+3, color)
+                
                 expert = frame_observation['expert']
                 for e in expert:
                     expert_name, expert_index = self.action_space.unravel(e)

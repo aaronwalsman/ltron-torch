@@ -24,10 +24,10 @@ def ModuleMultiheadDecoder(Module, in_channels, heads, *args, **kwargs):
     if isinstance(heads, str):
         heads = json.loads(heads)
     
-    def make_linear(head_channels):
+    def make_module(head_channels):
         return Module(in_channels, head_channels, *args, **kwargs)
     heads = map_hierarchies(
-        make_linear, heads, OutDictClass=ModuleDict, OutListClass=ModuleList)
+        make_module, heads, OutDictClass=ModuleDict, OutListClass=ModuleList)
     return MultiheadDecoder(heads)
 
 def LinearMultiheadDecoder(*args, **kwargs):

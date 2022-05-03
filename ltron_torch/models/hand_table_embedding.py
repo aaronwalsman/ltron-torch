@@ -23,6 +23,8 @@ class HandTableEmbeddingConfig(Config):
     
     token_vocabulary = 2
     
+    multiscreen = False
+    
     def set_dependents(self):
         assert self.table_h % self.tile_h == 0
         assert self.table_w % self.tile_w == 0
@@ -62,21 +64,36 @@ class HandTableEmbedding(Module):
         
         # let's give this another look soon
         if self.config.factor_cursor_distribution:
-            self.table_cursor_embedding = TokenEmbedding(
-                config.table_decoder_pixels,
-                config.encoder_channels,
-                config.embedding_dropout,
-            )
-            self.table_polarity_embedding = TokenEmbedding(
-                2, config.encoder_channels, config.embedding_dropout)
-            
-            self.hand_cursor_embedding = TokenEmbedding(
-                config.hand_decoder_pixels,
-                config.encoder_channels,
-                config.embedding_dropout,
-            )
-            self.hand_polarity_embedding = TokenEmbedding(
-                2, config.encoder_channels, config.embedding_dropout)
+            if self.config.multiscreen:
+                decoder_pixels = (
+                    config.table_decoder_pixels + config.hand_decoder_pixels)
+                self.pick_cursor_embedding = TokenEmbedding(
+                    decoder_pixels * 2,
+                    config.encoder_channels,
+                    config.embedding_dropout,
+                )
+                self.place_cursor_embedding = TokenEmbedding(
+                    decoder_pixels * 2,
+                    config.encoder_channels,
+                    config.embedding_dropout,
+                )
+            else:
+                # Deprecate as soon as we get everything over to multiscreen
+                self.table_cursor_embedding = TokenEmbedding(
+                    config.table_decoder_pixels,
+                    config.encoder_channels,
+                    config.embedding_dropout,
+                )
+                self.table_polarity_embedding = TokenEmbedding(
+                    2, config.encoder_channels, config.embedding_dropout)
+                
+                self.hand_cursor_embedding = TokenEmbedding(
+                    config.hand_decoder_pixels,
+                    config.encoder_channels,
+                    config.embedding_dropout,
+                )
+                self.hand_polarity_embedding = TokenEmbedding(
+                    2, config.encoder_channels, config.embedding_dropout)
         
         # build the positional encodings
         self.spatial_position_encoding = LearnedPositionalEncoding(
@@ -92,6 +109,8 @@ class HandTableEmbedding(Module):
         table_cursor_p,
         hand_cursor_yx,
         hand_cursor_p,
+        pick_cursor,
+        place_cursor,
         token_t, token_pad,
         #extra_tiles=None,
         #extra_tile_yx=None,
@@ -133,55 +152,55 @@ class HandTableEmbedding(Module):
         token_x = token_x + token_pt
         
         if self.config.factor_cursor_distribution:
-            table_cursor_yx = self.table_cursor_embedding(table_cursor_yx)
-            #table_cursor_yx = table_cursor_yx + token_pt
-            table_cursor_p = self.table_polarity_embedding(table_cursor_p)
-            #table_cursor_p = table_cursor_p + token_pt
-            # THIS IS ALL SO GROSS
-            if table_cursor_yx.shape[0] == token_pt.shape[0]//2:
-                table_pt = token_pt[::2]
-                table_t = token_t[::2]
-                table_pad = (token_pad/2).long()
+            if self.config.multiscreen:
+                pick_x = self.pick_cursor_embedding(pick_cursor) + token_pt
+                place_x = self.place_cursor_embedding(place_cursor) + token_pt
+                cursor_x, cursor_pad = cat_padded_seqs(
+                    pick_x, place_x, token_pad, token_pad)
+                cursor_t, _ = cat_padded_seqs(
+                    token_t, token_t, token_pad, token_pad)
+                token_x, new_token_pad = cat_padded_seqs(
+                    token_x, cursor_x, token_pad, cursor_pad)
+                token_t, _ = cat_padded_seqs(
+                    token_t, cursor_t, token_pad, cursor_pad)
+                token_pad = new_token_pad
             else:
-                table_pt = token_pt
-                table_t = token_t
-                table_pad = token_pad
-            table_x = table_cursor_yx + table_cursor_p + table_pt
-            
-            hand_cursor_yx = self.hand_cursor_embedding(hand_cursor_yx)
-            #hand_cursor_yx = hand_cursor_yx + token_pt
-            hand_cursor_p = self.hand_polarity_embedding(hand_cursor_p)
-            #hand_cursor_p = hand_cursor_p + token_pt
-            if hand_cursor_yx.shape[0] == token_pt.shape[0]//2:
-                hand_pt = token_pt[::2]
-                hand_t = token_t[::2]
-                hand_pad = (token_pad/2).long()
-            else:
-                hand_pt = token_pt
-                hand_t = token_t
-                hand_pad = token_pad
-            hand_x = hand_cursor_yx + hand_cursor_p + hand_pt
-            
-            # all these cat_padded_seqs could probably be done more efficiently
-            # in a single function that rolls them all together at once
-            #table_x, table_pad = cat_padded_seqs(
-            #    table_cursor_yx, table_cursor_p, token_pad, token_pad)
-            #table_t, _ = cat_padded_seqs(
-            #    token_t, token_t, token_pad, token_pad)
-            #hand_x, hand_pad = cat_padded_seqs(
-            #    hand_cursor_yx, hand_cursor_p, token_pad, token_pad)
-            #hand_t, _ = cat_padded_seqs(
-            #    token_t, token_t, token_pad, token_pad)
-            
-            cursor_x, cursor_pad = cat_padded_seqs(
-                table_x, hand_x, table_pad, hand_pad)
-            cursor_t, _ = cat_padded_seqs(
-                table_t, hand_t, table_pad, hand_pad)
-            token_x, new_token_pad = cat_padded_seqs(
-                token_x, cursor_x, token_pad, cursor_pad)
-            token_t, _ = cat_padded_seqs(
-                token_t, cursor_t, token_pad, cursor_pad)
-            token_pad = new_token_pad
+                table_cursor_yx = self.table_cursor_embedding(table_cursor_yx)
+                table_cursor_p = self.table_polarity_embedding(table_cursor_p)
+                # THIS IS ALL SO GROSS
+                if table_cursor_yx.shape[0] == token_pt.shape[0]//2:
+                    table_pt = token_pt[::2]
+                    table_t = token_t[::2]
+                    table_pad = (token_pad/2).long()
+                else:
+                    table_pt = token_pt
+                    table_t = token_t
+                    table_pad = token_pad
+                table_x = table_cursor_yx + table_cursor_p + table_pt
+                
+                hand_cursor_yx = self.hand_cursor_embedding(hand_cursor_yx)
+                hand_cursor_p = self.hand_polarity_embedding(hand_cursor_p)
+                if hand_cursor_yx.shape[0] == token_pt.shape[0]//2:
+                    hand_pt = token_pt[::2]
+                    hand_t = token_t[::2]
+                    hand_pad = (token_pad/2).long()
+                else:
+                    hand_pt = token_pt
+                    hand_t = token_t
+                    hand_pad = token_pad
+                hand_x = hand_cursor_yx + hand_cursor_p + hand_pt
+                
+                # all these cat_padded_seqs could be done more efficiently
+                # in a single function that rolls them all together at once
+                cursor_x, cursor_pad = cat_padded_seqs(
+                    table_x, hand_x, table_pad, hand_pad)
+                cursor_t, _ = cat_padded_seqs(
+                    table_t, hand_t, table_pad, hand_pad)
+                token_x, new_token_pad = cat_padded_seqs(
+                    token_x, cursor_x, token_pad, cursor_pad)
+                token_t, _ = cat_padded_seqs(
+                    token_t, cursor_t, token_pad, cursor_pad)
+                token_pad = new_token_pad
         
         # concatenate the tile and discrete tokens
         x, pad = cat_padded_seqs(tile_x, token_x, tile_pad, token_pad)
