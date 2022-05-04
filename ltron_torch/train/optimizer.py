@@ -80,8 +80,8 @@ def build_optimizer(config, model, checkpoint=None):
     
     return optimizer
 
-def clip_grad(config, model):
-    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+#def clip_grad(model, grad_norm_clip):
+#    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
 
 class NoScheduler:
     def __init__(self, config, optimizer):
