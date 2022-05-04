@@ -35,10 +35,6 @@ class AutoEmbedding(Module):
         config,
         observation_space,
         action_space,
-        #tile_shape,
-        #token_vocabulary,
-        #tile_spatial_positions,
-        #max_time_steps,
     ):
         super().__init__()
         
@@ -51,20 +47,15 @@ class AutoEmbedding(Module):
         # find tile and token generating elements of the observation space
         tile_shapes = set()
         self.tile_position_layout = NameSpan()
-        self.readout_layout = NameSpan(PAD=1)
         self.token_vocabulary_layout = NameSpan()
         self.cursor_fine_layout = NameSpan()
         self.observation_token_names = []
-        self.cursor_names = []
-        self.noncursor_names = []
-        self.time_step_name = None
-        self.time_step_space = None
+        self.time_step_space = {}
         for name, space in observation_space.items():
             if isinstance(space, MaskedTiledImageSpace):
                 self.tile_shape = (
                     space.tile_height, space.tile_width, space.channels)
                 tile_shapes.add(self.tile_shape)
-                assert len(tile_shapes) == 1
                 
                 mask_shape = (space.mask_height, space.mask_width)
                 self.tile_position_layout.add_names(**{name:mask_shape})
@@ -78,16 +69,15 @@ class AutoEmbedding(Module):
                             **{name_key:subspace.n})
             
             elif isinstance(space, TimeStepSpace):
-                assert self.time_step_space is None
-                self.time_step_name = name
-                self.time_step_space = space
-                #self.max_time_steps = space.max_time_steps
+                self.time_step_space[name] = space
         
-        assert self.time_step_space is not None
+        assert len(tile_shapes) == 1
+        assert len(self.time_step_space) == 1
         
         # find token generating elements of the action space
-        #cursor_fine_embeddings = {}
-        #self.fine_shapes = {}
+        self.readout_layout = NameSpan(PAD=1)
+        self.cursor_names = []
+        self.noncursor_names = []
         for name, space in action_space.subspaces.items():
             if isinstance(space, MultiScreenPixelSpace):
                 self.cursor_names.append(name)
@@ -146,8 +136,9 @@ class AutoEmbedding(Module):
             config.channels, self.tile_position_layout.total, init='normal')
         self.spatial_norm = LayerNorm(config.channels)
         
+        (time_step_name, time_step_space), = self.time_step_name.items()
         self.temporal_position_encoding = LearnedPositionalEncoding(
-            config.channels, self.time_step_space.max_steps, init='normal')
+            config.channels, time_step_space.max_steps, init='normal')
         self.temporal_norm = LayerNorm(config.channels)
     
     def observation_to_tensors(self, batch, seq_pad, device):
@@ -155,45 +146,49 @@ class AutoEmbedding(Module):
         x = {}
         
         # move the time_step to torch/device
-        time_step = torch.LongTensor(
-            observation[self.time_step_name]).to(device)
+        (time_step_name, time_step_space), = self.time_step_name.items()
+        time_step = torch.LongTensor(observation[time_step_name]).to(device)
         s, b = time_step.shape[:2]
-
-        # make the tiles
+        
+        # move seq_pad to torch/device
+        seq_pad = torch.LongTensor(seq_pad).to(device)
+        
+        # make the tiles, positions and padding
         tile_x = []
         tile_tyx = []
         tile_pad = []
         for name in self.tile_position_layout.keys():
+            # make the tiles
             name_tiles, name_tyx, name_pad = batch_deduplicate_from_masks(
                 observation[name]['image'],
                 observation[name]['tile_mask'],
-                observation[self.time_step_name],
+                observation[time_step_name],
                 seq_pad,
                 flatten_hw=True,
             )
             name_tiles = default_tile_transform(name_tiles)
             name_tiles = name_tiles.to(device).contiguous()
             
+            # make the tile spatial and temporal positions
             tyx_offset = self.tile_position_layout.ravel(name, 0, 0)
             name_tyx[:,:,1] += tyx_offset
             name_tyx = torch.LongTensor(name_tyx).to(device)
-
+            
+            # make the pad
             name_pad = torch.LongTensor(name_pad).to(device)
-
+            
             tile_x.append(name_tiles)
             tile_tyx.append(name_tyx)
             tile_pad.append(name_pad)
-
+        
+        # concatenate the tile data
         tile_x, cat_tile_pad = cat_multi_padded_seqs(tile_x, tile_pad)
         tile_tyx, _ = cat_multi_padded_seqs(tile_tyx, tile_pad)
         tile_t = tile_tyx[...,0]
         tile_yx = tile_tyx[...,1]
         tile_pad = cat_tile_pad
         
-        # move seq_pad to torch/device
-        seq_pad = torch.LongTensor(seq_pad).to(device)
-        
-        # make the discrete observation tokens
+        # make the discrete observation tokens, positions and padding
         token_x = []
         token_t = []
         token_pad = []
@@ -207,11 +202,12 @@ class AutoEmbedding(Module):
             token_t.append(time_step)
             token_pad.append(seq_pad)
         
+        # concatenate the token data
         token_x, cat_token_pad = cat_multi_padded_seqs(token_x, token_pad)
         token_t, _ = cat_multi_padded_seqs(token_t, token_pad)
         token_pad = cat_token_pad
         
-        # make the cursor tokens
+        # make the cursor tokens, positions and padding
         cursor_t = []
         cursor_fine_yxp = []
         cursor_coarse_yx = []
@@ -219,7 +215,6 @@ class AutoEmbedding(Module):
         for name in self.cursor_names:
             
             # make the observation token for the cursor
-            #cursor_x.append(torch.full_like(time_step, index))
             cursor_t.append(time_step)
             name_fine_yxp = []
             name_coarse_yx = []
@@ -236,7 +231,6 @@ class AutoEmbedding(Module):
                     
                     n, y, x, p = self.action_space.subspaces[name].unravel(o)
                     
-                    #th, tw = self.tile_position_layout.get_shape(n)
                     th, tw, _ = self.cursor_fine_layout.get_shape(name)
                     
                     # compute fine position
@@ -260,6 +254,7 @@ class AutoEmbedding(Module):
             cursor_coarse_yx.append(torch.LongTensor(name_coarse_yx).to(device))
             cursor_pad.append(seq_pad)
         
+        # concatenate the cursor data
         cursor_t, cat_cursor_pad = cat_multi_padded_seqs(cursor_t, cursor_pad)
         cursor_fine_yxp, _ = cat_multi_padded_seqs(cursor_fine_yxp, cursor_pad)
         cursor_coarse_yx,_ = cat_multi_padded_seqs(cursor_coarse_yx, cursor_pad)
@@ -275,6 +270,7 @@ class AutoEmbedding(Module):
             readout_t.append(time_step)
             readout_pad.append(seq_pad)
         
+        # concatenate the readout data
         readout_x, cat_readout_pad = cat_multi_padded_seqs(
             readout_x, readout_pad)
         readout_t, _ = cat_multi_padded_seqs(readout_t, readout_pad)
@@ -307,7 +303,6 @@ class AutoEmbedding(Module):
         token_x,
         token_t,
         token_pad,
-        #cursor_x,
         cursor_t,
         cursor_fine_yxp,
         cursor_coarse_yx,
@@ -321,12 +316,8 @@ class AutoEmbedding(Module):
         ts = []
         pads = []
         
-        #if torch.max(seq_pad) > 1:
-        #if True:
-        #    import pdb
-        #    pdb.set_trace()
-        
-        # sometimes there are no new tiles
+        # compute token features for the tiles
+        # (sometimes there are no tiles)
         if tile_x.shape[0]:
             tile_e = self.tile_embedding(tile_x)
             tile_tpe = self.temporal_position_encoding(tile_t)
@@ -339,20 +330,8 @@ class AutoEmbedding(Module):
             xs.append(tile_x)
             ts.append(tile_t)
             pads.append(tile_pad)
-            
-            '''
-            print('====')
-            tile_e_norm = torch.norm(tile_e, dim=-1).mean().detach().cpu()
-            tile_tpe_norm = torch.norm(tile_tpe, dim=-1).mean().detach().cpu()
-            tile_spe_norm = torch.norm(tile_spe, dim=-1).mean().detach().cpu()
-            tile_x_norm = torch.norm(tile_x, dim=-1).mean().detach().cpu()
-            print('tile norms:')
-            print('embedding: %f'%tile_e_norm)
-            print('temporal encoding: %f'%tile_tpe_norm)
-            print('spatial encoding: %f'%tile_spe_norm)
-            print('total: %f'%tile_x_norm)
-            '''
         
+        # compute token features for the discrete observations
         token_e = self.token_embedding(token_x)
         token_tpe = self.temporal_position_encoding(token_t)
         token_x = (
@@ -363,17 +342,7 @@ class AutoEmbedding(Module):
         ts.append(token_t)
         pads.append(token_pad)
         
-        '''
-        print('----')
-        token_e_norm = torch.norm(token_e, dim=-1).mean().detach().cpu()
-        token_tpe_norm = torch.norm(token_tpe, dim=-1).mean().detach().cpu()
-        token_x_norm = torch.norm(token_x, dim=-1).mean().detach().cpu()
-        print('token norms:')
-        print('embedding: %f'%token_e_norm)
-        print('temporal encoding: %f'%token_tpe_norm)
-        print('total: %f'%token_x_norm)
-        '''
-        
+        # compute token features for the cursors
         cursor_f = self.cursor_fine_embedding(cursor_fine_yxp)
         cursor_tpe = self.temporal_position_encoding(cursor_t)
         cursor_spe = self.spatial_position_encoding(cursor_coarse_yx)
@@ -386,19 +355,7 @@ class AutoEmbedding(Module):
         ts.append(cursor_t)
         pads.append(cursor_pad)
         
-        '''
-        print('----')
-        cursor_f_norm = torch.norm(cursor_f, dim=-1).mean().detach().cpu()
-        cursor_tpe_norm = torch.norm(cursor_tpe, dim=-1).mean().detach().cpu()
-        cursor_spe_norm = torch.norm(cursor_spe, dim=-1).mean().detach().cpu()
-        cursor_x_norm = torch.norm(cursor_x, dim=-1).mean().detach().cpu()
-        print('cursor norms:')
-        print('fine: %f'%cursor_f_norm)
-        print('temporal encoding: %f'%cursor_tpe_norm)
-        print('spatial encoding: %f'%cursor_spe_norm)
-        print('total: %f'%cursor_x_norm)
-        '''
-        
+        # compute token features for the readout tokens
         readout_e = self.readout_embedding(readout_x)
         readout_tpe = self.temporal_position_encoding(readout_t)
         readout_x = (
@@ -409,18 +366,9 @@ class AutoEmbedding(Module):
         ts.append(readout_t)
         pads.append(readout_pad)
         
-        '''
-        print('----')
-        readout_e_norm = torch.norm(readout_e, dim=-1).mean().detach().cpu()
-        readout_tpe_norm = torch.norm(readout_tpe, dim=-1).mean().detach().cpu()
-        readout_x_norm = torch.norm(readout_x, dim=-1).mean().detach().cpu()
-        print('readout norms:')
-        print('embedding: %f'%readout_e_norm)
-        print('temporal encoding: %f'%readout_tpe_norm)
-        print('total: %f'%readout_x_norm)
-        '''
-        
+        # concatenate everything together
         cat_x, cat_pad = cat_multi_padded_seqs(xs, pads)
         cat_t, _ = cat_multi_padded_seqs(ts, pads)
         
+        # return
         return cat_x, cat_t, cat_pad

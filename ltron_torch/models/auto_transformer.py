@@ -101,14 +101,8 @@ class AutoTransformer(Module):
     def zero_all_memory(self):
         self.encoder.zero_all_memory()
     
-    def forward_rollout(self, terminal, *args, **kwargs):
-        device = next(self.parameters()).device
-        use_memory = torch.BoolTensor(~terminal).to(device)
-        return self(*args, **kwargs, use_memory=use_memory)
-    
-    def observation_to_tensors(self, batch, sequence_pad, device):
-        return self.embedding.observation_to_tensors(
-            batch, sequence_pad, device)
+    def observation_to_tensors(self, batch, sequence_pad):
+        return self.embedding.observation_to_tensors(batch, sequence_pad)
     
     def forward(self,
         tile_x,
@@ -182,6 +176,11 @@ class AutoTransformer(Module):
         
         return out_x
     
+    def forward_rollout(self, terminal, *args, **kwargs):
+        device = next(self.parameters()).device
+        use_memory = torch.BoolTensor(~terminal).to(device)
+        return self(*args, **kwargs, use_memory=use_memory)
+    
     def tensor_to_actions(self, x, mode='sample'):
         s, b, a = x.shape
         assert s == 1
@@ -193,102 +192,65 @@ class AutoTransformer(Module):
 
         return actions
 
+    #def observation_to_labels(self, batch, pad):
+    #    device = next(self.parameters()).device
+    #    return torch.LongTensor(batch['observation']['expert']).to(device)
     
-    def observation_to_labels(self, batch, pad, device):
-        return torch.LongTensor(batch['observation']['expert']).to(device)
-        
-        '''
-        s,b = batch['observation']['expert'].shape[:2]
-        color = batch['observation']['table']['image']
-        white = (
-            (color[:,:,:,:,0] == 255) &
-            (color[:,:,:,:,1] == 255) &
-            (color[:,:,:,:,2] == 255)
-        )
-        ss, bb, yy, xx = numpy.where(white)
-        yyxx = yy * 256 * 2 + xx * 2 + 1
-        labels = [[[] for _ in range(b)] for _ in range(s)]
-        for sss, bbb, yx in zip(ss, bb, yyxx):
-            a = self.action_space.ravel('pick_cursor', yx)
-            labels[sss][bbb].append(a)
-        
-        for ss in range(s):
-            for bb in range(b):
-                labels[ss][bb].extend([0] * (256-len(labels[ss][bb])))
-        
-        #position = batch['observation']['table_color_render']
-        #s, b = position.shape[:2]
-        #labels = [[[] for _ in range(b)] for _ in range(s)]
-        #for ss in range(s):
-        #    for bb in range(b):
-        #        p = position[ss,bb,0]
-        #        a = self.action_space.ravel('table_viewpoint', p)
-        #        labels[ss][bb].append(a)
-        
-        labels = torch.LongTensor(labels).to(device)
-        return labels
-        '''
-
-    def observation_to_single_label(self, batch, pad, device):
-        '''
-        labels = batch['observation']['expert']
-        s, b = labels.shape[:2]
-        y = torch.zeros((s,b), dtype=torch.long)
-        for ss in range(s):
-            for bb in range(b):
-                label = [l for l in labels[ss,bb] if l != 0]
-                if len(label):
-                    y[ss,bb] = random.choice(label)
-        '''
-        
-        step = batch['observation']['step']
-        s, b = step.shape
-        y = torch.zeros((s,b), dtype=torch.long)
-        for ss in range(s):
-            for bb in range(b):
-                '''
-                screen = ['table','hand'][step[ss,bb] % 2]
-                pick_space = self.action_space.subspaces['pick_cursor']
-                yy = 48
-                xx = 48
-                p = 1
-                pick_action = pick_space.ravel(screen, yy, xx, p)
-                label = self.action_space.ravel('pick_cursor', pick_action)
-                '''
-                '''
-                i = step[ss,bb] % 2 + 1
-                label = self.action_space.ravel('table_viewpoint', i)
-                '''
-                
-                screen = 'table'
-                pick_space = self.action_space.subspaces['pick_cursor']
-                yy, xx = batch['observation']['table_color_render'][ss,bb]
-                p = 1
-                pick_action = pick_space.ravel(screen, yy, xx, p)
-                label = self.action_space.ravel('pick_cursor', pick_action)
-                
-                y[ss, bb] = label
-
-        return y.to(device)
-    
-    def observation_to_label_distribution(self, batch, pad, device):
+    def observation_to_uniform_single_label(self, batch, pad):
         # get the labels
-        labels = self.observation_to_labels(batch, pad, device)
+        labels = self.observation_to_labels(batch, pad)
         s, b = labels.shape[:2]
         
         # pull out the non-zero values
         ss, bb, nn = torch.where(labels)
-        ll = labels[ss,bb,nn]
-        y = torch.zeros(
-            (s,b,self.action_space.n), dtype=torch.long, device=device)
-        y[ss,bb,ll] = 1
-        total = torch.sum(y, dim=-1, keepdim=True)
-        total[total == 0] = 1
-        if torch.any(total == 0):
-            print('total zero')
-            import pdb
-            pdb.set_trace()
-        y = y/total
+        
+    
+    def observation_to_label(self, batch, pad, supervision_mode):
+        device = next(self.parameters()).device
+        
+        # get the labels
+        #labels = self.observation_to_labels(batch, pad)
+        #s, b = labels.shape[:2]
+        
+        # build the label tensor
+        #y = torch.zeros((s,b,self.action_space.n), device=device)
+        
+        if supervision_mode == 'action':
+            # pull the actions
+            actions = torch.LongTensor(batch['action']).to(device)
+            s, b = actions.shape[:2]
+            
+            # build the y tensor
+            y = torch.zeros((s, b, self.action_space.n), device=device)
+            ss = torch.arange(s).view(s,1).expand(s,b).reshape(-1).cuda()
+            bb = torch.arange(b).view(1,b).expand(s,b).reshape(-1).cuda()
+            y[ss,bb,actions.view(-1)] = 1
+        
+        elif supervision_mode == 'expert_uniform_distribution':
+            # pull the expert labels
+            labels = torch.LongTensor(batch['observation']['expert'].to(device)
+            s, b = labels.shape[:2]
+            
+            # build the y tensor
+            y = torch.zeros((s,b,self.action_space.n), device=device)
+            ss, bb, nn = torch.where(labels)
+            ll = labels[ss,bb,nn]
+            y[ss,bb,ll] = 1
+            total = torch.sum(y, dim=-1, keepdim=True)
+            total[total == 0] = 1 # (handle the padded values)
+            y = y/total
+        
+        elif supervision_mode == 'expert_uniform_sample':
+            # pull the expert labels
+            labels = torch.LongTensor(batch['observation']['expert'].to(device)
+            s, b = labels.shape[:2]
+            
+            # build the y tensor
+            y = torch.zeros((s,b,self.action_space.n), device=device)
+            ll = labels[:,:,0]
+            ss = torch.arange(s).view(s,1).expand(s,b).reshape(-1).cuda()
+            bb = torch.arange(b).view(1,b).expand(s,b).reshape(-1).cuda()
+            y[ss,bb,ll.view(-1)] = 1
         
         return y
     

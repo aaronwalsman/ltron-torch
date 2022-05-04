@@ -26,13 +26,19 @@ from ltron.visualization.drawing import write_text
 from ltron_torch.models.padding import make_padding_mask
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.optimizer import clip_grad
-from ltron_torch.train.rollout import rollout_epoch
+from ltron_torch.train.epoch import (
+    rollout_epoch,
+    train_epoch,
+    evaluate_epoch,
+)
 
 # config definitions ===========================================================
 
 class BehaviorCloningConfig(Config):
     epochs = 10
+    
     batch_size = 4
+    
     num_test_envs = 4
     
     train_frequency = 1
@@ -40,56 +46,71 @@ class BehaviorCloningConfig(Config):
     checkpoint_frequency = 10
     visualization_frequency = 1
     
-    #test_rollout_steps_per_epoch = 2048
     test_episodes_per_epoch = 1024
     
     checkpoint_directory = './checkpoint'
-    
-    #def set_dependents(self):
-    #    self.test_batch_rollout_steps_per_epoch = (
-    #        self.test_rollout_steps_per_epoch // self.num_test_envs
-    #    )
-
 
 # train functions ==============================================================
 
 def behavior_cloning(
     config,
+    train_loader,
+    test_env,
     model,
     optimizer,
     scheduler,
-    train_loader,
-    test_env,
-    interface,
-    train_log,
-    test_log,
     start_epoch = 1,
+    success_reward_value=0.
+    train_loss_log=None,
+    test_reward_log=None,
+    test_success_log=None,
 ):
     
     print('='*80)
     print('Begin Behavior Cloning')
-    
     train_start = time.time()
+    
+    print('-'*80)
+    print('Building Logs')
+    if train_loss_log is None:
+        train_loss_log = Log()
+    if test_reward_log is None:
+        test_reward_log = Log()
+    if test_success_log is None:
+        test_success_log = Log()
     
     for epoch in range(start_epoch, config.epochs+1):
         epoch_start = time.time()
         print('='*80)
         print('Epoch: %i'%epoch)
         
-        train_freq = config.train_frequency
-        if train_freq and epoch % train_freq == 0:
+        this_epoch = lambda freq : freq and epoch % freq == 0
+        train_this_epoch = this_epoch(config.train_frequency)
+        checkpoint_this_epoch = this_epoch(config.checkpoint_frequency)
+        test_this_epoch = this_epoch(config.test_frequency)
+        visualize_this_epoch = this_epoch(config.visualization_frequency)
+        
+        if train_this_epoch:
             train_epoch(
-                config,
-                epoch,
                 model,
                 optimizer,
                 scheduler,
                 train_loader,
-                interface,
-                train_log,
+                train_loss_log,
+                grad_norm_clip=config.grad_norm_clip,
+                supervision_mode='action',
             )
-            chart = train_log.plot_grid(
-                topline=True, legend=True, minmax_y=True, height=40, width=72)
+            #chart = train_log.plot_grid(
+            #    topline=True, legend=True, minmax_y=True, height=40, width=72)
+            #print(chart)
+            chart = plot_logs(
+                {'train_loss':train_loss_log},
+                border='line',
+                legend=True,
+                colors={'train_loss':2},
+                min_max_y=True,
+                x_range=(0.2,1.),
+            )
             print(chart)
         
         checkpoint_freq = config.checkpoint_frequency
@@ -104,18 +125,26 @@ def behavior_cloning(
         
         if test or visualize:
             episodes = rollout_epoch(
-                epoch,
+                'test',
                 config.test_episodes_per_epoch,
                 test_env,
                 model,
-                interface,
-                'test',
                 True,
-                visualize,
+                True,
+                rollout_mode='max',
+                expert_probability=0.
             )
         
         if test:
-            test_episodes(config, epoch, episodes, interface, test_log)
+            #test_episodes(config, epoch, episodes, interface, test_log)
+            evaluate_epoch(
+                'test',
+                episodes,
+                model,
+                success_reward_value,
+                test_reward_log,
+                test_success_log,
+            )
             test_log.step()
             chart = test_log.plot_sequential(
                 legend=True, minmax_y=True, height=60, width=160)
@@ -131,6 +160,7 @@ def behavior_cloning(
 
 # train subfunctions ===========================================================
 
+'''
 def train_epoch(
     config,
     epoch,
@@ -168,131 +198,9 @@ def train_epoch(
         optimizer.step()
         
         train_log.step()
+'''
 
-#def rollout_epoch(
-#    epoch,
-#    config,
-#    env,
-#    model,
-#    interface,
-#    train_mode,
-#    store_observations,
-#    store_activations,
-#):
-#    print('-'*80)
-#    print('Rolling out episodes')
-#    
-#    # initialize storage for observations, actions, rewards and activations
-#    if train_mode == 'test':
-#        num_envs = config.num_test_envs
-#    elif train_mode == 'train':
-#        num_envs = config.num_train_envs
-#    if store_observations:
-#        observation_storage = RolloutStorage(num_envs)
-#    action_reward_storage = RolloutStorage(num_envs)
-#    
-#    if store_activations:
-#        activation_storage = RolloutStorage(num_envs)
-#    
-#    # put the model in eval mode
-#    model.eval()
-#    device = next(model.parameters()).device
-#    
-#    # use the train mode to determine the number of steps and rollout mode
-#    if train_mode == 'train':
-#        raise NotImplementedError
-#        steps = config.train_batch_rollout_steps_per_epoch
-#        rollout_mode = 'sample'
-#    elif train_mode == 'test':
-#        episodes = config.test_episodes_per_epoch
-#        rollout_mode = 'max'
-#    b = num_envs
-#    
-#    # reset
-#    observation = env.reset()
-#    terminal = numpy.ones(num_envs, dtype=numpy.bool)
-#    reward = numpy.zeros(num_envs)
-#    
-#    with torch.no_grad():
-#        if hasattr(model, 'initialize_memory'):
-#            memory = model.initialize_memory(b)
-#        else:
-#            memory = None
-#        
-#        #for step in tqdm.tqdm(range(steps)):
-#        progress = tqdm.tqdm(total=episodes)
-#        with progress:
-#            while action_reward_storage.num_finished_seqs() < episodes:
-#                # prep ---------------------------------------------------------
-#                # start new sequences if necessary
-#                action_reward_storage.start_new_seqs(terminal)
-#                if store_observations:
-#                    observation_storage.start_new_seqs(terminal)
-#                if store_activations:
-#                    activation_storage.start_new_seqs(terminal)
-#                
-#                # add latest observation to storage
-#                if store_observations:
-#                    observation_storage.append_batch(observation=observation)
-#                
-#                # move observations to torch and cuda
-#                pad = numpy.ones(b, dtype=numpy.long)
-#                observation = stack_numpy_hierarchies(observation)
-#                #x = interface.observation_to_tensors(observation, None, pad)
-#                x = interface.observation_to_tensors(
-#                    {'observations':observation, 'actions':None}, pad)
-#                
-#                # compute actions ----------------------------------------------
-#                if hasattr(model, 'initialize_memory'):
-#                    if hasattr(interface, 'forward_rollout'):
-#                        x = interface.forward_rollout(
-#                            terminal, **x, memory=memory)
-#                    else:
-#                        x = model(**x, memory=memory)
-#                    memory = x['memory']
-#                else:
-#                    if hasattr(interface, 'forward_rollout'):
-#                        x = interface.forward_rollout(terminal, **x)
-#                    else:
-#                        x = model(**x)
-#                actions = interface.tensor_to_actions(x, env, mode=rollout_mode)
-#                
-#                # step ---------------------------------------------------------
-#                observation, reward, terminal, info = env.step(actions)
-#                
-#                # reset memory -------------------------------------------------
-#                if hasattr(model, 'reset_memory'):
-#                    model.reset_memory(memory, terminal)
-#                
-#                # storage ------------------------------------------------------
-#                action_reward_storage.append_batch(
-#                    action=stack_numpy_hierarchies(*actions),
-#                    reward=reward,
-#                )
-#                
-#                if store_activations:
-#                    #a = {
-#                    #    key:(value.cpu().numpy().squeeze(axis=0)
-#                    #        if value.shape[0] == 1 else value.cpu().numpy())
-#                    #    for key, value in x.items()
-#                    #}
-#                    a = interface.numpy_activations(x)
-#                    activation_storage.append_batch(activations=a)
-#                
-#                update = action_reward_storage.num_finished_seqs() - progress.n
-#                progress.update(update)
-#    
-#    if store_observations:
-#        episodes = observation_storage | action_reward_storage
-#    else:
-#        episodes = action_reward_storage
-#    
-#    if store_activations:
-#        episodes = episodes | activation_storage
-#    
-#    return episodes
-
-#def test_epoch(config, epoch, test_env, model, interface, log, clock):
+'''
 def test_episodes(config, epoch, episodes, interface, test_log):
     print('-'*80)
     print('Testing')
@@ -335,6 +243,7 @@ def test_episodes(config, epoch, episodes, interface, test_log):
         interface.test_episodes(episodes, test_log)
     
     #return episodes
+'''
 
 def visualize_episodes(config, epoch, episodes, interface):
     #frequency = config.visualization_frequency
