@@ -169,7 +169,8 @@ def train_epoch(
     loss_log,
     grad_norm_clip=None,
     supervision_mode='action',
-    plot=None,
+    plot=False,
+    loss_color=2,
 ):
     print('-'*80)
     print('Training: %s'%name)
@@ -208,13 +209,13 @@ def train_epoch(
         running_loss = running_loss * 0.9 + l * 0.1
         iterate.set_description('loss: %.04f'%running_loss)
     
-    if plot is not None:
+    if plot:
         chart = plot_logs(
             {'%s_loss'%name:loss_log},
             border='line',
             legend=True,
             min_max_y=True,
-            colors={'%s_loss'%name:2},
+            colors={'%s_loss'%name:loss_color},
             x_range=(0.2,1.),
         )
         print(chart)
@@ -277,4 +278,3 @@ def visualize_epoch(
     
     model.visualize_episodes(
         epoch, episodes, num_episodes, visualization_directory)
-    

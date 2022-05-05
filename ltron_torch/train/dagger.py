@@ -274,6 +274,7 @@ def train_dagger_epoch(
             loss_log,
             grad_norm_clip=config.grad_norm_clip,
             supevision_mode=config.supervision_mode,
+            plot=(i==config.passes_per_epoch),
         )
         
         '''
@@ -313,6 +314,7 @@ def train_dagger_epoch(
             iterate.set_description('loss: %.04f'%running_loss)
         '''
     
+    '''
     # plot training progress
     chart = plot_logs(
         {'train_loss':train_loss_log},
@@ -323,6 +325,7 @@ def train_dagger_epoch(
         x_range=(0.2,1.),
     )
     print(chart)
+    '''
 
 '''
 def evaluate_episodes(
