@@ -151,7 +151,13 @@ def behavior_cloning(
             print(chart)
         
         if visualize:
-            visualize_episodes(config, epoch, episodes, interface)
+            visualize_epoch(
+                'test',
+                epoch,
+                episodes,
+                config.SOMETHING,
+                model,
+            )
         
         train_end = time.time()
         print('='*80)
@@ -244,7 +250,7 @@ def test_episodes(config, epoch, episodes, interface, test_log):
     
     #return episodes
 '''
-
+'''
 def visualize_episodes(config, epoch, episodes, interface):
     #frequency = config.visualization_frequency
     #if frequency and epoch % frequency == 0:
@@ -260,6 +266,7 @@ def visualize_episodes(config, epoch, episodes, interface):
         os.makedirs(visualization_directory)
     
     interface.visualize_episodes(epoch, episodes, visualization_directory)
+'''
 
 def save_checkpoint(
     config, epoch, model, optimizer, scheduler, train_log, test_log):

@@ -5,7 +5,11 @@ import copy
 import numpy
 
 import torch
-from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
+from torch.nn.functional import (
+    cross_entropy,
+    binary_cross_entropy_with_logits,
+    mse_loss,
+)
 
 import tqdm
 
@@ -258,7 +262,7 @@ class BreakAndMakeInterface:
                 #print('   ', torch.sum(y_spatial).cpu())
                 
                 # polarity
-                if self.config.spatial_loss_mode == 'click_map':
+                if 'click_map' in self.config.spatial_loss_mode:
                     polarity_loss = 0
                 else:
                     x_p = x_region[:,1].view(-1, h*w)

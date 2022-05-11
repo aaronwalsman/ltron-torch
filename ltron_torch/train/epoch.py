@@ -311,4 +311,3 @@ def visualize_epoch(
     
     model.visualize_episodes(
         epoch, episodes, num_episodes, visualization_directory)
-    

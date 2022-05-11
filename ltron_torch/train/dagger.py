@@ -288,7 +288,7 @@ def train_dagger_epoch(
             supervision_mode=config.supervision_mode,
             plot=(i==config.passes_per_epoch),
         )
-        
+
 def save_checkpoint(
     config,
     epoch,
