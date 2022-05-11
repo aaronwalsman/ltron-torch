@@ -30,7 +30,8 @@ from ltron_torch.models.transformer import (
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
 from ltron_torch.models.coarse_to_fine_decoder import (
-    CoarseToFineCursorDecoderConfig, CoarseToFineCursorDecoder)
+    CoarseToFineCursorDecoderConfig, CoarseToFineCursorDecoder,
+)
 from ltron_torch.models.padding import decat_padded_seq, get_seq_batch_indices
 
 class AutoTransformerConfig(
@@ -60,13 +61,24 @@ class AutoTransformer(Module):
         
         # build cursor decoders
         decoders = {}
-        for name in self.embedding.cursor_names:
+        for name in self.embedding.visual_cursor_names:
             subspace = self.action_space.subspaces[name]
             coarse_cursor_keys = [
                 k for k in subspace.screen_span.keys() if k != 'NO_OP']
             coarse_cursor_span = self.embedding.tile_position_layout.subspace(
                 coarse_cursor_keys)
             fine_shape = self.embedding.cursor_fine_layout.get_shape(name)
+            decoders[name] = CoarseToFineCursorDecoder(
+                config, coarse_cursor_span, fine_shape)
+        
+        for name in self.embedding.symbolic_cursor_names:
+            subspace = self.action_space.subspaces[name]
+            coarse_cursor_span = NameSpan()
+            for key in subspace.span.keys():
+                if key != 'NO_OP':
+                    num_instances, num_snaps = subspace.span.get_shape(key)
+                    coarse_cursor_span.add_names(**{key:num_instances})
+            fine_shape = (num_snaps,)
             decoders[name] = CoarseToFineCursorDecoder(
                 config, coarse_cursor_span, fine_shape)
         
@@ -112,10 +124,22 @@ class AutoTransformer(Module):
         token_x,
         token_t,
         token_pad,
-        cursor_t,
-        cursor_fine_yxp,
-        cursor_coarse_yx,
-        cursor_pad,
+        #assembly_shape,
+        #assembly_color,
+        #assembly_instance,
+        #assembly_pose,
+        #assembly_t,
+        #assembly_pad,
+        visual_cursor_t,
+        visual_cursor_fine_yxp,
+        visual_cursor_coarse_yx,
+        visual_cursor_pad,
+        #symbolic_cursor_x,
+        #symbolic_cursor_t,
+        #symbolic_cursor_pad,
+        auto_x,
+        auto_t,
+        auto_pad,
         readout_x,
         readout_t,
         readout_pad,
@@ -130,10 +154,22 @@ class AutoTransformer(Module):
             token_x,
             token_t,
             token_pad,
-            cursor_t,
-            cursor_fine_yxp,
-            cursor_coarse_yx,
-            cursor_pad,
+            #assembly_shape,
+            #assembly_color,
+            #assembly_instance,
+            #assembly_pose,
+            #assembly_t,
+            #assembly_pad,
+            visual_cursor_t,
+            visual_cursor_fine_yxp,
+            visual_cursor_coarse_yx,
+            visual_cursor_pad,
+            #symbolic_cursor_x,
+            #symbolic_cursor_t,
+            #symbolic_cursor_pad,
+            auto_x,
+            auto_t,
+            auto_pad,
             readout_x,
             readout_t,
             readout_pad,
@@ -146,7 +182,11 @@ class AutoTransformer(Module):
         s, b, c = x.shape
         
         # extract decoder tokens
-        _, x = decat_padded_seq(x, tile_pad+token_pad+cursor_pad, readout_pad)
+        _, x = decat_padded_seq(
+            x,
+            tile_pad+token_pad+visual_cursor_pad+sum(auto_pad.values()),
+            readout_pad,
+        )
         
         # use the decoders to decode
         max_seq = torch.max(seq_pad)
@@ -163,7 +203,9 @@ class AutoTransformer(Module):
             name_x = x[readout_s, readout_b]
             sb = name_x.shape[0]
             name_x = self.decoders[name](name_x)
-            if name in self.embedding.cursor_names:
+            if name in self.embedding.visual_cursor_names:
+                head_xs[name] = name_x
+            elif name in self.embedding.symbolic_cursor_names:
                 head_xs[name] = name_x
             else:
                 head_xs.update(name_x)
@@ -228,7 +270,7 @@ class AutoTransformer(Module):
         
         elif supervision_mode == 'expert_uniform_distribution':
             # pull the expert labels
-            labels = torch.LongTensor(batch['observation']['expert'].to(device)
+            labels = torch.LongTensor(batch['observation']['expert']).to(device)
             s, b = labels.shape[:2]
             
             # build the y tensor
@@ -242,7 +284,7 @@ class AutoTransformer(Module):
         
         elif supervision_mode == 'expert_uniform_sample':
             # pull the expert labels
-            labels = torch.LongTensor(batch['observation']['expert'].to(device)
+            labels = torch.LongTensor(batch['observation']['expert']).to(device)
             s, b = labels.shape[:2]
             
             # build the y tensor
@@ -312,7 +354,7 @@ class AutoTransformer(Module):
                         color = self.embedding.cursor_colors[action_name][c]
                         draw_crosshairs(action_image, y, x, 5, color)
                 
-                for name in self.embedding.cursor_names:
+                for name in self.embedding.visual_cursor_names:
                     observation_space = self.observation_space['action'][name]
                     o = frame_observation['action'][name]
                     n, y, x, p = observation_space.unravel(o)

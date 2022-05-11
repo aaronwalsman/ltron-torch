@@ -5,36 +5,34 @@ import numpy
 
 import torch
 
-from conspiracy.log import SynchronousConsecutiveLog
+from conspiracy.log import Log
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
-from ltron.gym.envs.edit_env import EditEnvConfig, EditEnv
-
-from ltron_torch.dataset.break_and_make_dataset import (
-    BreakAndMakeDatasetConfig, BreakAndMakeDataset, BreakOnlyDataset,
+from ltron.gym.envs.multiscreen_edit_env import (
+    MultiScreenEditEnvConfig,
+    MultiScreenEditEnv,
 )
-from ltron_torch.dataset.episode_dataset import build_episode_loader
-from ltron_torch.models.hand_table_transformer import (
-    HandTableTransformerConfig,
-    HandTableTransformer,
+from ltron_torch.models.auto_transformer import (
+    AutoTransformerConfig,
+    AutoTransformer,
 )
-from ltron_torch.models.stubnet_transformer import (
-    StubnetTransformerConfig,
-    StubnetTransformer,
-)
-from ltron_torch.models.hand_table_lstm import (
-    HandTableLSTMConfig,
-    HandTableLSTM,
-)
-from ltron_torch.interface.break_and_make import BreakAndMakeInterface
+#from ltron_torch.dataset.break_and_make_dataset import (
+#    BreakAndMakeDatasetConfig, BreakAndMakeDataset, BreakOnlyDataset,
+#)
+#from ltron_torch.dataset.episode_dataset import build_episode_loader
+#from ltron_torch.models.hand_table_transformer import (
+#    HandTableTransformerConfig,
+#    HandTableTransformer,
+#)
+#from ltron_torch.interface.break_and_make import BreakAndMakeInterface
 #from ltron_torch.interface.break_and_make_hand_table_transformer import (
 #    BreakAndMakeHandTableTransformerInterfaceConfig,
 #    BreakAndMakeHandTableTransformerInterface,
 #)
-from ltron_torch.interface.edit_stubnet_transformer import (
-    EditStubnetTransformerInterfaceConfig,
-    EditStubnetTransformerInterface,
-)
+#from ltron_torch.interface.edit_stubnet_transformer import (
+#    EditStubnetTransformerInterfaceConfig,
+#    EditStubnetTransformerInterface,
+#)
 #from ltron_torch.interface.break_and_make_hand_table_lstm import (
 #    BreakAndMakeHandTableLSTMInterface,
 #)
@@ -79,12 +77,8 @@ class EditBCConfig(
     train_split = 'train_episodes'
     test_split = 'test'
     
-    task = 'break_and_make'
+    parallel_envs = 4
     
-    num_test_envs = 4
-    
-    #num_modes = 23 # 7 + 7 + 3 + 2 + 1 + 2 + 1 (+2 for factored cursor)
-    factor_cursor_distribution = False
     num_shapes = 6
     num_colors = 6
     
@@ -94,8 +88,6 @@ class EditBCConfig(
     async_ltron = True
     
     seed = 1234567890
-    
-    allow_snap_flip = False
 
 def train_edit_bc(config=None):
     if config is None:
@@ -112,31 +104,35 @@ def train_edit_bc(config=None):
         print('-'*80)
         print('Loading Checkpoint')
         checkpoint = torch.load(config.load_checkpoint)
-        # this is bad because it overwrites things specified on the command line
-        # if you want to do this, find a better way, and put it in the Config
-        # class itself (which is hard because the Config class is in ltron and 
-        # doesn't know about pytorch
-        # ok here's the compromise: I just added "use_checkpoint_config" which
-        # turns on this behavior
         if config.use_checkpoint_config:
             assert 'config' in checkpoint, (
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
+            print('Warning: loading config from checkpoint '
+                'ignores command line arguments')
             config = BreakAndMakeBCConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
         if config.train_frequency:
             optimizer_checkpoint = checkpoint['optimizer']
         else:
             optimizer_checkpoint = None
+        
+        # scheduler
         scheduler_checkpoint = checkpoint['scheduler']
-        train_log_checkpoint = checkpoint.get('train_log', None)
-        test_log_checkpoint = checkpoint.get('test_log', None)
+        
+        # logs
+        train_log_loss_checkpoint = checkpoint.get('train_log_loss', None)
+        test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
+        test_success_checkpoint = checkpoint.get('test_success_log', None)
+        
+        # epoch
         start_epoch = checkpoint.get('epoch', 0) + 1
     else:
         model_checkpoint = None
         optimizer_checkpoint = None
         scheduler_checkpoint = None
-        train_log_checkpoint = None
-        test_log_checkpoint = None
+        train_loss_log_checkpoint = None
+        test_reward_log_checkpoint = None
+        test_success_log_checkpoint = None
         start_epoch = 1
     
     if config.factor_cursor_distribution:
@@ -207,7 +203,7 @@ def train_edit_bc(config=None):
     else:
         vector_ltron = sync_ltron
     test_env = vector_ltron(
-        config.num_test_envs,
+        config.parallel_envs,
         EditEnv,
         test_config,
         print_traceback=True,

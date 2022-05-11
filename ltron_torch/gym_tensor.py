@@ -6,7 +6,7 @@ import numpy
 import gym.spaces as spaces
 
 from ltron.gym.spaces import (
-    ImageSpace, IndexMaskSpace, TimeStepSpace, EdgeSpace
+    ImageSpace, InstanceMaskSpace, TimeStepSpace, EdgeSpace
 )
 #from ltron.torch.brick_geometric import (
 #        BrickList, BrickGraph, BrickListBatch, BrickGraphBatch)
@@ -38,6 +38,32 @@ def default_image_untransform(x):
     x = numpy.moveaxis(x,-3,-1)
     return x
 
+# come back to this at some point?
+'''
+def gym_data_to_tensors(
+    data,
+    space,
+    seq_pad,
+    device=torch.device('cpu'),
+    image_transform=default_image_transform,
+    tile_transform=default_tile_transform,
+):
+    if isinstance(space, MaskedTiledImageSpace):
+        tiles, tyx, pad = batch_deduplicate_from_masks(
+            data['image'],
+            data['tile_mask'],
+            time_data,
+            seq_pad,
+            flatten_hw=True
+        )
+    
+    elif isinstance(space, ImageSpace):
+        
+    
+    elif isinstance(space, spaces.Dict):
+        
+'''
+
 def gym_space_to_tensors(
         data,
         space,
@@ -51,7 +77,7 @@ def gym_space_to_tensors(
                 tensor = torch.stack(
                         tuple(image_transform(image) for image in data))
             return tensor.to(device)
-        elif isinstance(space, IndexMaskSpace):
+        elif isinstance(space, InstanceMaskSpace):
             return torch.LongTensor(data).to(device)
         
         elif isinstance(space, TimeStepSpace):
@@ -109,7 +135,7 @@ def gym_space_list_to_tensors(
             tensor = torch.stack(data, dim=-4)
             return tensor.view(-1, c, h, w)
         
-        elif isinstance(space, IndexMaskSpace):
+        elif isinstance(space, InstanceMaskSpace):
             h, w = data[0].shape[-2:]
             tensor = torch.stack(data, dim=-3)
             return tensor.view(-1, h, w)

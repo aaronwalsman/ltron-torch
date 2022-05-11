@@ -51,12 +51,12 @@ def stack(
         if i != num_layers-1:
             if Norm is not None:
                 layers.append(Norm())
-            if hidden_dropout is not None:
+            if hidden_dropout:
                 layers.append(Dropout(hidden_dropout))
             if nonlinearity is not None:
                 layers.append(make_nonlinearity(nonlinearity))
         
-        if out_dropout is not None:
+        if out_dropout:
             layers.append(Dropout(out_dropout))
         
         if final_nonlinearity:

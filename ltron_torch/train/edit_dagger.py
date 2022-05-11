@@ -1,5 +1,4 @@
 import random
-import argparse
 
 import numpy
 
@@ -9,17 +8,13 @@ from conspiracy.log import Log
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
 from ltron.gym.envs.multiscreen_edit_env import (
-    MultiScreenEditEnvConfig, MultiScreenEditEnv
+    MultiScreenEditEnvConfig,
+    MultiScreenEditEnv,
 )
-
 from ltron_torch.models.auto_transformer import (
     AutoTransformerConfig,
     AutoTransformer,
 )
-#from ltron_torch.interface.auto_transformer import (
-#    AutoTransformerInterfaceConfig,
-#    AutoTransformerInterface,
-#)
 from ltron_torch.train.optimizer import (
     OptimizerConfig,
     build_optimizer,
@@ -50,8 +45,6 @@ class EditDAggerConfig(
     
     parallel_envs = 4
     
-    #num_modes = 23 # 7 + 7 + 3 + 2 + 1 + 2 + 1 (+2 for factored cursor)
-    factor_cursor_distribution = False
     num_shapes = 6
     num_colors = 6
     
@@ -61,8 +54,6 @@ class EditDAggerConfig(
     async_ltron = True
     
     seed = 1234567890
-    
-    allow_snap_flip = False
 
 def train_edit_dagger(config=None):
     if config is None:
@@ -79,15 +70,11 @@ def train_edit_dagger(config=None):
         print('-'*80)
         print('Loading Checkpoint')
         checkpoint = torch.load(config.load_checkpoint)
-        # this is bad because it overwrites things specified on the command line
-        # if you want to do this, find a better way, and put it in the Config
-        # class itself (which is hard because the Config class is in ltron and 
-        # doesn't know about pytorch
-        # ok here's the compromise: I just added "use_checkpoint_config" which
-        # turns on this behavior
         if config.use_checkpoint_config:
             assert 'config' in checkpoint, (
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
+            print('Warning: loading config from checkpoint '
+                'ignores command line arguments')
             config = BreakAndMakeBCConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
         if config.train_frequency:
@@ -115,16 +102,6 @@ def train_edit_dagger(config=None):
         train_reward_log_checkpoint = None
         test_reward_log_checkpoint = None
         start_epoch = 1
-    
-    if config.factor_cursor_distribution:
-        config.num_modes = 25
-    else:
-        config.num_modes = 23
-    
-    if config.allow_snap_flip:
-        config.num_modes += 4
-    
-    config.multiscreen = True
     
     device = torch.device(config.device)
     
@@ -159,7 +136,6 @@ def train_edit_dagger(config=None):
     
     print('-'*80)
     print('Building Interface (%s)'%config.model)
-    #interface = AutoTransformerInterface(config, train_env)
     
     print('-'*80)
     print('Building Model (%s)'%config.model)
@@ -202,7 +178,6 @@ def train_edit_dagger(config=None):
         config,
         train_env,
         test_env,
-        #interface,
         model,
         optimizer,
         scheduler,

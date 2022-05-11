@@ -1,4 +1,6 @@
+import math
 import io
+import os
 import tarfile
 
 import numpy
@@ -11,6 +13,7 @@ from ltron.config import Config
 from ltron.hierarchy import index_hierarchy
 
 from ltron_torch.dataset.collate import pad_stack_collate
+from ltron_torch.train.epoch import rollout_epoch
 
 class TarDataset(Dataset):
     def __init__(self, tar_paths):
@@ -26,10 +29,10 @@ class TarDataset(Dataset):
             self.tar_files, _ = get_tarfiles_and_names(self.tar_paths)
         
         tar_path, name = self.names[i]
-        #bytestream = io.BytesIO(self.zipfile.open(name).read())
         data = self.tar_files[tar_path].extractfile(name)
         data = numpy.load(data, allow_pickle=True)
-        data = data['episode'].item()
+        #data = data['episode'].item()
+        data = data['seq'].item()
         
         return data
 
@@ -52,3 +55,51 @@ def build_episode_loader(dataset, batch_size, workers, shuffle=True):
     )
     
     return loader
+
+'''
+class TarDatasetConfig(Config):
+    dataset = 'random_construction'
+    split = 'train'
+    
+    total_episodes = 50000
+    shards = 1
+    save_episode_frequency = 256
+    
+    path = '.'
+'''
+
+def generate_tar_dataset(
+    name,
+    total_episodes,
+    shards=1,
+    shard_start=0,
+    save_episode_frequency=256,
+    path='.',
+    **kwargs,
+):
+    
+    episodes_per_shard = math.ceil(total_episodes/shards)
+    
+    if not os.path.exists(path):
+        os.makedirs(path)
+    
+    new_shards = []
+    for shard in range(shards):
+        shard_name = '%s_%04i.tar'%(name, shard+shard_start)
+        shard_path = os.path.expanduser(os.path.join(path, shard_name))
+        new_shards.append(shard_path)
+        print('Making Shard %s'%shard_path)
+        rollout_passes = math.ceil(episodes_per_shard/save_episode_frequency)
+        shard_tar = tarfile.open(shard_path, 'w')
+        shard_seqs = 0
+        for rollout_pass in range(rollout_passes):
+            episodes = rollout_epoch(
+                name,
+                save_episode_frequency,
+                **kwargs,
+            )
+            print('Adding Sequences To Shard')
+            episodes.save(shard_tar, finished_only=True, seq_offset=shard_seqs)
+            shard_seqs += episodes.num_finished_seqs()
+    
+    return new_shards
