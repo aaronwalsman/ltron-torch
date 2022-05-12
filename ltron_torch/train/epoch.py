@@ -34,7 +34,7 @@ def rollout_epoch(
     print('Rolling Out Episodes: %s'%name)
     print('p(expert) = %.04f'%expert_probability)
     print('rollout_mode = "%s"'%rollout_mode)
-
+    
     # initialize storage for observations, actions, rewards and activations
     storage = {}
     if store_observations:
@@ -117,6 +117,8 @@ def rollout_epoch(
                     
                     # convert model output to actions
                     actions = model.tensor_to_actions(x, mode=rollout_mode)
+                    for a in actions:
+                        print(model.action_space.unravel(a))
                 
                 # insert expert actions
                 for i in range(b):
@@ -132,6 +134,9 @@ def rollout_epoch(
                         
                 # step ---------------------------------------------------------
                 observation, reward, terminal, info = env.step(actions)
+                
+                if terminal[0]:
+                    print('-'*20)
                 
                 # reset memory -------------------------------------------------
                 if hasattr(model, 'reset_memory'):
@@ -211,9 +216,6 @@ def train_epoch(
         # convert observations to input tensors (x) and labels (y)
         x = model.observation_to_tensors(batch, pad)
         y = model.observation_to_label(batch, pad, supervision_mode)
-        
-        import pdb
-        pdb.set_trace()
         
         # forward
         x = model(**x)
