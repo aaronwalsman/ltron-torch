@@ -93,9 +93,11 @@ def generate_tar_dataset(
         shard_tar = tarfile.open(shard_path, 'w')
         shard_seqs = 0
         for rollout_pass in range(rollout_passes):
+            pass_episodes = min(
+                episodes_per_shard-shard_seqs, save_episode_frequency)
             episodes = rollout_epoch(
                 name,
-                save_episode_frequency,
+                pass_episodes,
                 **kwargs,
             )
             print('Adding Sequences To Shard')
