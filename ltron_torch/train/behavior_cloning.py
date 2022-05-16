@@ -32,7 +32,7 @@ from ltron_torch.train.epoch import (
     evaluate_epoch,
 )
 
-# config definitions ===========================================================
+# config definition ============================================================
 
 class BehaviorCloningConfig(Config):
     epochs = 10
@@ -84,12 +84,14 @@ def behavior_cloning(
         print('='*80)
         print('Epoch: %i'%epoch)
         
+        # figure out what we're doing this epoch
         this_epoch = lambda freq : freq and epoch % freq == 0
         train_this_epoch = this_epoch(config.train_frequency)
         checkpoint_this_epoch = this_epoch(config.checkpoint_frequency)
         test_this_epoch = this_epoch(config.test_frequency)
         visualize_this_epoch = this_epoch(config.visualization_frequency)
         
+        # train
         if train_this_epoch:
             train_epoch(
                 model,
@@ -100,9 +102,6 @@ def behavior_cloning(
                 grad_norm_clip=config.grad_norm_clip,
                 supervision_mode='action',
             )
-            #chart = train_log.plot_grid(
-            #    topline=True, legend=True, minmax_y=True, height=40, width=72)
-            #print(chart)
             chart = plot_logs(
                 {'train_loss':train_loss_log},
                 border='line',
@@ -113,8 +112,8 @@ def behavior_cloning(
             )
             print(chart)
         
-        checkpoint_freq = config.checkpoint_frequency
-        if checkpoint_freq and epoch % checkpoint_freq == 0:
+        # save checkpoint
+        if checkpoint_this_epoch:
             save_checkpoint(
                 config, epoch, model, optimizer, scheduler, train_log, test_log)
         
@@ -136,7 +135,6 @@ def behavior_cloning(
             )
         
         if test:
-            #test_episodes(config, epoch, episodes, interface, test_log)
             evaluate_epoch(
                 'test',
                 episodes,
