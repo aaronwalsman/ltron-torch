@@ -11,15 +11,16 @@ from gym.vector.async_vector_env import AsyncVectorEnv
 
 from ltron.config import Config
 from ltron.hierarchy import index_hierarchy
+from ltron.dataset.paths import get_sources
 
 from ltron_torch.dataset.collate import pad_stack_collate
 from ltron_torch.train.epoch import rollout_epoch
 
 class TarDataset(Dataset):
-    def __init__(self, tar_paths):
+    def __init__(self, tar_paths, subset=None):
         self.tar_paths = tar_paths
         self.tar_files = None
-        _, self.names = get_tarfiles_and_names(self.tar_paths)
+        _, self.names = get_tarfiles_and_names(self.tar_paths, subset=subset)
     
     def __len__(self):
         return len(self.names)
@@ -36,12 +37,25 @@ class TarDataset(Dataset):
         
         return data
 
-def get_tarfiles_and_names(tar_paths):
+def make_tar_dataset_and_loader(config, shuffle=False):
+    sources = get_sources(config.dataset, config.split)
+    dataset = TarDataset(sources, subset=config.subset)
+    loader = build_episode_loader(
+        dataset,
+        config.batch_size,
+        config.workers,
+        shuffle=shuffle,
+    )
+    
+    return dataset, loader
+
+def get_tarfiles_and_names(tar_paths, subset=None):
     tar_files = {tp:tarfile.open(tp, 'r') for tp in tar_paths}
     names = []
     for tar_path, tar_file in tar_files.items():
         names.extend([(tar_path, name) for name in tar_file.getnames()])
     
+    names = names[:subset]
     return tar_files, names
     
 
@@ -89,19 +103,31 @@ def generate_tar_dataset(
         shard_path = os.path.expanduser(os.path.join(path, shard_name))
         new_shards.append(shard_path)
         print('Making Shard %s'%shard_path)
-        rollout_passes = math.ceil(episodes_per_shard/save_episode_frequency)
         shard_tar = tarfile.open(shard_path, 'w')
         shard_seqs = 0
-        for rollout_pass in range(rollout_passes):
+        #rollout_passes = math.ceil(episodes_per_shard/save_episode_frequency)
+        #for rollout_pass in range(1, rollout_passes+1):
+        while shard_seqs < total_episodes:
             pass_episodes = min(
                 episodes_per_shard-shard_seqs, save_episode_frequency)
+            pass_name = name + ' (%i-%i/$i)'%(
+                shard_seqs, shard_seqs+pass_episodes, total_episodes)
             episodes = rollout_epoch(
-                name,
+                pass_name,
                 pass_episodes,
                 **kwargs,
             )
             print('Adding Sequences To Shard')
-            episodes.save(shard_tar, finished_only=True, seq_offset=shard_seqs)
-            shard_seqs += episodes.num_finished_seqs()
+            save_ids = None
+            if episodes.num_finished_seqs() > pass_episodes:
+                save_ids = list(episodes.finished_seqs)[:pass_episodes]
+            episodes.save(
+                shard_tar,
+                finished_only=True,
+                seq_ids=save_ids,
+                seq_offset=shard_seqs,
+            )
+            #shard_seqs += episodes.num_finished_seqs()
+            shard_seqs += pass_episodes
     
     return new_shards

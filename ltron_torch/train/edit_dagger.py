@@ -25,7 +25,6 @@ from ltron_torch.train.dagger import (
 )
 
 class EditDAggerConfig(
-    #AutoTransformerInterfaceConfig,
     MultiScreenEditEnvConfig,
     AutoTransformerConfig,
     OptimizerConfig,
@@ -44,12 +43,6 @@ class EditDAggerConfig(
     test_subset = None
     
     parallel_envs = 4
-    
-    num_shapes = 6
-    num_colors = 6
-    
-    table_channels = 2
-    hand_channels = 2
     
     async_ltron = True
     
@@ -75,7 +68,7 @@ def train_edit_dagger(config=None):
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
             print('Warning: loading config from checkpoint '
                 'ignores command line arguments')
-            config = BreakAndMakeBCConfig(**checkpoint['config'])
+            config = EditDAggerConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
         if config.train_frequency:
             optimizer_checkpoint = checkpoint['optimizer']
@@ -90,7 +83,7 @@ def train_edit_dagger(config=None):
         train_reward_log_checkpoint = checkpoint.get('train_reward_log', None)
         train_success_log_checkpoint = checkpoint.get('train_success_log', None)
         test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
-        test_success_checkpoint = checkpoint.get('test_success_log', None)
+        test_success_log_checkpoint = checkpoint.get('test_success_log', None)
         
         # epoch
         start_epoch = checkpoint.get('epoch', 0) + 1
@@ -98,9 +91,13 @@ def train_edit_dagger(config=None):
         model_checkpoint = None
         optimizer_checkpoint = None
         scheduler_checkpoint = None
+        
         train_loss_log_checkpoint = None
         train_reward_log_checkpoint = None
+        train_success_log_checkpoint = None
         test_reward_log_checkpoint = None
+        test_success_log_checkpoint = None
+        
         start_epoch = 1
     
     device = torch.device(config.device)
@@ -135,9 +132,6 @@ def train_edit_dagger(config=None):
     )
     
     print('-'*80)
-    print('Building Interface (%s)'%config.model)
-    
-    print('-'*80)
     print('Building Model (%s)'%config.model)
     if config.model == 'transformer':
         observation_space = train_env.metadata['observation_space']
@@ -155,16 +149,12 @@ def train_edit_dagger(config=None):
         )
     
     print('-'*80)
-    print('Loading Logs')
-    train_loss_log = Log()
-    train_reward_log = Log()
-    test_reward_log = Log()
-    if train_loss_log_checkpoint is not None:
-        train_loss_log.set_state(train_loss_log_checkpoint)
-    if train_reward_log_checkpoint is not None:
-        train_reward_log.set_state(train_reward_log_checkpoint)
-    if test_reward_log_checkpoint is not None:
-        test_reward_log.set_state(test_reward_log_checkpoint)
+    print('Building Logs')
+    train_loss_log = Log(state=train_loss_log_checkpoint)
+    train_reward_log = Log(state=train_reward_log_checkpoint)
+    train_success_log = Log(state=train_success_log_checkpoint)
+    test_reward_log = Log(state=test_reward_log_checkpoint)
+    test_success_log = Log(state=test_success_log_checkpoint)
     
     print('-'*80)
     print('Building Optimizer')

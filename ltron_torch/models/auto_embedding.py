@@ -60,7 +60,6 @@ class AutoEmbedding(Module):
         self.tile_position_layout = NameSpan()
         self.token_vocabulary_layout = NameSpan()
         self.cursor_fine_layout = NameSpan()
-        #self.symbolic_cursor_layout = NameSpan()
         auto_embeddings = {}
         self.assembly_layout = NameSpan()
         self.observation_token_names = []

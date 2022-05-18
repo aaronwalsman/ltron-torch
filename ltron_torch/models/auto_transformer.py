@@ -303,31 +303,48 @@ class AutoTransformer(Module):
         visualization_episodes_per_epoch,
         visualization_directory,
     ):
-        num_seqs = min(visualization_episodes_per_epoch, episodes.num_seqs())
-        for seq_id in tqdm.tqdm(range(num_seqs)):
+        # iterate through each episode
+        for seq_id, batch in enumerate(tqdm.tqdm(episodes)):
+            
+            # get the sequence length
+            seq, pad = batch
+            seq_len = len_hierarchy(seq)
+            
+            # make the sequence directory
             seq_path = os.path.join(
                 visualization_directory, 'seq_%06i'%seq_id)
             if not os.path.exists(seq_path):
                 os.makedirs(seq_path)
-
-            seq = episodes.get_seq(seq_id)
-            seq_len = len_hierarchy(seq)
-
-            seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))
-            seq_action_p = (
-                seq_action_p / numpy.sum(seq_action_p, axis=-1).reshape(-1,1))
+            
+            # build the summary
+            summary = {
+                'actions':[]
+            }
+            
+            # compute action probabilities
+            seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))[:,0]
+            seq_action_n = numpy.sum(seq_action_p, axis=-1)
+            seq_action_p = seq_action_p / seq_action_n.reshape(-1,1)
             max_action_p = numpy.max(seq_action_p, axis=-1)
             
+            # get the cursor prediction maps
             subspace_p = self.action_space.unravel_subspace(seq_action_p)
+            import pdb
+            pdb.set_trace()
             cursor_maps = {}
             for name, space in self.action_space.subspaces.items():
                 if isinstance(space, MultiScreenPixelSpace):
                     cursor_maps[name] = space.unravel_maps(subspace_p[name])
             
+            # build the frames
             for frame_id in range(seq_len):
                 frame_observation = index_hierarchy(
                     seq['observation'], frame_id)
-
+                
+                # add the action to the summary
+                summary['actions'].append(
+                    self.action_space.unravel(seq['action']))
+                
                 images = {}
                 for name, space in self.observation_space.items():
                     if isinstance(space, MaskedTiledImageSpace):
@@ -379,3 +396,7 @@ class AutoTransformer(Module):
                     'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
                 )
                 save_image(out_image, frame_path)
+                
+                summary_path = os.path.join(seq_path, 'summary.json')
+                with open(summary_path, 'w') as f:
+                    json.dump(summary, f, indent=2)

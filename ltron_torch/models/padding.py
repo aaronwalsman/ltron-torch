@@ -61,6 +61,41 @@ def cat_multi_padded_seqs(seqs, pads, seq_dim=0, batch_dim=1, pad_value=0):
     
     return cat_seqs, cat_pad
 
+def compress_tensors(tensors, s_indices, b_indices, *ij_indices):
+    
+    # find out how many elements are in each batch index
+    unique, counts = torch.unique(b_indices, return_counts=True)
+    if counts.numel():
+        max_count = torch.max(counts)
+    else:
+        max_count = 0
+    
+    # build k_indices, the s coordinate for the compressed elements
+    k_indices = torch.zeros_like(b_indices)
+    for u, c in zip(unique, counts):
+        k_indices[b_indices == u] = torch.arange(c, device=b_indices.device)
+    
+    # build the padded tensors
+    padded_tensors = []
+    for tensor in tensors:
+        s, b, *ij = tensor.shape
+        uncompressed_shape = ij[len(ij_indices):]
+        
+        padded_tensor = torch.zeros(
+            (max_count, b, *uncompressed_shape),
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+        index_tuple = (s_indices, b_indices) + tuple(ij_indices)
+        padded_tensor[k_indices, b_indices] = tensor[index_tuple]
+        padded_tensors.append(padded_tensor)
+    
+    # build the pad
+    pad = torch.zeros(b, dtype=torch.long, device=tensor.device)
+    pad[unique] = counts
+    
+    return padded_tensors, pad
+
 def decat_padded_seq(ab, a_pad, b_pad, seq_dim=0, batch_dim=1, pad_value=0):
     # compute lengths
     max_a_pad = torch.max(a_pad)

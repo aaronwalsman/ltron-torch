@@ -28,7 +28,6 @@ def rollout_epoch(
     store_rewards=True,
     rollout_mode='sample',
     expert_probability=1.,
-    #save_episodes=None,
 ):
     print('-'*80)
     print('Rolling Out Episodes: %s'%name)
@@ -61,13 +60,13 @@ def rollout_epoch(
     observation = env.reset()
     terminal = numpy.ones(env.num_envs, dtype=numpy.bool)
     reward = numpy.zeros(env.num_envs)
-
+    
     with torch.no_grad():
         if hasattr(model, 'initialize_memory') and expert_probability < 1.:
             memory = model.initialize_memory(b)
         else:
             memory = None
-
+    
         #for step in tqdm.tqdm(range(steps)):
         progress = tqdm.tqdm(total=episodes)
         with progress:
@@ -117,8 +116,8 @@ def rollout_epoch(
                     
                     # convert model output to actions
                     actions = model.tensor_to_actions(x, mode=rollout_mode)
-                    for a in actions:
-                        print(model.action_space.unravel(a))
+                    #for a in actions:
+                    #    print(model.action_space.unravel(a))
                 
                 # insert expert actions
                 for i in range(b):
@@ -135,8 +134,8 @@ def rollout_epoch(
                 # step ---------------------------------------------------------
                 observation, reward, terminal, info = env.step(actions)
                 
-                if terminal[0]:
-                    print('-'*20)
+                #if terminal[0]:
+                #    print('-'*20)
                 
                 # reset memory -------------------------------------------------
                 if hasattr(model, 'reset_memory'):
@@ -158,38 +157,22 @@ def rollout_epoch(
                 
                 update = first_storage.num_finished_seqs() - progress.n
                 progress.update(update)
+                
+            #progress.total = first_storage.num_finished_seqs()
+            #progress.n = first_storage.num_finished_seqs()
+            progress.n = episodes
+            progress.refresh()
     
     combined_storage = first_storage
     for key, s in storage.items():
         if key == first_key:
             continue
-        combined_storage = combined_storage | s
-    
-    '''
-    # save the trajectories if necessary
-    if save_episodes is not None:
         
-        print('-'*80)
-        print('Saving episodes to: %s'%save_episodes)
-        
-        # make the folder if necessary
-        directory, file_name = os.path.split(save_episodes)
-        if not os.path.isdir(directory):
-            os.makedirs(directory)
-        
-        # write the tar file
-        out = tarfile.open(save_episodes, 'w')
-        for seq_id in tqdm.tqdm(combined_storage.finished_seqs):
-            seq = combined_storage.get_seq(seq_id)
-            buf = io.BytesIO()
-            numpy.savez_compressed(buf, seq=seq)
-            buf.seek(0)
-            info = tarfile.TarInfo(name='seq_%08i.npz'%seq_id)
-            info.size=len(buf.getbuffer())
-            out.addfile(tarinfo=info, fileobj=buf)
-        
-        out.close()
-    '''
+        try:
+            combined_storage = combined_storage | s
+        except:
+            import pdb
+            pdb.set_trace()
     
     return combined_storage
 
@@ -198,7 +181,7 @@ def train_epoch(
     model,
     optimizer,
     scheduler,
-    data,
+    data_loader,
     loss_log,
     grad_norm_clip=None,
     supervision_mode='action',
@@ -210,7 +193,7 @@ def train_epoch(
     model.train()
     
     running_loss = None
-    iterate = tqdm.tqdm(data)
+    iterate = tqdm.tqdm(data_loader)
     for batch, pad in iterate:
         
         # convert observations to input tensors (x) and labels (y)
@@ -244,11 +227,11 @@ def train_epoch(
     
     if plot:
         chart = plot_logs(
-            {'%s_loss'%name:loss_log},
+            {'loss':loss_log},
             border='line',
             legend=True,
             min_max_y=True,
-            colors={'%s_loss'%name:loss_color},
+            colors={'loss':loss_color},
             x_range=(0.2,1.),
         )
         print(chart)
@@ -267,15 +250,13 @@ def evaluate_epoch(
 
     avg_terminal_reward = 0.
     total_success = 0.
-    #for seq_id in episodes.finished_seqs:
-    for seq in episodes:
+    for seq, _ in episodes:
         #seq = episodes.get_seq(seq_id)
         reward = seq['reward'][-1]
         avg_terminal_reward += reward
         if reward >= success_value:
             total_success += 1
 
-    #n = episodes.num_finished_seqs()
     n = len(episodes)
     if n:
         avg_terminal_reward /= n

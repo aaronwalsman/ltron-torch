@@ -37,7 +37,7 @@ from ltron_torch.dataset.tar_dataset import (
     TarDataset, build_episode_loader, generate_tar_dataset,
 )
 
-# config definitions ===========================================================
+# config definition ============================================================
 
 class DAggerConfig(Config):
     epochs = 10
@@ -143,7 +143,26 @@ def dagger(
                     shard_start=r,
                     path=scratch_path,
                 )
-                train_episodes = TarDataset(new_shards)
+                
+                # build the recent loader (for evaluation/visualization)
+                recent_train_dataset = TarDataset(new_shards)
+                recent_train_loader = build_episode_loader(
+                    recent_train_dataset, 1, 0, shuffle=False)
+                
+                # build the full loader (for training)
+                all_shards = [
+                    './data_scratch/train_%04i.tar'%i
+                    for i in range(config.recent_epochs_to_save)
+                ]
+                all_shards = [s for s in all_shards if os.path.exists(s)]
+                assert len(all_shards)
+                full_train_dataset = TarDataset(all_shards)
+                full_train_loader = build_episode_loader(
+                    full_train_dataset,
+                    config.batch_size,
+                    config.workers,
+                    shuffle=True,
+                )
                 
             else:
                 #save_episodes = None
@@ -158,11 +177,15 @@ def dagger(
                     expert_probability=expert_probability,
                     #save_episodes=save_episodes,
                 )
+                recent_train_loader = train_episodes.batch_seq_iterator(
+                    1, finished_only=True, shuffle=False)
+                full_train_loader = train_episodes.batch_seq_iterator(
+                    config.batch_size, finished_only=True, shuffle=True)
             
             # evaluate training episodes
             evaluate_epoch(
                 'train',
-                train_episodes,
+                recent_train_loader,
                 model,
                 success_reward_value,
                 train_reward_log,
@@ -171,22 +194,25 @@ def dagger(
         
         # train
         if train_this_epoch:
-            train_dagger_epoch(
-                config,
-                epoch,
-                model,
-                optimizer,
-                scheduler,
-                train_episodes,
-                train_loss_log,
-            )
+            for i in range(1, config.passes_per_epoch+1):
+                train_epoch(
+                    'Pass %i'%i,
+                    model,
+                    optimizer,
+                    scheduler,
+                    full_train_loader,
+                    train_loss_log,
+                    grad_norm_clip=config.grad_norm_clip,
+                    supervision_mode=config.supervision_mode,
+                    plot=(i==config.passes_per_epoch),
+                )
         
         # visualize training episodes
         if visualize_this_epoch:
             visualize_epoch(
                 'train',
                 epoch,
-                train_episodes,
+                recent_train_loader,
                 config.visualization_episodes_per_epoch,
                 model,
             )
@@ -223,7 +249,7 @@ def dagger(
         if test_this_epoch:
             evaluate_epoch(
                 'test',
-                test_episodes,
+                test_episodes.batch_seq_iterator(1, finished_only=True),
                 model,
                 success_reward_value,
                 test_reward_log,
@@ -247,47 +273,43 @@ def dagger(
 
 # train subfunctions ===========================================================
 
+'''
 def train_dagger_epoch(
     config,
     epoch,
     model,
     optimizer,
     scheduler,
-    episodes,
+    loader,
     train_loss_log,
 ):
     # create dataset and loader if training on recent data
-    if config.recent_epochs_to_save:
-        scratch_files = [
-            './data_scratch/train_%04i.tar'%i
-            for i in range(config.recent_epochs_to_save)
-        ]
-        scratch_files = [s for s in scratch_files if os.path.exists(s)]
-        assert len(scratch_files)
-            
-        dataset = TarDataset(scratch_files)
-        loader = build_episode_loader(
-            dataset, config.batch_size, config.workers, shuffle=True)
+    #if config.recent_epochs_to_save:
+    #        
+    #    dataset = TarDataset(scratch_files)
+    #    loader = build_episode_loader(
+    #        dataset, config.batch_size, config.workers, shuffle=True)
     
     # randomly iterate through the completed episodes
     for i in range(1, config.passes_per_epoch+1):
         # make the dataset iterable
-        if config.recent_epochs_to_save:
-            data = loader
-        else:
-            data = episodes.batch_seq_iterator(config.batch_size, shuffle=True)
+        #if config.recent_epochs_to_save:
+        #    data = loader
+        #else:
+        #    data = episodes.batch_seq_iterator(config.batch_size, shuffle=True)
         
         train_epoch(
             'Pass %i'%i,
             model,
             optimizer,
             scheduler,
-            data,
+            loader,
             train_loss_log,
             grad_norm_clip=config.grad_norm_clip,
             supervision_mode=config.supervision_mode,
             plot=(i==config.passes_per_epoch),
         )
+'''
 
 def save_checkpoint(
     config,

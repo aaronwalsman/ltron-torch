@@ -16,26 +16,6 @@ from ltron_torch.models.auto_transformer import (
     AutoTransformerConfig,
     AutoTransformer,
 )
-#from ltron_torch.dataset.break_and_make_dataset import (
-#    BreakAndMakeDatasetConfig, BreakAndMakeDataset, BreakOnlyDataset,
-#)
-#from ltron_torch.dataset.episode_dataset import build_episode_loader
-#from ltron_torch.models.hand_table_transformer import (
-#    HandTableTransformerConfig,
-#    HandTableTransformer,
-#)
-#from ltron_torch.interface.break_and_make import BreakAndMakeInterface
-#from ltron_torch.interface.break_and_make_hand_table_transformer import (
-#    BreakAndMakeHandTableTransformerInterfaceConfig,
-#    BreakAndMakeHandTableTransformerInterface,
-#)
-#from ltron_torch.interface.edit_stubnet_transformer import (
-#    EditStubnetTransformerInterfaceConfig,
-#    EditStubnetTransformerInterface,
-#)
-#from ltron_torch.interface.break_and_make_hand_table_lstm import (
-#    BreakAndMakeHandTableLSTMInterface,
-#)
 from ltron_torch.train.optimizer import (
     OptimizerConfig,
     build_optimizer,
@@ -44,6 +24,7 @@ from ltron_torch.train.optimizer import (
 from ltron_torch.train.behavior_cloning import (
     BehaviorCloningConfig, behavior_cloning,
 )
+from ltron_torch.dataset.tar_dataset import make_tar_dataset_and_loader
 
 # TODO: This file is very similar to blocks_bc.py but with different
 # defaults and a different interface.  These could probably be consolidated,
@@ -60,10 +41,8 @@ from ltron_torch.train.behavior_cloning import (
 # overrides method or something?  Whatever, avoid the issue for now.
 
 class EditBCConfig(
-    BreakAndMakeDatasetConfig,
-    EditEnvConfig,
-    EditStubnetTransformerInterfaceConfig,
-    StubnetTransformerConfig,
+    MultiScreenEditEnvConfig,
+    AutoTransformerConfig,
     OptimizerConfig,
     BehaviorCloningConfig,
 ):
@@ -73,17 +52,13 @@ class EditBCConfig(
     load_checkpoint = None
     use_checkpoint_config = False
     
-    dataset = 'random_construction_6_6'
-    train_split = 'train_episodes'
-    test_split = 'test'
+    dataset = 'random_construction'
+    train_split = '6b_6c_2i_episode_train'
+    test_split = '6b_6c_2i_ldraw_test'
+    train_subset = None
+    test_subset = None
     
     parallel_envs = 4
-    
-    num_shapes = 6
-    num_colors = 6
-    
-    table_channels = 2
-    hand_channels = 2
     
     async_ltron = True
     
@@ -109,7 +84,7 @@ def train_edit_bc(config=None):
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
             print('Warning: loading config from checkpoint '
                 'ignores command line arguments')
-            config = BreakAndMakeBCConfig(**checkpoint['config'])
+            config = EditBCConfig(**checkpoint['config'])
         model_checkpoint = checkpoint['model']
         if config.train_frequency:
             optimizer_checkpoint = checkpoint['optimizer']
@@ -130,96 +105,82 @@ def train_edit_bc(config=None):
         model_checkpoint = None
         optimizer_checkpoint = None
         scheduler_checkpoint = None
+        
         train_loss_log_checkpoint = None
         test_reward_log_checkpoint = None
         test_success_log_checkpoint = None
+        
         start_epoch = 1
-    
-    if config.factor_cursor_distribution:
-        config.num_modes = 25
-    else:
-        config.num_modes = 23
-    
-    if config.allow_snap_flip:
-        config.num_modes += 4
     
     device = torch.device(config.device)
     
     print('-'*80)
-    print('Building Model (%s)'%config.model)
-    if config.model == 'transformer':
-        model = HandTableTransformer(config, model_checkpoint).to(device)
-    elif config.model == 'stubnet':
-        model = StubnetTransformer(config, model_checkpoint).to(device)
-    elif config.model == 'lstm':
-        model = HandTableLSTM(config, model_checkpoint).to(device)
-    else:
-        raise ValueError(
-            'config "model" parameter ("%s") must be either '
-            '"transformer", "stubnet" or "lstm"'%config.model
-        )
-    
-    print('-'*80)
-    print('Building Optimizer')
-    optimizer = build_optimizer(config, model, optimizer_checkpoint)
-    
-    print('-'*80)
-    print('Building Interface (%s)'%config.model)
-    #if config.model == 'transformer':
-    #    interface = BreakAndMakeHandTableTransformerInterface(
-    #        config, model, optimizer)
-    if config.model == 'stubnet':
-        interface = EditStubnetTransformerInterface(
-            config, model, optimizer)
-    #elif config.model == 'lstm':
-    #    interface = BreakAndMakeHandTableLSTMInterface(
-    #        config, model, optimizer)
-    
-    print('-'*80)
-    print('Building Logs')
-    train_log = interface.make_train_log(train_log_checkpoint)
-    test_log = interface.make_test_log(test_log_checkpoint)
-    
-    print('-'*80)
-    print('Building Scheduler')
-    scheduler = build_scheduler(config, optimizer, scheduler_checkpoint)
-    
-    print('-'*80)
-    print('Building Data Loader')
-    train_config = EditBCConfig.translate(config, split='train_split')
-    if config.task == 'break_and_make':
-        train_dataset = BreakAndMakeDataset(train_config)
-    elif config.task == 'break_only':
-        train_dataset = BreakOnlyDataset(train_config)
-    else:
-        assert False, 'bad task: "%s"'%config.task
-    train_loader = build_episode_loader(train_config, train_dataset)
+    print('Building Train Data Loader')
+    train_config = EditBCConfig.translate(
+        config, split='train_split', subset='train_subset')
+    train_dataset, train_loader = make_tar_dataset_and_loader(
+        train_config, shuffle=True)
     
     print('-'*80)
     print('Building Test Env')
-    test_config = EditBCConfig.translate(config, split='test_split')
+    test_config = EditBCConfig.translate(
+        config,
+        split='test_split',
+        subset='test_subset',
+    )
     if config.async_ltron:
         vector_ltron = async_ltron
     else:
         vector_ltron = sync_ltron
     test_env = vector_ltron(
         config.parallel_envs,
-        EditEnv,
+        MultiScreenEditEnv,
         test_config,
         print_traceback=True,
     )
+    
+    print('-'*80)
+    print('Building Model (%s)'%config.model)
+    if config.model == 'transformer':
+        observation_space = test_env.metadata['observation_space']
+        action_space = test_env.metadata['action_space']
+        model = AutoTransformer(
+            config,
+            observation_space,
+            action_space,
+            model_checkpoint,
+        ).to(device)
+    else:
+        raise ValueError(
+            'config "model" parameter ("%s") must be '
+            '"transformer"'%config.model
+        )
+    
+    print('-'*80)
+    print('Building Logs')
+    train_loss_log = Log(state=train_loss_log_checkpoint)
+    test_reward_log = Log(state=test_reward_log_checkpoint)
+    test_success_log = Log(state=test_success_log_checkpoint)
+    
+    print('-'*80)
+    print('Building Optimizer')
+    optimizer = build_optimizer(config, model, optimizer_checkpoint)
+    
+    print('-'*80)
+    print('Building Scheduler')
+    scheduler = build_scheduler(config, optimizer, scheduler_checkpoint)
 
     behavior_cloning(
         config,
+        train_loader,
+        test_env,
         model,
         optimizer,
         scheduler,
-        train_loader,
-        test_env,
-        interface,
-        train_log,
-        test_log,
         start_epoch=start_epoch,
+        train_loss_log=train_loss_log,
+        test_reward_log=test_reward_log,
+        test_success_log=test_success_log,
     )
 
 def plot_break_and_make_bc(checkpoint=None):
