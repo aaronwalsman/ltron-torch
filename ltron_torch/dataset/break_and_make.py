@@ -1,14 +1,18 @@
-from ltron.gym.envs.multiscreen_edit_env import (
-    MultiScreenEditEnv,
-    MultiScreenEditEnvConfig,
+#from ltron.gym.envs.multiscreen_edit_env import (
+#    MultiScreenEditEnv,
+#    MultiScreenEditEnvConfig,
+#)
+
+from ltron.gym.envs.break_and_make_env import (
+    BreakAndMakeEnvConfig,
+    BreakAndMakeEnv,
 )
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
 
-from ltron_torch.dataset.tar_dataset import generate_tar_dataset
+from ltron.dataset.tar_dataset import generate_tar_dataset
 
-class LTRONDatasetConfig(MultiScreenEditEnvConfig):
-    name = 'random_construction_6b_6c_2i_episode_train'
+class BreakAndMakeDatasetConfig(BreakAndMakeEnvConfig):
     total_episodes = 50000
     shards = 1
     save_episode_frequency = 256
@@ -20,7 +24,7 @@ def ltron_break_and_make_dataset(config=None):
     if config is None:
         print('='*80)
         print('Loading Config')
-        config = LTRONDatasetConfig.from_commandline()
+        config = BreakAndMakeDatasetConfig.from_commandline()
     
     if config.async_ltron:
         vector_env = async_ltron
@@ -28,13 +32,14 @@ def ltron_break_and_make_dataset(config=None):
         vector_env = sync_ltron
     env = vector_env(
         config.parallel_envs,
-        MultiScreenEditEnv,
+        BreakAndMakeEnv,
         config,
         print_traceback=True,
     )
     
+    name = '%s_%s'%(config.dataset, config.split)
     generate_tar_dataset(
-        config.name,
+        name,
         config.total_episodes,
         shards=config.shards,
         save_episode_frequency=config.save_episode_frequency,
@@ -42,5 +47,5 @@ def ltron_break_and_make_dataset(config=None):
         env=env,
         model=None,
         expert_probability=1.,
-        store_activations=False,
+        store_distributions=True,
     )
