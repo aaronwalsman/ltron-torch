@@ -129,8 +129,6 @@ class AssemblyEmbedding(Module):
         
         assembly_length = shape.shape[-1]
         nonzero_instances = shape != 0
-        #assembly_pad = nonzero_instances.sum(axis=(0,-1))
-        #max_instances = assembly_pad.max()
         
         s_coord, b_coord, i_coord = torch.where(shape)
         instance_id = torch.arange(n, device=device).view(1,1,n).expand(s,b,n)
@@ -141,32 +139,6 @@ class AssemblyEmbedding(Module):
          padded_instance_id,
          padded_t), assembly_pad = compress_tensors(
             (shape, color, pose, instance_id, t), s_coord, b_coord, i_coord)
-        #j_coord = numpy.concatenate([numpy.arange(cc) for cc in assembly_pad])
-        
-        # shape
-        #compressed_shape = shape[s_coord, b_coord, i_coord]
-        #padded_shape = numpy.zeros((b, max_instances), dtype=numpy.long)
-        #padded_shape[b_coord, j_coord] = compressed_shape
-        #padded_shape = torch.LongTensor(padded_shape.transpose(1,0)).to(device)
-        
-        # color
-        #compressed_color = color[s_coord, b_coord, i_coord]
-        #padded_color = numpy.zeros((b, max_instances), dtype=numpy.long)
-        #padded_color[b_coord, j_coord] = compressed_color
-        #padded_color = torch.LongTensor(padded_color.transpose(1,0)).to(device)
-        
-        # pose
-        #compressed_pose = pose[s_coord, b_coord, i_coord]
-        #padded_pose = numpy.zeros((b, max_instances, 4, 4))
-        #padded_pose[b_coord, j_coord] = compressed_pose
-        #padded_pose = torch.FloatTensor(
-        #    padded_pose.transpose(1,0,2,3)).to(device)
-        
-        # instance id
-        #padded_instance_id = numpy.zeros((b, max_instances))
-        #padded_instance_id[b_coord, j_coord] = i_coord
-        #padded_instance_id = torch.LongTensor(
-        #    padded_instance_id.transpose(1,0)).to(device)
         
         # x
         x = {
@@ -175,16 +147,6 @@ class AssemblyEmbedding(Module):
             'pose':padded_pose,
             'instance_id':padded_instance_id,
         }
-        
-        # t
-        #assembly_t = t.reshape(s, b, 1).repeat(assembly_length, axis=-1)
-        #compressed_t = assembly_t[s_coord, b_coord, i_coord]
-        #padded_t = numpy.zeros((b, max_instances))
-        #padded_t[b_coord, j_coord] = compressed_t
-        #padded_t = torch.LongTensor(padded_t.transpose(1,0)).to(device)
-        
-        # pad
-        #assembly_pad = torch.LongTensor(assembly_pad).to(device)
         
         return x, padded_t, assembly_pad
     

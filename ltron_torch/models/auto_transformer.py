@@ -1,5 +1,6 @@
 import random
 import os
+import json
 
 import numpy
 
@@ -10,10 +11,14 @@ from torch.distributions import Categorical
 import tqdm
 
 from splendor.image import save_image
+from splendor.json_numpy import NumpyEncoder
 
 from ltron.name_span import NameSpan
 from ltron.hierarchy import len_hierarchy, index_hierarchy
-from ltron.gym.spaces import MultiScreenPixelSpace, MaskedTiledImageSpace
+from ltron.bricks.brick_scene import BrickScene
+from ltron.gym.spaces import (
+    MultiScreenPixelSpace, MaskedTiledImageSpace, AssemblySpace,
+)
 from ltron.visualization.drawing import (
     draw_crosshairs, draw_box, stack_images_horizontal,
 )
@@ -74,9 +79,9 @@ class AutoTransformer(Module):
         for name in self.embedding.symbolic_cursor_names:
             subspace = self.action_space.subspaces[name]
             coarse_cursor_span = NameSpan()
-            for key in subspace.span.keys():
+            for key in subspace.layout.keys():
                 if key != 'NO_OP':
-                    num_instances, num_snaps = subspace.span.get_shape(key)
+                    num_instances, num_snaps = subspace.layout.get_shape(key)
                     coarse_cursor_span.add_names(**{key:num_instances})
             fine_shape = (num_snaps,)
             decoders[name] = CoarseToFineCursorDecoder(
@@ -211,7 +216,8 @@ class AutoTransformer(Module):
                 head_xs.update(name_x)
             
         flat_x = torch.zeros(sb, self.action_space.n, device=device)
-        self.action_space.ravel_subspace(head_xs, out=flat_x)
+        last_dim = len(flat_x.shape)-1
+        self.action_space.ravel_vector(head_xs, out=flat_x, dim=last_dim)
         
         out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
         out_x[readout_i, readout_b] = flat_x
@@ -233,7 +239,14 @@ class AutoTransformer(Module):
             actions = torch.argmax(x, dim=-1).cpu().view(b).numpy()
 
         return actions
-
+    
+    def tensor_to_distribution(self, x):
+        s, b, a = x.shape
+        assert s == 1
+        distribution = Categorical(logits=x)
+        
+        return distribution
+    
     #def observation_to_labels(self, batch, pad):
     #    device = next(self.parameters()).device
     #    return torch.LongTensor(batch['observation']['expert']).to(device)
@@ -304,7 +317,12 @@ class AutoTransformer(Module):
         visualization_directory,
     ):
         # iterate through each episode
-        for seq_id, batch in enumerate(tqdm.tqdm(episodes)):
+        #for seq_id, batch in enumerate(tqdm.tqdm(episodes)):
+        #for seq_id in tqdm.tqdm(range(visualization_episodes_per_epoch)):
+        for seq_id, batch in tqdm.tqdm(zip(
+            range(visualization_episodes_per_epoch), episodes),
+            total=visualization_episodes_per_epoch
+        ):
             
             # get the sequence length
             seq, pad = batch
@@ -318,7 +336,8 @@ class AutoTransformer(Module):
             
             # build the summary
             summary = {
-                'actions':[]
+                'action':[],
+                'reward':seq['reward'],
             }
             
             # compute action probabilities
@@ -328,22 +347,21 @@ class AutoTransformer(Module):
             max_action_p = numpy.max(seq_action_p, axis=-1)
             
             # get the cursor prediction maps
-            subspace_p = self.action_space.unravel_subspace(seq_action_p)
-            import pdb
-            pdb.set_trace()
-            cursor_maps = {}
-            for name, space in self.action_space.subspaces.items():
-                if isinstance(space, MultiScreenPixelSpace):
-                    cursor_maps[name] = space.unravel_maps(subspace_p[name])
+            # TODO: Fix this using unravel_vector now
+            #subspace_p = self.action_space.unravel_subspace(seq_action_p)
+            #cursor_maps = {}
+            #for name, space in self.action_space.subspaces.items():
+            #    if isinstance(space, MultiScreenPixelSpace):
+            #        cursor_maps[name] = space.unravel_maps(subspace_p[name])
             
             # build the frames
             for frame_id in range(seq_len):
-                frame_observation = index_hierarchy(
-                    seq['observation'], frame_id)
+                frame_observation = index_hierarchy(index_hierarchy(
+                    seq['observation'], frame_id), 0)
                 
                 # add the action to the summary
-                summary['actions'].append(
-                    self.action_space.unravel(seq['action']))
+                summary['action'].append(
+                    self.action_space.unravel(seq['action'][frame_id,0]))
                 
                 images = {}
                 for name, space in self.observation_space.items():
@@ -359,12 +377,26 @@ class AutoTransformer(Module):
                                     image = image * (1.-mc) + mc*colors[c]
 
                         images[name] = image.astype(numpy.uint8)
-
+                    
+                    elif isinstance(space, AssemblySpace):
+                        assembly_scene = BrickScene()
+                        assembly_scene.set_assembly(
+                            frame_observation[name],
+                            space.shape_ids,
+                            space.color_ids,
+                        )
+                        assembly_path = os.path.join(
+                            seq_path,
+                            '%s_%04i_%04i.mpd'%(name, seq_id, frame_id)
+                        )
+                        assembly_scene.export_ldraw(assembly_path)
+                
                 action = index_hierarchy(seq['action'], frame_id)
-                action_name, action_index = self.action_space.unravel(action)
+                action_name, *nyxc = self.action_space.unravel(action)
                 action_subspace = self.action_space.subspaces[action_name]
                 if isinstance(action_subspace, MultiScreenPixelSpace):
-                    n, *yxc = action_subspace.unravel(action_index)
+                    #n, *yxc = action_subspace.unravel(action_index)
+                    n, *yxc = nyxc
                     if n != 'NO_OP':
                         y, x, c = yxc
                         action_image = images[n]
@@ -380,23 +412,26 @@ class AutoTransformer(Module):
                 
                 expert = frame_observation['expert']
                 for e in expert:
-                    expert_name, expert_index = self.action_space.unravel(e)
+                    expert_name, *nyxc = self.action_space.unravel(e)
                     expert_subspace = self.action_space.subspaces[expert_name]
                     if isinstance(expert_subspace, MultiScreenPixelSpace):
-                        n, y, x, c = expert_subspace.unravel(expert_index)
+                        #n, y, x, c = expert_subspace.unravel(expert_index)
+                        n, y, x, c = nyxc
                         expert_image = images[n]
                         color = numpy.array(
                             self.embedding.cursor_colors[expert_name][c])
                         pixel_color = expert_image[y,x] * 0.5 + color * 0.5
                         expert_image[y,x] = pixel_color.astype(numpy.uint8)
                 
-                out_image = stack_images_horizontal(images.values(), spacing=4)
-                frame_path = os.path.join(
-                    seq_path,
-                    'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
-                )
-                save_image(out_image, frame_path)
-                
-                summary_path = os.path.join(seq_path, 'summary.json')
-                with open(summary_path, 'w') as f:
-                    json.dump(summary, f, indent=2)
+                if images:
+                    out_image = stack_images_horizontal(
+                        images.values(), spacing=4)
+                    frame_path = os.path.join(
+                        seq_path,
+                        'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
+                    )
+                    save_image(out_image, frame_path)
+            
+            summary_path = os.path.join(seq_path, 'summary.json')
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2, cls=NumpyEncoder)

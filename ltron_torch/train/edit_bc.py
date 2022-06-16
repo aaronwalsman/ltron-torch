@@ -95,9 +95,9 @@ def train_edit_bc(config=None):
         scheduler_checkpoint = checkpoint['scheduler']
         
         # logs
-        train_log_loss_checkpoint = checkpoint.get('train_log_loss', None)
+        train_loss_log_checkpoint = checkpoint.get('train_log_loss', None)
         test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
-        test_success_checkpoint = checkpoint.get('test_success_log', None)
+        test_success_log_checkpoint = checkpoint.get('test_success_log', None)
         
         # epoch
         start_epoch = checkpoint.get('epoch', 0) + 1
@@ -116,10 +116,16 @@ def train_edit_bc(config=None):
     
     print('-'*80)
     print('Building Train Data Loader')
-    train_config = EditBCConfig.translate(
-        config, split='train_split', subset='train_subset')
+    #train_config = EditBCConfig.translate(
+    #    config, split='train_split', subset='train_subset')
     train_dataset, train_loader = make_tar_dataset_and_loader(
-        train_config, shuffle=True)
+        config.dataset,
+        config.train_split,
+        config.batch_size,
+        config.workers,
+        subset=config.train_subset,
+        shuffle=True,
+    )
     
     print('-'*80)
     print('Building Test Env')

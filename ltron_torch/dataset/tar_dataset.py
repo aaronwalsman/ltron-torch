@@ -1,20 +1,15 @@
-import math
-import io
-import os
+#import math
+#import os
 import tarfile
 
 import numpy
 
 from torch.utils.data import Dataset, DataLoader
 
-from gym.vector.async_vector_env import AsyncVectorEnv
-
-from ltron.config import Config
-from ltron.hierarchy import index_hierarchy
 from ltron.dataset.paths import get_sources
 
 from ltron_torch.dataset.collate import pad_stack_collate
-from ltron_torch.train.epoch import rollout_epoch
+#from ltron_torch.train.epoch import rollout_epoch
 
 class TarDataset(Dataset):
     def __init__(self, tar_paths, subset=None):
@@ -37,13 +32,20 @@ class TarDataset(Dataset):
         
         return data
 
-def make_tar_dataset_and_loader(config, shuffle=False):
-    sources = get_sources(config.dataset, config.split)
-    dataset = TarDataset(sources, subset=config.subset)
+def make_tar_dataset_and_loader(
+    dataset,
+    split,
+    batch_size,
+    workers,
+    subset=None,
+    shuffle=False,
+):
+    sources = get_sources(dataset, split)
+    dataset = TarDataset(sources, subset=subset)
     loader = build_episode_loader(
         dataset,
-        config.batch_size,
-        config.workers,
+        batch_size,
+        workers,
         shuffle=shuffle,
     )
     
@@ -71,17 +73,6 @@ def build_episode_loader(dataset, batch_size, workers, shuffle=True):
     return loader
 
 '''
-class TarDatasetConfig(Config):
-    dataset = 'random_construction'
-    split = 'train'
-    
-    total_episodes = 50000
-    shards = 1
-    save_episode_frequency = 256
-    
-    path = '.'
-'''
-
 def generate_tar_dataset(
     name,
     total_episodes,
@@ -105,12 +96,10 @@ def generate_tar_dataset(
         print('Making Shard %s'%shard_path)
         shard_tar = tarfile.open(shard_path, 'w')
         shard_seqs = 0
-        #rollout_passes = math.ceil(episodes_per_shard/save_episode_frequency)
-        #for rollout_pass in range(1, rollout_passes+1):
         while shard_seqs < total_episodes:
             pass_episodes = min(
                 episodes_per_shard-shard_seqs, save_episode_frequency)
-            pass_name = name + ' (%i-%i/$i)'%(
+            pass_name = name + ' (%i-%i/%i)'%(
                 shard_seqs, shard_seqs+pass_episodes, total_episodes)
             episodes = rollout_epoch(
                 pass_name,
@@ -131,3 +120,4 @@ def generate_tar_dataset(
             shard_seqs += pass_episodes
     
     return new_shards
+'''

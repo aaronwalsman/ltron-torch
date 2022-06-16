@@ -25,6 +25,7 @@ from ltron.hierarchy import (
     index_hierarchy,
 )
 from ltron.visualization.drawing import write_text
+from ltron.dataset.tar_dataset import generate_tar_dataset
 
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.epoch import (
@@ -33,9 +34,7 @@ from ltron_torch.train.epoch import (
     evaluate_epoch,
     visualize_epoch,
 )
-from ltron_torch.dataset.tar_dataset import (
-    TarDataset, build_episode_loader, generate_tar_dataset,
-)
+from ltron_torch.dataset.tar_dataset import TarDataset, build_episode_loader
 
 # config definition ============================================================
 
@@ -128,6 +127,7 @@ def dagger(
                     (1-t) * config.expert_probability_start
                 )
             
+            '''
             # rollout training episodes
             if config.recent_epochs_to_save:
                 r = epoch % config.recent_epochs_to_save
@@ -181,11 +181,36 @@ def dagger(
                     1, finished_only=True, shuffle=False)
                 full_train_loader = train_episodes.batch_seq_iterator(
                     config.batch_size, finished_only=True, shuffle=True)
+            '''
+            if config.recent_epochs_to_save:
+                shard_index = epoch % config.recent_epochs_to_save
+                #scratch_path = './data_scratch/recent_%04i.tar'%r
+                scratch_path = './data_scratch'
+                additional_tar_paths = [
+                    './data_scratch/train_%04i.tar'%i
+                    for i in range(config.recent_epochs_to_save)
+                    if i != shard_index
+                ]
+            else:
+                scratch_path = None
+            
+            train_loader = rollout_epoch(
+                'train',
+                config.train_episodes_per_epoch,
+                train_env,
+                model=model,
+                rollout_mode='sample',
+                expert_probability=expert_probability,
+                tar_path=scratch_path,
+                additional_tar_paths=additional_tar_paths,
+                shards=shards,
+                start_shard=shard_index,
+            )
             
             # evaluate training episodes
             evaluate_epoch(
                 'train',
-                recent_train_loader,
+                train_loader,
                 model,
                 success_reward_value,
                 train_reward_log,
@@ -200,7 +225,7 @@ def dagger(
                     model,
                     optimizer,
                     scheduler,
-                    full_train_loader,
+                    train_loader,
                     train_loss_log,
                     grad_norm_clip=config.grad_norm_clip,
                     supervision_mode=config.supervision_mode,
@@ -212,7 +237,7 @@ def dagger(
             visualize_epoch(
                 'train',
                 epoch,
-                recent_train_loader,
+                train_loader,
                 config.visualization_episodes_per_epoch,
                 model,
             )
@@ -261,7 +286,7 @@ def dagger(
             visualize_epoch(
                 'test',
                 epoch,
-                test_episodes,
+                test_episodes.batch_seq_iterator(1, finished_only=True),
                 config.visualization_episodes_per_epoch,
                 model,
             )

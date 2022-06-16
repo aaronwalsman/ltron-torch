@@ -13,7 +13,7 @@ import tqdm
 
 from splendor.image import save_image
 
-from conspiracy.log import plot_logs, plot_logs_grid
+from conspiracy.log import Log
 
 from ltron.config import Config
 from ltron.dataset.paths import get_dataset_info
@@ -31,6 +31,7 @@ from ltron_torch.train.epoch import (
     rollout_epoch,
     train_epoch,
     evaluate_epoch,
+    visualize_epoch,
 )
 
 # config definition ============================================================
@@ -49,6 +50,7 @@ class BehaviorCloningConfig(Config):
     visualization_frequency = 1
     
     test_episodes_per_epoch = 1024
+    visualization_episodes_per_epoch = 16
     
     checkpoint_directory = './checkpoint'
 
@@ -110,7 +112,15 @@ def behavior_cloning(
         # save checkpoint
         if checkpoint_this_epoch:
             save_checkpoint(
-                config, epoch, model, optimizer, scheduler, train_log, test_log)
+                config,
+                epoch,
+                model,
+                optimizer,
+                scheduler,
+                train_loss_log,
+                test_reward_log,
+                test_success_log,
+            )
         
         test_freq = config.test_frequency
         test = test_freq and epoch % test_freq == 0
@@ -140,11 +150,10 @@ def behavior_cloning(
             )
         
         if visualize:
-            raise Exception('need to finish')
             visualize_epoch(
                 'test',
                 epoch,
-                test_episodes,
+                test_episodes.batch_seq_iterator(1, finished_only=True),
                 config.visualization_episodes_per_epoch,
                 model,
             )

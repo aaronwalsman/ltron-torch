@@ -10,14 +10,125 @@ from torch.nn.utils import clip_grad_norm_
 
 import tqdm
 
-from conspiracy.log import plot_logs, plot_logs_grid
+from conspiracy.plot import plot_logs, plot_logs_grid
 
-from ltron.hierarchy import map_hierarchies, stack_numpy_hierarchies
+#from ltron.hierarchy import map_hierarchies, stack_numpy_hierarchies
 from ltron.gym.rollout_storage import RolloutStorage
+from ltron.rollout import rollout
 
 from ltron_torch.models.padding import get_seq_batch_indices
 
 def rollout_epoch(
+    name,
+    episodes,
+    env,
+    model=None,
+    rollout_mode='sample',
+    expert_probability=1.,
+    batch_size=1,
+    workers=0,
+    shuffle=False,
+    tar_path=None,
+    additional_tar_paths=None,
+    shards=1,
+    start_start=0,
+    save_episode_frequency=256,
+    **kwargs,
+):
+    
+    print('-'*80)
+    print('Rolling Out %i Episodes: %s'%(episodes, name))
+    print('p(expert) = %.04f'%expert_probability)
+    print('rollout_mode = "%s"'%rollout_mode)
+    
+    if hasattr(model, 'initialize_memory'):
+        memory = model.initialize_memory(env.num_envs)
+    else:
+        memory = None
+    
+    def actor_fn(observation, terminal, memory):
+        
+        # reset memory
+        if hasattr(model, 'reset_memory'):
+            model.reset_memory(memory, terminal)
+        
+        # if the expert probability is 1 and we don't need model
+        # activations, don't bother running the model forward pass
+        #if expert_probability == 1. and not store_activations:
+        b = observation['step'].shape[1]
+        if expert_probability == 1.:
+            distribution = numpy.zeros(b, env.metadata['action_space'].n)
+        
+        else:
+            # move observations to torch and cuda
+            pad = numpy.ones(b, dtype=numpy.long)
+            x = model.observation_to_tensors(
+                {'observation':observation}, pad)
+            
+            # model forward pass
+            if hasattr(model, 'initialize_memory'):
+                if hasattr(model, 'forward_rollout'):
+                    x = model.forward_rollout(
+                        terminal, **x, memory=memory)
+                else:
+                    x = model(**x, memory=memory)
+                memory = x['memory']
+            else:
+                if hasattr(model, 'forward_rollout'):
+                    x = model.forward_rollout(terminal, **x)
+                else:
+                    x = model(**x)
+            
+            # convert model output to actions
+            distribution = (
+                model.tensor_to_distribution(x).detach().cpu().numpy()
+            )
+        
+        # insert expert actions
+        for i in range(b):
+            r = random.random()
+            if r < expert_probability:
+                expert_actions = observation['expert'][0,i]
+                expert_actions = [
+                    a for a in expert_actions
+                    if a != env.metadata['no_op_action']
+                ]
+                #expert_action = random.choice(expert_actions)
+                #actions[i] = expert_action
+                d = numpy.zeros(env.metadata['action_space'].n)
+                d[expert_actions] = 1. / len(expert_actions)
+                distribution[i] = d
+        
+        return distribution, memory
+    
+    if tar_path:
+        shards = generate_tar_dataset(
+            name,
+            episodes,
+            shards=shards,
+            shard_start=shard_start,
+            save_episode_frequency=save_episode_frequency,
+            env=env,
+            actor_fn=actor_fn,
+            initial_memory=memory,
+            path=tar_path,
+            **kwargs,
+        )
+        
+        if additional_tar_paths:
+            shards = shards + additional_tar_paths
+        dataset = TarDataset(shards)
+        loader = build_episode_loader(dataset, batch_size, workers, shuffle)
+    
+    else:
+        rollout_episodes = rollout(
+            episodes, env, actor_fn=actor_fn, initial_memory=memory, **kwargs)
+        loader = rollout_episodes.batch_seq_iterator(
+            batch_size, finished_only=True, shuffle=shuffle)
+    
+    return loader
+
+def rollout_epoch_old(
     name,
     episodes,
     env,
@@ -30,7 +141,7 @@ def rollout_epoch(
     expert_probability=1.,
 ):
     print('-'*80)
-    print('Rolling Out Episodes: %s'%name)
+    print('Rolling Out %i Episodes: %s'%(episodes, name))
     print('p(expert) = %.04f'%expert_probability)
     print('rollout_mode = "%s"'%rollout_mode)
     
@@ -134,9 +245,6 @@ def rollout_epoch(
                 # step ---------------------------------------------------------
                 observation, reward, terminal, info = env.step(actions)
                 
-                #if terminal[0]:
-                #    print('-'*20)
-                
                 # reset memory -------------------------------------------------
                 if hasattr(model, 'reset_memory'):
                     model.reset_memory(memory, terminal)
@@ -186,7 +294,6 @@ def train_epoch(
     grad_norm_clip=None,
     supervision_mode='action',
     plot=False,
-    loss_color=2,
 ):
     print('-'*80)
     print('Training: %s'%name)
@@ -231,7 +338,7 @@ def train_epoch(
             border='line',
             legend=True,
             min_max_y=True,
-            colors={'loss':loss_color},
+            colors={'loss':'RED'},
             x_range=(0.2,1.),
         )
         print(chart)
@@ -250,17 +357,29 @@ def evaluate_epoch(
 
     avg_terminal_reward = 0.
     total_success = 0.
-    for seq, _ in episodes:
+    total_episodes = 0
+    for seq, pad in episodes:
         #seq = episodes.get_seq(seq_id)
-        reward = seq['reward'][-1]
-        avg_terminal_reward += reward
-        if reward >= success_value:
-            total_success += 1
+        #reward = seq['reward'][-1]
+        #avg_terminal_reward += reward
+        #if reward >= success_value:
+        #    total_success += 1
+        print('MAKE SURE THE BELOW IS RIGHT')
+        import pdb
+        pdb.set_trace()
+        
+        reward = seq['reward'][pad-1]
+        avg_terminal_reward += numpy.sum(reward)
+        total_success += numpy.sum(reward >= success_value)
+        total_episodes += len(pad)
 
-    n = len(episodes)
-    if n:
-        avg_terminal_reward /= n
-        avg_success = total_success/n
+    #n = len(episodes)
+    #if n:
+    #    avg_terminal_reward /= n
+    #    avg_success = total_success/n
+    if total_episodes:
+        avg_terminal_reward /= total_episodes
+        avg_success /= total_episodes
 
     print('Average Terminal Reward: %f'%avg_terminal_reward)
     reward_log.log(avg_terminal_reward)
@@ -272,7 +391,7 @@ def evaluate_epoch(
         [[{'%s_reward'%name:reward_log}, {'%s_success'%name:success_log}]],
         border='line',
         legend=True,
-        colors='auto',
+        colors={'%s_reward'%name:'BLUE', '%s_success'%name:'GREEN'},
         min_max_y=True,
         x_range=(0.,1.),
     )
