@@ -8,6 +8,7 @@ from ltron.config import Config
 
 from ltron_torch.models.transformer import make_nonlinearity
 from ltron_torch.models.mlp import ResidualBlock, linear_stack
+from ltron_torch.models.conditional_decoder import ConditionalDecoder
 
 class CoarseToFineCursorDecoderConfig(Config):
     nonlinearity = 'gelu'
@@ -16,7 +17,114 @@ class CoarseToFineCursorDecoderConfig(Config):
     
     cursor_decoder_dropout = 0.
 
-class CoarseToFineCursorDecoder(Module):
+'''
+PLAN:
+1. get rid of the config, pass the arguments in
+2. make a coarse-to-fine super class
+3. make CoarseToFineCursorDecoder inherit from that, and do whatever squirrely
+    reshaping thing it needs to do
+4. make CoarseToFineBrickTypeDecoder inherit from that if the base class alone
+    isn't good enough.
+'''
+
+'''
+class CoarseToFineBrickTypeDecoder(Module):
+    def __init__(self,
+        config,
+        num_shapes,
+        num_colors,
+        coarse_layers=3,
+        fine_layers=3,
+        nonlinearity='gelu',
+        channels=768,
+        dropout=0.,
+    ):
+        super().__init__()
+        
+        self.num_shapes = num_shapes
+        self.num_colors = num_colors
+        
+        self.coarse_head = linear_stack(
+            coarse_layers,
+            channels,
+            out_channels=self.coarse_span.total,
+            nonlinearity=nonlinearity,
+            hidden_dropout=dropout,
+        )
+        self.coarse_embedding = Embedding(self.num_shapes, channels)
+        
+        self.fine_head = linear_stack(
+            fine_layers,
+            channels*2,
+            hidden_channels=channels,
+            out_channels=num_colors,
+            nonlinearity=nonlinearity,
+            hidden_dropout=dropout,
+        )
+        
+        self.input_norm = LayerNorm(channels)
+        self.embedding_norm = LayerNorm(channels)
+        
+        self.no_op_head = Linear(config.channels, 1)
+    
+    def forward(self, x, sample_mode='top4'):
+'''     
+
+class CoarseToFineCursorDecoder(ConditionalDecoder):
+    def __init__(self,
+        coarse_span,
+        fine_shape,
+        channels=768,
+        **kwargs,
+    ):
+        fine_cells = 1
+        for s in fine_shape:
+            fine_cells *= s
+        
+        super().__init__(
+            (coarse_span.total, fine_cells),
+            channels=channels,
+            **kwargs,
+        )
+        self.no_op_head = Linear(channels, 1)
+        
+        self.coarse_span = coarse_span
+        self.fine_shape = fine_shape
+    
+    def forward(self, x, **kwargs):
+        no_op_x = self.no_op_head(x)
+        
+        x = super().forward(x, **kwargs)
+        b, c, f = x.shape
+        
+        x_out = [no_op_x]
+        for name in self.coarse_span.keys():
+            start, stop = self.coarse_span.name_range(name)
+            
+            c_shape = self.coarse_span.get_shape(name)
+            f_shape = self.fine_shape
+            x_name = x[:,start:stop].view(b, *c_shape, *f_shape)
+            
+            # YIKES
+            if len(c_shape) > 1:
+                assert len(f_shape) >= len(c_shape)
+                permute_order = [0]
+                for i in range(len(c_shape)):
+                    permute_order.append(i+1)
+                    permute_order.append(i+1+len(c_shape))
+                for i in range(len(f_shape) - len(c_shape)):
+                    permute_order.append(permute_order[-1]+1)
+                
+                x_name = x_name.permute(*permute_order).contiguous()
+            
+            x_name = x_name.view(b, -1)
+            x_out.append(x_name)
+        
+        x_out = torch.cat(x_out, dim=-1)
+        
+        return x_out
+
+class OldCoarseToFineCursorDecoder(Module):
     def __init__(self,
         config,
         coarse_span,
@@ -96,11 +204,6 @@ class CoarseToFineCursorDecoder(Module):
         x_out = [no_op_x]
         for name in self.coarse_span.keys():
             start, stop = self.coarse_span.name_range(name)
-            
-            #ch, cw = self.coarse_span.get_shape(name)
-            #fh, fw, fp = self.fine_shape
-            #x_name = x[:,start:stop].view(b, ch, cw, fh, fw, fp)
-            #x_name = x_name.permute(0,1,3,2,4,5).contiguous()
             
             c_shape = self.coarse_span.get_shape(name)
             f_shape = self.fine_shape
