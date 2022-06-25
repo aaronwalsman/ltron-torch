@@ -34,15 +34,15 @@ from ltron_torch.models.transformer import (
 )
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
-from ltron_torch.models.coarse_to_fine_decoder import (
-    CoarseToFineCursorDecoderConfig, CoarseToFineCursorDecoder,
+from ltron_torch.models.cursor_decoder import (
+    CoarseToFineVisualCursorDecoder,
+    CoarseToFineSymbolicCursorDecoder,
 )
 from ltron_torch.models.padding import decat_padded_seq, get_seq_batch_indices
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
-    CoarseToFineCursorDecoderConfig,
 ):
     action_decoder_dropout = 0.1
 
@@ -73,8 +73,13 @@ class AutoTransformer(Module):
             coarse_cursor_span = self.embedding.tile_position_layout.subspace(
                 coarse_cursor_keys)
             fine_shape = self.embedding.cursor_fine_layout.get_shape(name)
-            decoders[name] = CoarseToFineCursorDecoder(
-                config, coarse_cursor_span, fine_shape)
+            decoders[name] = CoarseToFineVisualCursorDecoder(
+                coarse_cursor_span,
+                fine_shape,
+                channels=config.channels,
+                nonlinearity=config.nonlinearity,
+                default_k=4,
+            )
         
         for name in self.embedding.symbolic_cursor_names:
             subspace = self.action_space.subspaces[name]
@@ -84,7 +89,7 @@ class AutoTransformer(Module):
                     num_instances, num_snaps = subspace.layout.get_shape(key)
                     coarse_cursor_span.add_names(**{key:num_instances})
             fine_shape = (num_snaps,)
-            decoders[name] = CoarseToFineCursorDecoder(
+            decoders[name] = CoarseToFineSymbolicCursorDecoder(
                 config, coarse_cursor_span, fine_shape)
         
         # build the noncursor decoder

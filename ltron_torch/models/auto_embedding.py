@@ -174,6 +174,10 @@ class AutoEmbedding(Module):
             elif isinstance(space, SymbolicSnapSpace):
                 self.readout_layout.add_names(**{name:1})
                 self.symbolic_cursor_names.append(name)
+            elif isinstance(space, BrickShapeColorSpace):
+                self.readout_layout.add_names(**{name:1})
+                self.brick_inserters[name] = (
+                    space.num_shapes, space.num_colors)
             else:
                 self.noncursor_names.append(name)
         
