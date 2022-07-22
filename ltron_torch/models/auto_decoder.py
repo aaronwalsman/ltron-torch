@@ -1,5 +1,21 @@
+import torch
+from torch.nn import Module, ModuleDict, Sequential
+
 from ltron.config import Config
 from ltron.name_span import NameSpan
+from ltron.gym.spaces import (
+    MultiScreenPixelSpace,
+    SymbolicSnapSpace,
+    BrickShapeColorSpace,
+)
+
+from ltron_torch.models.mlp import linear_stack
+from ltron_torch.models.heads import LinearMultiheadDecoder
+from ltron_torch.models.cursor_decoder import (
+    CoarseToFineVisualCursorDecoder,
+    CoarseToFineSymbolicCursorDecoder,
+)
+from ltron_torch.models.brick_decoder import BrickDecoder
 
 class AutoDecoderConfig(Config):
     channels = 768
@@ -15,8 +31,15 @@ class AutoDecoder(Module):
         
         self.readout_layout = NameSpan(PAD=1)
         
+        self.combined_decoder_names = []
+        
+        decoders = {}
+        
         for name, space in action_space.subspaces.items():
             if isinstance(space, MultiScreenPixelSpace):
+                raise Exception('TODO')
+                #decoders[name] = CoarseToFineVisualCursorDecoder(
+                '''
                 self.visual_cursor_names.append(name)
                 self.readout_layout.add_names(**{name:1})
 
@@ -37,19 +60,52 @@ class AutoDecoder(Module):
                     self.cursor_colors[name].append(visualization_colors[
                             self.cursor_color_n % len(visualization_colors)])
                     self.cursor_color_n += 1
+                '''
             elif isinstance(space, SymbolicSnapSpace):
                 self.readout_layout.add_names(**{name:1})
-                self.symbolic_cursor_names.append(name)
+                decoders[name] = CoarseToFineSymbolicCursorDecoder(
+                    space.max_instances, config.channels,
+                )
             elif isinstance(space, BrickShapeColorSpace):
                 self.readout_layout.add_names(**{name:1})
-                self.brick_inserters[name] = (
-                    space.num_shapes, space.num_colors)
+                decoders[name] = BrickDecoder(
+                    space.num_shapes,
+                    space.num_colors,
+                    config.channels,
+                )
+                #self.brick_inserters[name] = (
+                #    space.num_shapes, space.num_colors)
             else:
-                self.noncursor_names.append(name)
+                #self.noncursor_names.append(name)
+                self.combined_decoder_names.append(name)
         
-        self.readout_layout.add_names(noncursor=1)
+        self.readout_layout.add_names(combined=1)
+        
+        # build the combined decoder
+        decoders['combined'] = Sequential(
+            linear_stack(
+                2,
+                config.channels,
+                nonlinearity=config.nonlinearity,
+                final_nonlinearity=True,
+                hidden_dropout=config.action_decoder_dropout,
+                out_dropout=config.action_decoder_dropout,
+            ),
+            LinearMultiheadDecoder(
+                config.channels,
+                {
+                    name:self.action_space.subspaces[name].n
+                    for name in self.combined_decoder_names
+                }
+            ),
+        )
+        
+        self.decoders = ModuleDict(decoders)
     
     def forward(self, x, readout_x, readout_t, seq_pad):
+        device = next(iter(self.parameters())).device
+        s, b, c = x.shape
+        
         decoder_x = {}
         
         max_seq = torch.max(seq_pad)
@@ -58,8 +114,13 @@ class AutoDecoder(Module):
         for name in self.readout_layout.keys():
             if name == 'PAD':
                 continue
+            
+            # get index associated with this readout name
             readout_index = self.readout_layout.ravel(name, 0)
+            
+            # find the indices of x corresponding to the readout index
             readout_s, readout_b = torch.where(readout_x == readout_index)
+            readout_i = (readout_t - min_t.view(1, -1))[readout_s, readout_b]
             name_x = x[readout_s, readout_b]
             sb = name_x.shape[0]
             name_x = self.decoders[name](name_x)
@@ -68,8 +129,8 @@ class AutoDecoder(Module):
             else:
                 decoder_x[name] = name_x
             
-            if readout_i is None:
-                readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
+            #if readout_i is None:
+            #    readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
         
         flat_x = torch.zeros(sb, self.action_space.n, device=device)
         last_dim = len(flat_x.shape)-1
@@ -78,7 +139,13 @@ class AutoDecoder(Module):
         out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
         out_x[readout_i, readout_b] = flat_x
         
+        #print(torch.topk(out_x, 4, dim=-1))
+        
+        #import pdb
+        #pdb.set_trace()
+        
         return out_x
     
     def tensor_to_distribution(self, x):
-        
+        import pdb
+        pdb.set_trace()
