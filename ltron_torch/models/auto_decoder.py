@@ -1,5 +1,6 @@
 import torch
 from torch.nn import Module, ModuleDict, Sequential
+from torch.distributions import Categorical
 
 from ltron.config import Config
 from ltron.name_span import NameSpan
@@ -73,10 +74,7 @@ class AutoDecoder(Module):
                     space.num_colors,
                     config.channels,
                 )
-                #self.brick_inserters[name] = (
-                #    space.num_shapes, space.num_colors)
             else:
-                #self.noncursor_names.append(name)
                 self.combined_decoder_names.append(name)
         
         self.readout_layout.add_names(combined=1)
@@ -109,7 +107,7 @@ class AutoDecoder(Module):
         decoder_x = {}
         
         max_seq = torch.max(seq_pad)
-        min_t = torch.min(readout_t, dim=0).values
+        #min_t = torch.min(readout_t, dim=0).values
         
         for name in self.readout_layout.keys():
             if name == 'PAD':
@@ -120,32 +118,35 @@ class AutoDecoder(Module):
             
             # find the indices of x corresponding to the readout index
             readout_s, readout_b = torch.where(readout_x == readout_index)
-            readout_i = (readout_t - min_t.view(1, -1))[readout_s, readout_b]
+            
+            #readout_i = (readout_t - min_t.view(1, -1))[readout_s, readout_b]
             name_x = x[readout_s, readout_b]
-            sb = name_x.shape[0]
+            #sb = name_x.shape[0]
             name_x = self.decoders[name](name_x)
             if isinstance(name_x, dict):
                 decoder_x.update(name_x)
             else:
                 decoder_x[name] = name_x
-            
-            #if readout_i is None:
-            #    readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
         
-        flat_x = torch.zeros(sb, self.action_space.n, device=device)
-        last_dim = len(flat_x.shape)-1
-        self.action_space.ravel_vector(decoder_x, out=flat_x, dim=last_dim)
+        #flat_x = torch.zeros(sb, self.action_space.n, device=device)
+        #last_dim = len(flat_x.shape)-1
+        #self.action_space.ravel_vector(decoder_x, out=flat_x, dim=last_dim)
         
-        out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
-        out_x[readout_i, readout_b] = flat_x
+        #out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
+        #out_x[readout_i, readout_b] = flat_x
         
-        #print(torch.topk(out_x, 4, dim=-1))
-        
-        #import pdb
-        #pdb.set_trace()
+        #ts, tb = readout_t.shape
+        ts = torch.max(seq_pad)
+        tb = seq_pad.shape[0]
+        out_x = torch.zeros(ts*tb, self.action_space.n, device=device)
+        self.action_space.ravel_vector(decoder_x, out=out_x, dim=1)
+        out_x = out_x.view(ts, tb, self.action_space.n)
         
         return out_x
     
     def tensor_to_distribution(self, x):
-        import pdb
-        pdb.set_trace()
+        s, b, a = x.shape
+        assert s == 1
+        distribution = Categorical(logits=x)
+        
+        return distribution
