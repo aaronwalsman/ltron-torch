@@ -164,13 +164,18 @@ class AutoEmbedding(Module):
             index = self.readout_layout.ravel(name, 0)
             readout_x.append(torch.full_like(time_step, index))
             readout_t.append(time_step)
-            readout_pad.append(seq_pad_t)
+            #readout_pad.append(seq_pad_t)
+            readout_pad.append(torch.full((b,), s).cuda())
         
         # concatenate the readout tokens
-        readout_x, cat_readout_pad = cat_multi_padded_seqs(
-            readout_x, readout_pad)
-        readout_t, _ = cat_multi_padded_seqs(readout_t, readout_pad)
-        readout_pad = cat_readout_pad
+        #readout_x, cat_readout_pad = cat_multi_padded_seqs(
+        #    readout_x, readout_pad)
+        #readout_t, _ = cat_multi_padded_seqs(readout_t, readout_pad)
+        #readout_pad = cat_readout_pad
+        readout_x = torch.cat(readout_x, dim=0)
+        readout_t = torch.cat(readout_t, dim=0)
+        readout_pad = sum(readout_pad)
+        #readout_pad = torch.full((b,), s).cuda()
         
         assert 'readout' not in auto_x
         auto_x['readout'] = readout_x
