@@ -6,6 +6,7 @@ import tarfile
 import numpy
 
 import torch
+from torch.nn.functional import cross_entropy
 from torch.nn.utils import clip_grad_norm_
 
 import tqdm
@@ -15,8 +16,10 @@ from conspiracy.plot import plot_logs, plot_logs_grid
 #from ltron.hierarchy import map_hierarchies, stack_numpy_hierarchies
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.rollout import rollout
+from ltron.dataset.tar_dataset import generate_tar_dataset
 
 from ltron_torch.models.padding import get_seq_batch_indices
+from ltron_torch.dataset.tar_dataset import TarDataset, build_episode_loader
 
 def rollout_epoch(
     name,
@@ -57,7 +60,7 @@ def rollout_epoch(
         #if expert_probability == 1. and not store_activations:
         b = observation['step'].shape[1]
         if expert_probability == 1.:
-            distribution = numpy.zeros(b, env.metadata['action_space'].n)
+            distribution = numpy.zeros((b, env.metadata['action_space'].n))
         
         else:
             # move observations to torch and cuda
@@ -81,39 +84,48 @@ def rollout_epoch(
             
             # convert model output to actions
             distribution = (
-                model.tensor_to_distribution(x).detach().cpu().numpy()
+                model.tensor_to_distribution(x).probs.detach().cpu().numpy()
             )
+            
+            s, b, c = distribution.shape
+            distribution = distribution.reshape(b, c)
         
         # insert expert actions
         for i in range(b):
             r = random.random()
             if r < expert_probability:
                 expert_actions = observation['expert'][0,i]
-                expert_actions = [
+                expert_actions = list(set([
                     a for a in expert_actions
                     if a != env.metadata['no_op_action']
-                ]
+                ]))
                 #expert_action = random.choice(expert_actions)
                 #actions[i] = expert_action
                 d = numpy.zeros(env.metadata['action_space'].n)
                 d[expert_actions] = 1. / len(expert_actions)
                 distribution[i] = d
         
+        #for bb in range(b):
+        #    max_i = numpy.argmax(distribution[bb])
+        #    print(max_i, distribution[bb][max_i])
+        
         return distribution, memory
     
     if tar_path:
-        shards = generate_tar_dataset(
-            name,
-            episodes,
-            shards=shards,
-            shard_start=shard_start,
-            save_episode_frequency=save_episode_frequency,
-            env=env,
-            actor_fn=actor_fn,
-            initial_memory=memory,
-            path=tar_path,
-            **kwargs,
-        )
+        with torch.no_grad():
+            shards = generate_tar_dataset(
+                name,
+                episodes,
+                shards=shards,
+                #shard_start=shard_start,
+                save_episode_frequency=save_episode_frequency,
+                env=env,
+                actor_fn=actor_fn,
+                initial_memory=memory,
+                path=tar_path,
+                rollout_mode=rollout_mode,
+                **kwargs,
+            )
         
         if additional_tar_paths:
             shards = shards + additional_tar_paths
@@ -121,10 +133,17 @@ def rollout_epoch(
         loader = build_episode_loader(dataset, batch_size, workers, shuffle)
     
     else:
-        rollout_episodes = rollout(
-            episodes, env, actor_fn=actor_fn, initial_memory=memory, **kwargs)
-        loader = rollout_episodes.batch_seq_iterator(
-            batch_size, finished_only=True, shuffle=shuffle)
+        with torch.no_grad():
+            rollout_episodes = rollout(
+                episodes,
+                env,
+                actor_fn=actor_fn,
+                initial_memory=memory,
+                rollout_mode=rollout_mode,
+                **kwargs
+            )
+            loader = rollout_episodes.batch_seq_iterator(
+                batch_size, finished_only=True, shuffle=shuffle)
     
     return loader
 
@@ -227,8 +246,6 @@ def rollout_epoch_old(
                     
                     # convert model output to actions
                     actions = model.tensor_to_actions(x, mode=rollout_mode)
-                    #for a in actions:
-                    #    print(model.action_space.unravel(a))
                 
                 # insert expert actions
                 for i in range(b):
@@ -290,31 +307,48 @@ def train_epoch(
     optimizer,
     scheduler,
     data_loader,
-    loss_log,
+    loss_log=None,
+    agreement_log=None,
     grad_norm_clip=None,
     supervision_mode='action',
     plot=False,
 ):
     print('-'*80)
     print('Training: %s'%name)
+    print('Supervision Mode: %s'%supervision_mode)
+    print('Optimizer Settings:')
+    print(optimizer)
     model.train()
     
     running_loss = None
     iterate = tqdm.tqdm(data_loader)
-    for batch, pad in iterate:
+    for batch, seq_pad in iterate:
         
         # convert observations to input tensors (x) and labels (y)
-        x = model.observation_to_tensors(batch, pad)
-        y = model.observation_to_label(batch, pad, supervision_mode)
+        x = model.observation_to_tensors(batch, seq_pad)
+        y = model.observation_to_label(batch, seq_pad, supervision_mode)
         
         # forward
         x = model(**x)
-
+        
         # compute loss
         loss = torch.sum(-torch.log_softmax(x, dim=-1) * y, dim=-1)
-        s_i, b_i = get_seq_batch_indices(torch.LongTensor(pad))
+        
+        # average loss over valid entries
+        s_i, b_i = get_seq_batch_indices(torch.LongTensor(seq_pad))
+        
         loss = loss[s_i, b_i].mean()
-
+        
+        if agreement_log is not None:
+            s, b, c = x.shape
+            max_x = torch.argmax(x, dim=-1).reshape(-1)
+            ss = torch.arange(s).view(s,1).expand(s,b).reshape(-1)
+            bb = torch.arange(b).view(1,b).expand(s,b).reshape(-1)
+            max_y = y[ss, bb, max_x].reshape(s, b)[s_i, b_i]
+            agreement = torch.sum(max_y > 0) / max_y.shape[0]
+            a = float(agreement.detach().cpu())
+            agreement_log.log(a)
+        
         # backward
         optimizer.zero_grad()
         loss.backward()
@@ -327,22 +361,34 @@ def train_epoch(
 
         # update log and tqdm
         l = float(loss)
-        loss_log.log(l)
+        if loss_log is not None:
+            loss_log.log(l)
         running_loss = running_loss or l
         running_loss = running_loss * 0.9 + l * 0.1
         iterate.set_description('loss: %.04f'%running_loss)
     
     if plot:
-        chart = plot_logs(
-            {'loss':loss_log},
-            border='line',
-            legend=True,
-            min_max_y=True,
-            colors={'loss':'RED'},
-            x_range=(0.2,1.),
-        )
-        print(chart)
-
+        if loss_log is not None:
+            loss_chart = plot_logs(
+                {'loss':loss_log},
+                border='line',
+                legend=True,
+                min_max_y=True,
+                colors={'loss':'RED'},
+                x_range=(0.2,1.),
+            )
+            print(loss_chart)
+        
+        if agreement_log is not None:
+            agreement_chart = plot_logs(
+                {'expert agreement':agreement_log},
+                border='line',
+                legend=True,
+                min_max_y=True,
+                colors={'expert agreement':'YELLOW'},
+                x_range=(0.2,1.),
+            )
+            print(agreement_chart)
 
 def evaluate_epoch(
     name,
@@ -354,37 +400,27 @@ def evaluate_epoch(
 ):
     print('-'*80)
     print('Evaluating: %s'%name)
-
+    
     avg_terminal_reward = 0.
     total_success = 0.
     total_episodes = 0
     for seq, pad in episodes:
-        #seq = episodes.get_seq(seq_id)
-        #reward = seq['reward'][-1]
-        #avg_terminal_reward += reward
-        #if reward >= success_value:
-        #    total_success += 1
-        print('MAKE SURE THE BELOW IS RIGHT')
-        import pdb
-        pdb.set_trace()
         
-        reward = seq['reward'][pad-1]
+        s, b = seq['reward'].shape
+        reward = seq['reward'][pad-1, range(b)]
         avg_terminal_reward += numpy.sum(reward)
         total_success += numpy.sum(reward >= success_value)
         total_episodes += len(pad)
-
-    #n = len(episodes)
-    #if n:
-    #    avg_terminal_reward /= n
-    #    avg_success = total_success/n
+    
     if total_episodes:
         avg_terminal_reward /= total_episodes
-        avg_success /= total_episodes
+        avg_success = total_success/total_episodes
 
     print('Average Terminal Reward: %f'%avg_terminal_reward)
     reward_log.log(avg_terminal_reward)
 
-    print('Average Success: %f (%i/%i)'%(avg_success, total_success, n))
+    print('Average Success: %f (%i/%i)'%(
+        avg_success, total_success, total_episodes))
     success_log.log(avg_success)
 
     chart = plot_logs_grid(
