@@ -13,8 +13,6 @@ import tqdm
 
 from conspiracy.plot import plot_logs, plot_logs_grid
 
-#from ltron.hierarchy import map_hierarchies, stack_numpy_hierarchies
-from ltron.gym.rollout_storage import RolloutStorage
 from ltron.rollout import rollout
 from ltron.dataset.tar_dataset import generate_tar_dataset
 
@@ -55,9 +53,7 @@ def rollout_epoch(
         if hasattr(model, 'reset_memory'):
             model.reset_memory(memory, terminal)
         
-        # if the expert probability is 1 and we don't need model
-        # activations, don't bother running the model forward pass
-        #if expert_probability == 1. and not store_activations:
+        # if the expert probability is 1, don't run the model forward pass
         b = observation['step'].shape[1]
         if expert_probability == 1.:
             distribution = numpy.zeros((b, env.metadata['action_space'].n))
@@ -146,160 +142,6 @@ def rollout_epoch(
                 batch_size, finished_only=True, shuffle=shuffle)
     
     return loader
-
-def rollout_epoch_old(
-    name,
-    episodes,
-    env,
-    model=None,
-    store_observations=True,
-    store_actions=True,
-    store_activations=True,
-    store_rewards=True,
-    rollout_mode='sample',
-    expert_probability=1.,
-):
-    print('-'*80)
-    print('Rolling Out %i Episodes: %s'%(episodes, name))
-    print('p(expert) = %.04f'%expert_probability)
-    print('rollout_mode = "%s"'%rollout_mode)
-    
-    # initialize storage for observations, actions, rewards and activations
-    storage = {}
-    if store_observations:
-        storage['observation'] = RolloutStorage(env.num_envs)
-    if store_actions:
-        storage['action'] = RolloutStorage(env.num_envs)
-    if store_activations:
-        storage['activation'] = RolloutStorage(env.num_envs)
-    if store_rewards:
-        storage['reward'] = RolloutStorage(env.num_envs)
-    
-    assert len(storage)
-    first_key, first_storage = next(iter(storage.items()))
-    
-    # put the model in eval mode
-    if expert_probability < 1.:
-        model.eval()
-        device = next(model.parameters()).device
-    
-    assert rollout_mode in ('sample', 'max')
-    b = env.num_envs
-
-    # reset
-    observation = env.reset()
-    terminal = numpy.ones(env.num_envs, dtype=numpy.bool)
-    reward = numpy.zeros(env.num_envs)
-    
-    with torch.no_grad():
-        if hasattr(model, 'initialize_memory') and expert_probability < 1.:
-            memory = model.initialize_memory(b)
-        else:
-            memory = None
-    
-        #for step in tqdm.tqdm(range(steps)):
-        progress = tqdm.tqdm(total=episodes)
-        with progress:
-            while first_storage.num_finished_seqs() < episodes:
-                # prep ---------------------------------------------------------
-                # start new sequences if necessary
-                if store_observations:
-                    storage['observation'].start_new_seqs(terminal)
-                if store_actions:
-                    storage['action'].start_new_seqs(terminal)
-                if store_activations:
-                    storage['activation'].start_new_seqs(terminal)
-                if store_rewards:
-                    storage['reward'].start_new_seqs(terminal)
-
-                # add latest observation to storage
-                if store_observations:
-                    storage['observation'].append_batch(observation=observation)
-                
-                # compute actions ----------------------------------------------
-                pad = numpy.ones(b, dtype=numpy.long)
-                observation = stack_numpy_hierarchies(observation)
-                
-                # if the expert probability is 1 and we don't need model
-                # activations, don't bother running the model forward pass
-                if expert_probability == 1. and not store_activations:
-                    actions = [0] * b
-                
-                else:
-                    # move observations to torch and cuda
-                    x = model.observation_to_tensors(
-                        {'observation':observation}, pad)
-                    
-                    # model forward
-                    if hasattr(model, 'initialize_memory'):
-                        if hasattr(model, 'forward_rollout'):
-                            x = model.forward_rollout(
-                                terminal, **x, memory=memory)
-                        else:
-                            x = model(**x, memory=memory)
-                        memory = x['memory']
-                    else:
-                        if hasattr(model, 'forward_rollout'):
-                            x = model.forward_rollout(terminal, **x)
-                        else:
-                            x = model(**x)
-                    
-                    # convert model output to actions
-                    actions = model.tensor_to_actions(x, mode=rollout_mode)
-                
-                # insert expert actions
-                for i in range(b):
-                    r = random.random()
-                    if r < expert_probability:
-                        expert_actions = observation['expert'][0,i]
-                        expert_actions = [
-                            a for a in expert_actions
-                            if a != env.metadata['no_op_action']
-                        ]
-                        expert_action = random.choice(expert_actions)
-                        actions[i] = expert_action
-                        
-                # step ---------------------------------------------------------
-                observation, reward, terminal, info = env.step(actions)
-                
-                # reset memory -------------------------------------------------
-                if hasattr(model, 'reset_memory'):
-                    model.reset_memory(memory, terminal)
-
-                # storage ------------------------------------------------------
-                if store_actions:
-                    a = stack_numpy_hierarchies(*actions)
-                    storage['action'].append_batch(action=a)
-
-                if store_activations:
-                    def to_numpy(xx):
-                        return xx[0].detach().cpu().numpy()
-                    a = map_hierarchies(to_numpy, x)
-                    storage['activation'].append_batch(activations=a)
-                
-                if store_rewards:
-                    storage['reward'].append_batch(reward=reward)
-                
-                update = first_storage.num_finished_seqs() - progress.n
-                progress.update(update)
-                
-            #progress.total = first_storage.num_finished_seqs()
-            #progress.n = first_storage.num_finished_seqs()
-            progress.n = episodes
-            progress.refresh()
-    
-    combined_storage = first_storage
-    for key, s in storage.items():
-        if key == first_key:
-            continue
-        
-        try:
-            combined_storage = combined_storage | s
-        except:
-            import pdb
-            pdb.set_trace()
-    
-    return combined_storage
 
 def train_epoch(
     name,

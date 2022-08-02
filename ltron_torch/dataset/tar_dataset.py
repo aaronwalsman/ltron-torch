@@ -27,7 +27,6 @@ class TarDataset(Dataset):
         tar_path, name = self.names[i]
         data = self.tar_files[tar_path].extractfile(name)
         data = numpy.load(data, allow_pickle=True)
-        #data = data['episode'].item()
         data = data['seq'].item()
         
         return data
@@ -52,7 +51,12 @@ def make_tar_dataset_and_loader(
     return dataset, loader
 
 def get_tarfiles_and_names(tar_paths, subset=None):
-    tar_files = {tp:tarfile.open(tp, 'r') for tp in tar_paths}
+    try:
+        tar_files = {tp:tarfile.open(tp, 'r') for tp in tar_paths}
+    except tarfile.ReadError:
+        print(tar_paths)
+        raise
+    
     names = []
     for tar_path, tar_file in tar_files.items():
         names.extend([(tar_path, name) for name in tar_file.getnames()])

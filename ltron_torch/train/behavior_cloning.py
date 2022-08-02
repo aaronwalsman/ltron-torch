@@ -132,17 +132,17 @@ def behavior_cloning(
                 'test',
                 config.test_episodes_per_epoch,
                 test_env,
-                model,
-                True,
-                True,
+                model=model,
                 rollout_mode='max',
-                expert_probability=0.
+                expert_probability=0.,
+                batch_size=config.batch_size,
+                workers=config.workers,
             )
         
         if test:
             evaluate_epoch(
                 'test',
-                test_episodes.batch_seq_iterator(1, finished_only=True),
+                test_episodes,
                 model,
                 success_reward_value,
                 test_reward_log,
@@ -153,7 +153,7 @@ def behavior_cloning(
             visualize_epoch(
                 'test',
                 epoch,
-                test_episodes.batch_seq_iterator(1, finished_only=True),
+                test_episodes,
                 config.visualization_episodes_per_epoch,
                 model,
             )

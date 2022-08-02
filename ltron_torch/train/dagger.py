@@ -1,18 +1,10 @@
-#!/usr/bin/env python
 import time
 import os
 import tarfile
 
-import numpy
-
 import tqdm
 
 import torch
-import torch.autograd as autograd
-from torch.distributions import Categorical
-from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
-
-from splendor.image import save_image
 
 from conspiracy.log import Log
 
@@ -78,6 +70,7 @@ def dagger(
     train_loss_log=None,
     train_reward_log=None,
     train_success_log=None,
+    train_agreement_log=None,
     test_reward_log=None,
     test_success_log=None,
 ):
@@ -94,6 +87,8 @@ def dagger(
         train_reward_log = Log()
     if train_success_log is None:
         train_success_log = Log()
+    if train_agreement_log is None:
+        train_agreement_log = Log()
     if test_reward_log is None:
         test_reward_log = Log()
     if test_success_log is None:
@@ -127,69 +122,16 @@ def dagger(
                     (1-t) * config.expert_probability_start
                 )
             
-            '''
-            # rollout training episodes
             if config.recent_epochs_to_save:
-                r = epoch % config.recent_epochs_to_save
-                #scratch_path = './data_scratch/recent_%04i.tar'%r
-                scratch_path = './data_scratch'
-                new_shards = generate_tar_dataset(
-                    'train',
-                    config.train_episodes_per_epoch,
-                    env=train_env,
-                    model=model,
-                    expert_probability=expert_probability,
-                    shards=1,
-                    shard_start=r,
-                    path=scratch_path,
-                )
-                
-                # build the recent loader (for evaluation/visualization)
-                recent_train_dataset = TarDataset(new_shards)
-                recent_train_loader = build_episode_loader(
-                    recent_train_dataset, 1, 0, shuffle=False)
-                
-                # build the full loader (for training)
-                all_shards = [
-                    './data_scratch/train_%04i.tar'%i
-                    for i in range(config.recent_epochs_to_save)
-                ]
-                all_shards = [s for s in all_shards if os.path.exists(s)]
-                assert len(all_shards)
-                full_train_dataset = TarDataset(all_shards)
-                full_train_loader = build_episode_loader(
-                    full_train_dataset,
-                    config.batch_size,
-                    config.workers,
-                    shuffle=True,
-                )
-                
-            else:
-                #save_episodes = None
-                train_episodes = rollout_epoch(
-                    'train',
-                    config.train_episodes_per_epoch,
-                    train_env,
-                    model,
-                    True,
-                    True,
-                    'sample',
-                    expert_probability=expert_probability,
-                    #save_episodes=save_episodes,
-                )
-                recent_train_loader = train_episodes.batch_seq_iterator(
-                    1, finished_only=True, shuffle=False)
-                full_train_loader = train_episodes.batch_seq_iterator(
-                    config.batch_size, finished_only=True, shuffle=True)
-            '''
-            if config.recent_epochs_to_save:
-                shard_index = epoch % config.recent_epochs_to_save
+                e = epoch - 1
+                shard_index = e % config.recent_epochs_to_save
                 #scratch_path = './data_scratch/recent_%04i.tar'%r
                 scratch_path = './data_scratch'
                 additional_tar_paths = [
-                    './data_scratch/train_%04i.tar'%i
+                    '%s/train_%04i.tar'%(scratch_path, i)
                     for i in range(config.recent_epochs_to_save)
-                    if i != shard_index
+                    if i != shard_index and i < e
+                    and os.path.exists('%s/train_%04i.tar'%(scratch_path, i))
                 ]
             else:
                 scratch_path = None
@@ -201,9 +143,12 @@ def dagger(
                 model=model,
                 rollout_mode='sample',
                 expert_probability=expert_probability,
+                batch_size=config.batch_size,
+                workers=config.workers,
+                shuffle=True,
                 tar_path=scratch_path,
                 additional_tar_paths=additional_tar_paths,
-                shards=shards,
+                shards=1,
                 start_shard=shard_index,
             )
             
@@ -226,7 +171,8 @@ def dagger(
                     optimizer,
                     scheduler,
                     train_loader,
-                    train_loss_log,
+                    loss_log=train_loss_log,
+                    agreement_log=train_agreement_log,
                     grad_norm_clip=config.grad_norm_clip,
                     supervision_mode=config.supervision_mode,
                     plot=(i==config.passes_per_epoch),
@@ -253,28 +199,32 @@ def dagger(
                 train_loss_log,
                 train_reward_log,
                 train_success_log,
+                train_agreement_log,
                 test_reward_log,
                 test_success_log,
             )
         
         # rollout test episodes
         if test_this_epoch or visualize_this_epoch:
-            test_episodes = rollout_epoch(
+            test_loader = rollout_epoch(
                 'test',
                 config.test_episodes_per_epoch,
                 test_env,
                 model,
-                True,
-                visualize_this_epoch,
                 rollout_mode='max',
                 expert_probability=0.,
+                batch_size=config.batch_size,
+                workers=config.workers,
+                shuffle=False,
+                #True,
+                #visualize_this_epoch,
             )
         
         # evaluate test episodes
         if test_this_epoch:
             evaluate_epoch(
                 'test',
-                test_episodes.batch_seq_iterator(1, finished_only=True),
+                test_loader,
                 model,
                 success_reward_value,
                 test_reward_log,
@@ -286,7 +236,7 @@ def dagger(
             visualize_epoch(
                 'test',
                 epoch,
-                test_episodes.batch_seq_iterator(1, finished_only=True),
+                test_loader,
                 config.visualization_episodes_per_epoch,
                 model,
             )
@@ -298,44 +248,6 @@ def dagger(
 
 # train subfunctions ===========================================================
 
-'''
-def train_dagger_epoch(
-    config,
-    epoch,
-    model,
-    optimizer,
-    scheduler,
-    loader,
-    train_loss_log,
-):
-    # create dataset and loader if training on recent data
-    #if config.recent_epochs_to_save:
-    #        
-    #    dataset = TarDataset(scratch_files)
-    #    loader = build_episode_loader(
-    #        dataset, config.batch_size, config.workers, shuffle=True)
-    
-    # randomly iterate through the completed episodes
-    for i in range(1, config.passes_per_epoch+1):
-        # make the dataset iterable
-        #if config.recent_epochs_to_save:
-        #    data = loader
-        #else:
-        #    data = episodes.batch_seq_iterator(config.batch_size, shuffle=True)
-        
-        train_epoch(
-            'Pass %i'%i,
-            model,
-            optimizer,
-            scheduler,
-            loader,
-            train_loss_log,
-            grad_norm_clip=config.grad_norm_clip,
-            supervision_mode=config.supervision_mode,
-            plot=(i==config.passes_per_epoch),
-        )
-'''
-
 def save_checkpoint(
     config,
     epoch,
@@ -345,6 +257,7 @@ def save_checkpoint(
     train_loss_log,
     train_reward_log,
     train_success_log,
+    train_agreement_log,
     test_reward_log,
     test_success_log,
 ):
@@ -364,6 +277,7 @@ def save_checkpoint(
         'train_loss_log' : train_loss_log.get_state(),
         'train_reward_log' : train_reward_log.get_state(),
         'train_success_log' : train_success_log.get_state(),
+        'train_agreement_log' : train_agreement_log.get_state(),
         'test_reward_log' : test_reward_log.get_state(),
         'test_success_log' : test_success_log.get_state(),
     }

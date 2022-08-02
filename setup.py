@@ -20,6 +20,9 @@ setuptools.setup(
         'console_scripts' : [
             'train_break_and_make_bc='
                 'ltron_torch.train.break_and_make_bc:train_break_and_make_bc',
+            'train_break_and_make_dagger='
+                'ltron_torch.train.break_and_make_dagger:'
+                'train_break_and_make_dagger',
             'train_edit_bc='
                 'ltron_torch.train.edit_bc:train_edit_bc',
             'train_edit_dagger='

@@ -85,7 +85,11 @@ def train_edit_bc(config=None):
             print('Warning: loading config from checkpoint '
                 'ignores command line arguments')
             config = EditBCConfig(**checkpoint['config'])
+        
+        # model
         model_checkpoint = checkpoint['model']
+        
+        # optimizer
         if config.train_frequency:
             optimizer_checkpoint = checkpoint['optimizer']
         else:
@@ -95,7 +99,7 @@ def train_edit_bc(config=None):
         scheduler_checkpoint = checkpoint['scheduler']
         
         # logs
-        train_loss_log_checkpoint = checkpoint.get('train_log_loss', None)
+        train_loss_log_checkpoint = checkpoint.get('train_loss_log', None)
         test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
         test_success_log_checkpoint = checkpoint.get('test_success_log', None)
         
@@ -163,18 +167,18 @@ def train_edit_bc(config=None):
         )
     
     print('-'*80)
-    print('Building Logs')
-    train_loss_log = Log(state=train_loss_log_checkpoint)
-    test_reward_log = Log(state=test_reward_log_checkpoint)
-    test_success_log = Log(state=test_success_log_checkpoint)
-    
-    print('-'*80)
     print('Building Optimizer')
     optimizer = build_optimizer(config, model, optimizer_checkpoint)
     
     print('-'*80)
     print('Building Scheduler')
     scheduler = build_scheduler(config, optimizer, scheduler_checkpoint)
+    
+    print('-'*80)
+    print('Building Logs')
+    train_loss_log = Log(state=train_loss_log_checkpoint)
+    test_reward_log = Log(state=test_reward_log_checkpoint)
+    test_success_log = Log(state=test_success_log_checkpoint)
 
     behavior_cloning(
         config,
