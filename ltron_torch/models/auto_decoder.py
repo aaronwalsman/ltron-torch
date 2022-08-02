@@ -117,25 +117,15 @@ class AutoDecoder(Module):
             readout_index = self.readout_layout.ravel(name, 0)
             
             # find the indices of x corresponding to the readout index
-            readout_s, readout_b = torch.where(readout_x == readout_index)
+            readout_s, readout_b = torch.where(readout_x['x'] == readout_index)
             
-            #readout_i = (readout_t - min_t.view(1, -1))[readout_s, readout_b]
             name_x = x[readout_s, readout_b]
-            #sb = name_x.shape[0]
             name_x = self.decoders[name](name_x)
             if isinstance(name_x, dict):
                 decoder_x.update(name_x)
             else:
                 decoder_x[name] = name_x
         
-        #flat_x = torch.zeros(sb, self.action_space.n, device=device)
-        #last_dim = len(flat_x.shape)-1
-        #self.action_space.ravel_vector(decoder_x, out=flat_x, dim=last_dim)
-        
-        #out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
-        #out_x[readout_i, readout_b] = flat_x
-        
-        #ts, tb = readout_t.shape
         ts = torch.max(seq_pad)
         tb = seq_pad.shape[0]
         out_x = torch.zeros(ts*tb, self.action_space.n, device=device)

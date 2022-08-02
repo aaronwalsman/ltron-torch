@@ -1,11 +1,24 @@
 import numpy
 
 import torch
-from torch.nn import Module, ModuleList, Linear, Embedding, LayerNorm
+from torch.nn import (
+    Module, ModuleList, ModuleDict, Linear, Embedding, LayerNorm)
 
 from ltron_torch.models.padding import compress_tensors
 
 # raw data type embeddings
+class NormalizedEmbedding(Module):
+    def __init__(self, num_embeddings, channels):
+        super().__init__()
+        self.embedding = Embedding(num_embeddings, channels)
+        self.norm = LayerNorm(channels)
+    
+    def forward(self, x):
+        x = self.embedding(x)
+        x = self.norm(x)
+        return x
+
+'''
 class TemporalEmbedding(Module):
     def __init__(self, observation_space, channels):
         super().__init__()
@@ -16,6 +29,11 @@ class TemporalEmbedding(Module):
         x = self.embedding(x)
         x = self.norm(x)
         return x
+'''
+
+class TemporalEmbedding(NormalizedEmbedding):
+    def __init__(self, observation_space, channels):
+        super().__init__(observation_space.max_steps, channels)
 
 class TileEmbedding(Module):
     def __init__(self, tile_h, tile_w, tile_c, channels):
@@ -48,6 +66,84 @@ class PoseEmbedding(Module):
         return x
 
 # observation space embeddings
+'''
+# Too clever... how would you batch this thing?
+class DiscreteLayoutEmbedding(Module):
+    def __init__(self, layout, channels):
+        self.temporal_embedding = temporal_embedding
+        
+        def make_layout_embedding(layout):
+            embedding = {}
+            for name in layout.keys():
+                shape = layout.get_shape(name)
+                if isinstance(shape, NameSpan):
+                    embedding[name] = make_layout_embedding(shape)
+                else:
+                    shape_embeddings = []
+                    for dim in shape:
+                        shape_embeddings.append(
+                            NormalizedEmbedding(dim, channels))
+            
+            return ModuleDict(embedding)
+        
+        self.norm = LayerNorm(channels)
+    
+    def forward(self, x):
+'''
+
+def MultiScreenPixelEmbedding(Module):
+    def __init__(
+        self,
+        space,
+        channels,
+        temporal_embedding,
+        fine_shape,
+    ):
+        super().__init__()
+        
+        self.space = space
+        
+        # temporal embedding
+        self.temporal_embedding = temporal_embedding
+        
+        # fine embedding
+        self.fine_span = NameSpan(**{'screen':fine_shape, 'NONE':1})
+        self.fine_embedding = NormalizedEmbedding(self.fine_span.n, channels)
+        
+        # coarse embedding
+        self.coarse_span = NameSpan()
+        for name in space.layout.keys():
+            if name == 'NO_OP' or name == 'DESELECT':
+                self.coarse_span.add_names(name, 1)
+            else:
+                screen_shape = space.layout.get_shape(name)
+                assert all(s%f == 0 for s, f in zip(screen_shape, fine_shape))
+                coarse_shape = [s//f for s, f in zip(screen_shape, fine_shape)]
+                self.coarse_span.add_names(name, coarse_shape)
+        self.coarse_embedding = NormalizedEmbedding(
+            self.coarse_span.n, channels)
+        
+        self.sum_norm = LayerNorm(channels)
+    
+    def observation_to_tensors(observations, t, pad, device):
+        coarse_x = []
+        fine_x = []
+        
+        # doing this in a loop is not ideal, but it's fast
+        for i in observations:
+            nyxc = self.space.unravel(i)
+            n = nyxc[0]
+            if n == 'NO_OP' or n == 'DESELECT':
+                coarse_x.append(self.coarse_span.ravel(n, 0))
+                #fine_x.append(self.fine_span.ravel(
+    
+    def forward(self, coarse_x, fine_x, t, pad):
+        out_x = self.temporal_embedding(t)
+        out_x = out_x + self.coarse_embedding(coarse_x)
+        out_x = out_x + self.fine_embedding(fine_x)
+        out_x = self.sum_norm(out_x)
+        
+        return out_x
 
 def build_shared_masked_tiled_image_embeddings(
     spaces,
@@ -79,6 +175,8 @@ class MaskedTiledImageEmbedding(Module):
         temporal_embedding,
         tile_embedding=None,
     ):
+        super().__init__()
+        
         # temporal embedding
         self.temporal_embedding = temporal_embedding
         
@@ -104,7 +202,7 @@ class MaskedTiledImageEmbedding(Module):
         
         return x, t, pad
 
-class DiscreteEmbedding(Module):
+class DiscreteTemporalEmbedding(Module):
     def __init__(self, num_embeddings, channels, temporal_embedding):
         super().__init__()
         self.temporal_embedding = temporal_embedding
@@ -126,7 +224,7 @@ class DiscreteEmbedding(Module):
         
         return out_x, t, pad
 
-class MultiDiscreteEmbedding(Module):
+class MultiDiscreteTemporalEmbedding(Module):
     def __init__(self,
         observation_space,
         channels,
@@ -155,135 +253,6 @@ class MultiDiscreteEmbedding(Module):
         
         out_x = self.sum_norm(out_x)
         return out_x, t, pad
-
-'''
-class TileEmbedding(Module):
-    def __init__(self, tile_h, tile_w, tile_c, channels):
-        super().__init__()
-        self.tile_linear = Linear(tile_h * tile_w * tile_c, channels)
-    
-    def forward(self, x):
-        s, b, h, w, c = x.shape
-        x = x.view(s, b, h*w*c)
-        x = self.tile_linear(x)
-        return x
-
-class OldTokenEmbedding(Module):
-    def __init__(self, vocabulary, channels):
-        super().__init__()
-        self.embedding = Embedding(vocabulary, channels)
-    
-    def forward(self, x):
-        x = self.embedding(x)
-        return x
-
-class TokenEmbedding(Module):
-    def __init__(self,
-        observation_space,
-        channels,
-        temporal_embedding,
-        token_embedding=None,
-        token_norm=None,
-        #temporal_embedding=None,
-        #temporal_norm=None,
-        #max_time_steps=None
-    ):
-        super().__init__()
-        
-        self.temporal_embedding = temporal_embedding
-        
-        self.token_embedding = token_embedding or Embedding(
-            observation_space.total, channels)
-        self.token_norm = token_norm or LayerNorm(channels)
-        
-        #self.temporal_embedding = temporal_embedding or Embedding(
-        #    max_time_steps, channels)
-        #self.temporal_norm = temporal_norm or LayerNorm(channels)
-        
-    def observation_to_tensors(self, observation, t, pad, device):
-        x = torch.LongTensor(observation).to(device)
-        t = torch.LongTensor(t).to(device)
-        pad = torch.LongTensor(pad).to(device)
-        return {'x':x}, t, pad
-    
-    def forward(self, x, t, pad):
-        x = self.token_embedding(x)
-        x = self.token_norm(x)
-        
-        #t = self.temporal_embedding(t)
-        #t = self.temporal_norm(t)
-        t = self.temporal_embedding(t)
-        
-        x = x+t
-        return x
-'''
-
-'''
-class MultiAssemblyEmebdding(Module):
-    
-    #Wraps multiple AssemblyEmbeddings so that they all share the same
-    #shape, color, and pose embeddings
-    
-    def __init__(self,
-        observation_spaces,
-        channels,
-        temporal_embedding,
-    ):
-        # figure out how many different shapes and colors each assebly provides
-        # and make sure they all match
-        num_shapes = set()
-        num_colors = set()
-        for name, observation_space in observation_spaces.items():
-            num_shapes.add(numpy.max(observation_space['shape'].high+1))
-            num_colors.add(numpy.max(observation_space['color'].high+1))
-        assert len(num_shapes) == 1 and len(num_colors) == 1
-        self.num_shapes = next(iter(num_shapes))
-        self.num_colors = next(iter(num_colors))
-        
-        # shape embedding/norm
-        self.shape_embedding = Embedding(self.num_shapes, channels)
-        self.shape_norm = LayerNorm(channels)
-        
-        # color embedding/norm
-        self.color_embedding = Embedding(self.num_colors, channels)
-        self.color_norm = ColorNorm(channels)
-        
-        # pose embedding/norm
-        self.pose_embedding = PoseEmbedding(channels)
-        self.pose_norm = pose_norm or LayerNorm(channels)
-        
-        # index embedding/norm
-        assembly_embeddings = {}
-        for name, observation_space in observation_spaces.items():
-            assembly_embeddings[name] = AssemblyEmbedding(
-                observation_space,
-                channels,
-                temporal_embedding,
-                shape_embedding=self.shape_embedding,
-                shape_norm=self.shape_norm,
-                color_embedding=self.color_embedding,
-                color_norm=self.color_norm,
-                pose_embedding=self.pose_embedding,
-                pose_norm=self.pose_norm,
-            )
-        self.assembly_embeddings = ModuleDict(assembly_embeddings)
-    
-    def observation_to_tensors(self, observation):
-        out = {}
-        for name, assembly_embedding in self.assembly_embeddings.items():
-            out[name] = assembly_embedding.observation_to_tensors(
-                observation[name]
-            )
-        
-        return out
-    
-    def forward(self, **assembly_x):
-        out = {}
-        for name, x in assembly_x.items():
-            out[name] = self.assembly_embeddings[name](**x)
-        
-        return out
-'''
 
 def build_shared_assembly_embeddings(
     assembly_spaces,
@@ -343,9 +312,6 @@ class AssemblyEmbedding(Module):
         instance_id_embedding=None,
         instance_id_norm=None,
         sum_norm=None,
-        #temporal_embedding=None,
-        #temporal_norm=None,
-        #max_time_steps=None,
     ):
         
         super().__init__()
@@ -377,11 +343,6 @@ class AssemblyEmbedding(Module):
         
         # sum_norm
         self.sum_norm = sum_norm or LayerNorm(channels)
-        
-        # temporal embedding/norm
-        #self.temporal_embedding = temporal_embedding or Embedding(
-        #    max_time_steps, channels)
-        #self.temporal_norm = temporal_norm or LayerNorm(channels)
     
     def observation_to_tensors(self, observation, t, pad, device):
         shape = torch.LongTensor(observation['shape']).to(device)

@@ -63,6 +63,7 @@ class MemoryAttention(Module):
     def forward(self,
         xq, pad, xk=None, xv=None, mask=None, use_memory=None,
     ):
+        
         # set defaults
         if xk is None:
             xk = xq

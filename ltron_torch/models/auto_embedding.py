@@ -1,7 +1,7 @@
 import numpy
 
 import torch
-from torch.nn import Module, Embedding, ModuleDict, LayerNorm
+from torch.nn import Module, ModuleDict, Dropout
 
 from gym.spaces import Discrete
 
@@ -26,8 +26,8 @@ from ltron_torch.models.embedding import (
     TemporalEmbedding,
     build_shared_assembly_embeddings,
     build_shared_masked_tiled_image_embeddings,
-    DiscreteEmbedding,
-    MultiDiscreteEmbedding,
+    DiscreteTemporalEmbedding,
+    MultiDiscreteTemporalEmbedding,
 )
 from ltron_torch.models.heads import LinearMultiheadDecoder
 from ltron_torch.gym_tensor import default_tile_transform
@@ -54,6 +54,9 @@ class AutoEmbedding(Module):
         self.time_step_name = None
         self.time_step_space = None
         
+        # build the final dropout layer
+        self.dropout = Dropout(config.embedding_dropout)
+        
         # build the temporal embedding
         for name, space in observation_space.items():
             if isinstance(space, TimeStepSpace):
@@ -66,10 +69,9 @@ class AutoEmbedding(Module):
             self.time_step_space, config.channels)
         
         # build the readout embedding
-        self.readout_embedding = DiscreteEmbedding(
+        self.readout_embedding = DiscreteTemporalEmbedding(
             readout_layout.total,
             config.channels,
-            config.embedding_dropout,
             self.temporal_embedding,
         )
         
@@ -82,7 +84,6 @@ class AutoEmbedding(Module):
             tile_embeddings = build_shared_masked_tiled_image_embeddings(
                 tile_subspaces,
                 config.channels,
-                config.embedding_dropout,
                 self.temporal_embedding,
             )
             embeddings.update(tile_embeddings)
@@ -96,7 +97,6 @@ class AutoEmbedding(Module):
             assembly_embeddings = build_shared_assembly_embeddings(
                 assembly_subspaces,
                 config.channels,
-                config.embedding_dropout,
                 self.temporal_embedding,
             )
             embeddings.update(assembly_embeddings)
@@ -104,10 +104,9 @@ class AutoEmbedding(Module):
         # build other embeddings
         for name, space in observation_space.items():
             if isinstance(space, MultiScreenInstanceSnapSpace):
-                embeddings[name] = MultiDiscreteEmbedding(
+                embeddings[name] = MultiDiscreteTemporalEmbedding(
                     space,
                     config.channels,
-                    config.embedding_dropout,
                     self.temporal_embedding,
                 )
             
@@ -116,10 +115,9 @@ class AutoEmbedding(Module):
                 pass
             
             elif isinstance(space, Discrete):
-                embeddings[name] = DiscreteEmbedding(
+                embeddings[name] = DiscreteTemporalEmbedding(
                     space.n,
                     config.channels,
-                    config.embedding_dropout,
                     self.temporal_embedding,
                 )
         
@@ -164,21 +162,15 @@ class AutoEmbedding(Module):
             index = self.readout_layout.ravel(name, 0)
             readout_x.append(torch.full_like(time_step, index))
             readout_t.append(time_step)
-            #readout_pad.append(seq_pad_t)
             readout_pad.append(torch.full((b,), s).cuda())
         
         # concatenate the readout tokens
-        #readout_x, cat_readout_pad = cat_multi_padded_seqs(
-        #    readout_x, readout_pad)
-        #readout_t, _ = cat_multi_padded_seqs(readout_t, readout_pad)
-        #readout_pad = cat_readout_pad
         readout_x = torch.cat(readout_x, dim=0)
         readout_t = torch.cat(readout_t, dim=0)
         readout_pad = sum(readout_pad)
-        #readout_pad = torch.full((b,), s).cuda()
         
         assert 'readout' not in auto_x
-        auto_x['readout'] = readout_x
+        auto_x['readout'] = {'x':readout_x}
         auto_t['readout'] = readout_t
         auto_pad['readout'] = readout_pad
         
@@ -191,13 +183,19 @@ class AutoEmbedding(Module):
         
         # embeddings
         for name, embedding in self.embeddings.items():
-            out_x[name], out_t[name], out_pad[name] = embedding(
-                **x[name], t=t[name], pad=pad[name]
-            )
+            try:
+                x_n, t_n, pad_n = embedding(**x[name], t=t[name], pad=pad[name])
+                x_n = self.dropout(x_n)
+                out_x[name] = x_n
+                out_t[name] = t_n
+                out_pad[name] = pad_n
+            except:
+                print('Forwward failed while embedding: %s'%name)
+                raise
         
         name = 'readout'
         out_x[name], out_t[name], out_pad[name] = self.readout_embedding(
-            x[name], t[name], pad[name])
+            **x[name], t=t[name], pad=pad[name])
         
         # return
         return out_x, t, pad

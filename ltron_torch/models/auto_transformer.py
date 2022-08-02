@@ -5,7 +5,14 @@ import json
 import numpy
 
 import torch
-from torch.nn import Module, Linear, LayerNorm, Sequential, ModuleDict
+from torch.nn import (
+    Module,
+    Linear,
+    LayerNorm,
+    Sequential,
+    ModuleDict,
+    Parameter,
+)
 from torch.distributions import Categorical
 
 import tqdm
@@ -34,11 +41,15 @@ from ltron_torch.models.transformer import (
 )
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
+from ltron_torch.models.auto_decoder import (
+    AutoDecoderConfig, AutoDecoder)
 from ltron_torch.models.cursor_decoder import (
     CoarseToFineVisualCursorDecoder,
     CoarseToFineSymbolicCursorDecoder,
 )
-from ltron_torch.models.padding import decat_padded_seq, get_seq_batch_indices
+from ltron_torch.models.padding import (
+    cat_multi_padded_seqs, decat_padded_seq, get_seq_batch_indices,
+)
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
@@ -58,12 +69,26 @@ class AutoTransformer(Module):
         self.observation_space = observation_space
         self.action_space = action_space
         
+        # build the decoder
+        # (do this before the encoder because we need the readout_layout)
+        self.decoder = AutoDecoder(config, action_space)
+        
         # build the token embedding
-        self.embedding = AutoEmbedding(config, observation_space, action_space)
+        self.embedding = AutoEmbedding(
+            config, observation_space, self.decoder.readout_layout)
         
         # build the transformer
         self.encoder = Transformer(config)
         
+        # TEMP ================================
+        #time_steps = 10
+        #self.temp_weights = Parameter(
+        #    torch.zeros(config.channels, action_space.n)
+        #)
+        self.temp_decoder = Linear(config.channels, action_space.n)
+        # TEMP ================================
+        
+        '''
         # build cursor decoders
         decoders = {}
         for name in self.embedding.visual_cursor_names:
@@ -92,25 +117,28 @@ class AutoTransformer(Module):
             decoders[name] = CoarseToFineSymbolicCursorDecoder(
                 config, coarse_cursor_span, fine_shape)
         
-        # build the noncursor decoder
-        decoders['noncursor'] = Sequential(
-            linear_stack(
-                2,
-                config.channels,
-                nonlinearity=config.nonlinearity,
-                final_nonlinearity=True,
-                hidden_dropout=config.action_decoder_dropout,
-                out_dropout=config.action_decoder_dropout,
-            ),
-            LinearMultiheadDecoder(
-                config.channels,
-                {name:self.action_space.subspaces[name].n
-                 for name in self.embedding.noncursor_names
-                }
-            ),
-        )
+        for name in self.embedding.brick_inserters:
+            pass
+        '''
+        ## build the noncursor decoder
+        #decoders['noncursor'] = Sequential(
+        #    linear_stack(
+        #        2,
+        #        config.channels,
+        #        nonlinearity=config.nonlinearity,
+        #        final_nonlinearity=True,
+        #        hidden_dropout=config.action_decoder_dropout,
+        #        out_dropout=config.action_decoder_dropout,
+        #    ),
+        #    LinearMultiheadDecoder(
+        #        config.channels,
+        #        {name:self.action_space.subspaces[name].n
+        #         for name in self.embedding.noncursor_names
+        #        }
+        #    ),
+        #)
         
-        self.decoders = ModuleDict(decoders)
+        #self.decoders = ModuleDict(decoders)
         
         # initialize weights
         if checkpoint is not None:
@@ -123,111 +151,182 @@ class AutoTransformer(Module):
     def zero_all_memory(self):
         self.encoder.zero_all_memory()
     
-    def observation_to_tensors(self, batch, sequence_pad):
-        return self.embedding.observation_to_tensors(batch, sequence_pad)
+    def observation_to_tensors(self, batch, seq_pad):
+        device = next(iter(self.parameters())).device
+        x = self.embedding.observation_to_tensors(batch, seq_pad)
+        x['seq_pad'] = torch.LongTensor(seq_pad).to(device)
+        return x
     
-    def forward(self,
-        tile_x,
-        tile_t,
-        tile_yx,
-        tile_pad,
-        token_x,
-        token_t,
-        token_pad,
-        #assembly_shape,
-        #assembly_color,
-        #assembly_instance,
-        #assembly_pose,
-        #assembly_t,
-        #assembly_pad,
-        visual_cursor_t,
-        visual_cursor_fine_yxp,
-        visual_cursor_coarse_yx,
-        visual_cursor_pad,
-        #symbolic_cursor_x,
-        #symbolic_cursor_t,
-        #symbolic_cursor_pad,
-        auto_x,
-        auto_t,
-        auto_pad,
-        readout_x,
-        readout_t,
-        readout_pad,
-        seq_pad,
-        use_memory=None,
-    ):
-        x, t, pad = self.embedding(
-            tile_x,
-            tile_t,
-            tile_yx,
-            tile_pad,
-            token_x,
-            token_t,
-            token_pad,
-            #assembly_shape,
-            #assembly_color,
-            #assembly_instance,
-            #assembly_pose,
-            #assembly_t,
-            #assembly_pad,
-            visual_cursor_t,
-            visual_cursor_fine_yxp,
-            visual_cursor_coarse_yx,
-            visual_cursor_pad,
-            #symbolic_cursor_x,
-            #symbolic_cursor_t,
-            #symbolic_cursor_pad,
-            auto_x,
-            auto_t,
-            auto_pad,
-            readout_x,
-            readout_t,
-            readout_pad,
-            seq_pad,
-        )
+    def forward(self, x, t, pad, seq_pad, use_memory=None):
+    #    tile_x,
+    #    tile_t,
+    #    tile_yx,
+    #    tile_pad,
+    #    token_x,
+    #    token_t,
+    #    token_pad,
+    #    #assembly_shape,
+    #    #assembly_color,
+    #    #assembly_instance,
+    #    #assembly_pose,
+    #    #assembly_t,
+    #    #assembly_pad,
+    #    visual_cursor_t,
+    #    visual_cursor_fine_yxp,
+    #    visual_cursor_coarse_yx,
+    #    visual_cursor_pad,
+    #    #symbolic_cursor_x,
+    #    #symbolic_cursor_t,
+    #    #symbolic_cursor_pad,
+    #    auto_x,
+    #    auto_t,
+    #    auto_pad,
+    #    readout_x,
+    #    readout_t,
+    #    readout_pad,
+    #    seq_pad,
+    #    use_memory=None,
+    #):
+        
+        readout_x = x['readout']
+        readout_t = t['readout']
+        
+        '''
+        # TEMP ============================
+        s, b = readout_t.shape
+        one_s, one_b = torch.where(readout_x == 1)
+        one_t = readout_t[one_s, one_b]
+        max_t = torch.max(one_t)
+        #min_t = torch.min(one_t)
+        #import pdb
+        #pdb.set_trace()
+        # only works with batch size 1
+        out = torch.zeros(
+            max_t+1, b, self.action_space.n, device=self.temp_weights.device)
+        out[one_t, one_b] = self.temp_weights[one_t]
+        out = self.temp_weights[one_t].view(-1, 1, self.action_space.n)
+        
+        #return out[one_t]
+        return out
+        # TEMP ============================
+        '''
+        
+        emb_x, emb_t, emb_pad = self.embedding(x, t, pad)
+        #    tile_x,
+        #    tile_t,
+        #    tile_yx,
+        #    tile_pad,
+        #    token_x,
+        #    token_t,
+        #    token_pad,
+        #    #assembly_shape,
+        #    #assembly_color,
+        #    #assembly_instance,
+        #    #assembly_pose,
+        #    #assembly_t,
+        #    #assembly_pad,
+        #    visual_cursor_t,
+        #    visual_cursor_fine_yxp,
+        #    visual_cursor_coarse_yx,
+        #    visual_cursor_pad,
+        #    #symbolic_cursor_x,
+        #    #symbolic_cursor_t,
+        #    #symbolic_cursor_pad,
+        #    auto_x,
+        #    auto_t,
+        #    auto_pad,
+        #    readout_x,
+        #    readout_t,
+        #    readout_pad,
+        #    seq_pad,
+        #)
+        
+        # add the readout tokens to the beginning so we can pull them out easier
+        order_x = [emb_x['readout']]
+        order_t = [emb_t['readout']]
+        order_pad = [emb_pad['readout']]
+        name_seq = ['readout']
+        non_readout_pad = torch.zeros_like(emb_pad['readout'])
+        for name in emb_x:
+            if name == 'readout':
+                continue
+            order_x.append(emb_x[name])
+            order_t.append(emb_t[name])
+            order_pad.append(emb_pad[name])
+            non_readout_pad = non_readout_pad + emb_pad[name]
+            name_seq.append(name)
+        
+        cat_x, cat_pad = cat_multi_padded_seqs(order_x, order_pad)
+        cat_t, _ = cat_multi_padded_seqs(order_t, order_pad)
         
         # use the encoder to encode
-        x = self.encoder(x, t, pad, use_memory=use_memory)[-1]
-        device = x.device
-        s, b, c = x.shape
+        enc_x = self.encoder(cat_x, cat_t, cat_pad, use_memory=use_memory)[-1]
+        device = enc_x.device
+        s, b, c = enc_x.shape
         
         # extract decoder tokens
-        _, x = decat_padded_seq(
-            x,
-            tile_pad+token_pad+visual_cursor_pad+sum(auto_pad.values()),
-            readout_pad,
+        #_, x = decat_padded_seq(
+        #    x,
+        #    tile_pad+token_pad+visual_cursor_pad+sum(auto_pad.values()),
+        #    readout_pad,
+        #)
+        decat_x, _ = decat_padded_seq(
+            enc_x, emb_pad['readout'], non_readout_pad
         )
         
-        # use the decoders to decode
-        max_seq = torch.max(seq_pad)
-        min_t = torch.min(readout_t, dim=0).values
+        '''
+        # TEMP ============================
+        s, b = readout_t.shape
+        one_s, one_b = torch.where(readout_x == 1)
         
+        dec_x = decat_x[one_s, one_b]
+        dec_x = self.temp_decoder(dec_x)
+        
+        return dec_x.view(-1, 1, self.action_space.n)
+        # TEMP ============================
+        '''
+        
+        # use the decoders to decode
+        #max_seq = torch.max(seq_pad)
+        ##min_t = torch.min(readout_t, dim=0).values
+        #min_t = torch.min(t['readout'], dim=0).values
+        
+        head_x = self.decoder(decat_x, readout_x, readout_t, seq_pad)
+        
+        #import pdb
+        #pdb.set_trace()
+        
+        #import pdb
+        #pdb.set_trace()
+        
+        '''
         head_xs = {}
         
         for name in self.embedding.readout_layout.keys():
             if name == 'PAD':
                 continue
-            readout_index = self.embedding.readout_layout.ravel(name, 0)
+            readout_index = self.decoder.readout_layout.ravel(name, 0)
             readout_s, readout_b = torch.where(readout_x == readout_index)
             readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
             name_x = x[readout_s, readout_b]
             sb = name_x.shape[0]
             name_x = self.decoders[name](name_x)
-            if name in self.embedding.visual_cursor_names:
-                head_xs[name] = name_x
-            elif name in self.embedding.symbolic_cursor_names:
-                head_xs[name] = name_x
-            else:
-                head_xs.update(name_x)
-            
+            #if name in self.embedding.visual_cursor_names:
+            #    head_xs[name] = name_x
+            #elif name in self.embedding.symbolic_cursor_names:
+            #    head_xs[name] = name_x
+            #else:
+            #    head_xs.update(name_x)
+        
         flat_x = torch.zeros(sb, self.action_space.n, device=device)
         last_dim = len(flat_x.shape)-1
         self.action_space.ravel_vector(head_xs, out=flat_x, dim=last_dim)
         
         out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
         out_x[readout_i, readout_b] = flat_x
+        '''
         
-        return out_x
+        return head_x
     
     def forward_rollout(self, terminal, *args, **kwargs):
         device = next(self.parameters()).device
@@ -238,7 +337,8 @@ class AutoTransformer(Module):
         s, b, a = x.shape
         assert s == 1
         if mode == 'sample':
-            distribution = Categorical(logits=x)
+            #distribution = Categorical(logits=x)
+            distribution = self.tensor_to_distribution(x)
             actions = distribution.sample().cpu().view(b).numpy()
         elif mode == 'max':
             actions = torch.argmax(x, dim=-1).cpu().view(b).numpy()
@@ -246,11 +346,7 @@ class AutoTransformer(Module):
         return actions
     
     def tensor_to_distribution(self, x):
-        s, b, a = x.shape
-        assert s == 1
-        distribution = Categorical(logits=x)
-        
-        return distribution
+        return self.decoder.tensor_to_distribution(x)
     
     #def observation_to_labels(self, batch, pad):
     #    device = next(self.parameters()).device
@@ -324,119 +420,154 @@ class AutoTransformer(Module):
         # iterate through each episode
         #for seq_id, batch in enumerate(tqdm.tqdm(episodes)):
         #for seq_id in tqdm.tqdm(range(visualization_episodes_per_epoch)):
-        for seq_id, batch in tqdm.tqdm(zip(
-            range(visualization_episodes_per_epoch), episodes),
-            total=visualization_episodes_per_epoch
-        ):
-            
-            # get the sequence length
-            seq, pad = batch
-            seq_len = len_hierarchy(seq)
-            
-            # make the sequence directory
-            seq_path = os.path.join(
-                visualization_directory, 'seq_%06i'%seq_id)
-            if not os.path.exists(seq_path):
-                os.makedirs(seq_path)
-            
-            # build the summary
-            summary = {
-                'action':[],
-                'reward':seq['reward'],
-            }
-            
-            # compute action probabilities
-            seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))[:,0]
-            seq_action_n = numpy.sum(seq_action_p, axis=-1)
-            seq_action_p = seq_action_p / seq_action_n.reshape(-1,1)
-            max_action_p = numpy.max(seq_action_p, axis=-1)
-            
-            # get the cursor prediction maps
-            # TODO: Fix this using unravel_vector now
-            #subspace_p = self.action_space.unravel_subspace(seq_action_p)
-            #cursor_maps = {}
-            #for name, space in self.action_space.subspaces.items():
-            #    if isinstance(space, MultiScreenPixelSpace):
-            #        cursor_maps[name] = space.unravel_maps(subspace_p[name])
-            
-            # build the frames
-            for frame_id in range(seq_len):
-                frame_observation = index_hierarchy(index_hierarchy(
-                    seq['observation'], frame_id), 0)
+        #for seq_id, batch in tqdm.tqdm(zip(
+        #    range(visualization_episodes_per_epoch), episodes),
+        #    total=visualization_episodes_per_epoch
+        #):
+        with tqdm.tqdm(total=visualization_episodes_per_epoch) as iterate:
+            for seq, pad in episodes:
+                b = pad.shape[0]
                 
-                # add the action to the summary
-                summary['action'].append(
-                    self.action_space.unravel(seq['action'][frame_id,0]))
-                
-                images = {}
-                for name, space in self.observation_space.items():
-                    if isinstance(space, MaskedTiledImageSpace):
-                        image = frame_observation[name]['image']
-                        for map_name, maps in cursor_maps.items():
-                            if name in maps:
-                                colors = self.embedding.cursor_colors[map_name]
-                                m = maps[name][frame_id]
-                                for c in range(m.shape[-1]):
-                                    mc = m[..., c] / max_action_p[frame_id]
-                                    mc = mc.reshape(*mc.shape, 1)
-                                    image = image * (1.-mc) + mc*colors[c]
-
-                        images[name] = image.astype(numpy.uint8)
+                for i in range(b):
+                    seq_id = iterate.n
                     
-                    elif isinstance(space, AssemblySpace):
-                        assembly_scene = BrickScene()
-                        assembly_scene.set_assembly(
-                            frame_observation[name],
-                            space.shape_ids,
-                            space.color_ids,
+                    # get the sequence length
+                    seq_len = pad[i]
+                    
+                    # make the sequence directory
+                    seq_path = os.path.join(
+                        visualization_directory, 'seq_%06i'%seq_id)
+                    if not os.path.exists(seq_path):
+                        os.makedirs(seq_path)
+                    
+                    # build the summary
+                    summary = {
+                        'action':[],
+                        'reward':seq['reward'][:pad[i],i],
+                    }
+                    
+                    # compute action probabilities
+                    #seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))[:,0]
+                    #seq_action_n = numpy.sum(seq_action_p, axis=-1)
+                    #seq_action_p = seq_action_p / seq_action_n.reshape(-1,1)
+                    #max_action_p = numpy.max(seq_action_p, axis=-1)
+                    seq_action_p = seq['distribution'][:,i]
+                    max_action_p = numpy.max(seq_action_p, axis=-1)
+                    
+                    # get the cursor prediction maps
+                    # TODO: Fix this using unravel_vector now
+                    #subspace_p = self.action_space.unravel_subspace(seq_action_p)
+                    #cursor_maps = {}
+                    #for name, space in self.action_space.subspaces.items():
+                    #    if isinstance(space, MultiScreenPixelSpace):
+                    #        cursor_maps[name] = space.unravel_maps(subspace_p[name])
+                    
+                    # build the frames
+                    for frame_id in range(seq_len):
+                        frame_observation = index_hierarchy(index_hierarchy(
+                            seq['observation'], frame_id), i)
+                        
+                        # add the action to the summary
+                        summary['action'].append(
+                            self.action_space.unravel(seq['action'][frame_id,i])
                         )
-                        assembly_path = os.path.join(
-                            seq_path,
-                            '%s_%04i_%04i.mpd'%(name, seq_id, frame_id)
-                        )
-                        assembly_scene.export_ldraw(assembly_path)
+                        
+                        images = {}
+                        for name, space in self.observation_space.items():
+                            if isinstance(space, MaskedTiledImageSpace):
+                                image = frame_observation[name]['image']
+                                for map_name, maps in cursor_maps.items():
+                                    if name in maps:
+                                        colors = self.embedding.cursor_colors[
+                                            map_name]
+                                        m = maps[name][frame_id]
+                                        for c in range(m.shape[-1]):
+                                            mc = (
+                                                m[..., c] /
+                                                max_action_p[frame_id]
+                                            )
+                                            mc = mc.reshape(*mc.shape, 1)
+                                            image = (
+                                                image * (1.-mc) + mc*colors[c])
+
+                                images[name] = image.astype(numpy.uint8)
+                            
+                            elif isinstance(space, AssemblySpace):
+                                assembly_scene = BrickScene()
+                                assembly_scene.set_assembly(
+                                    frame_observation[name],
+                                    space.shape_ids,
+                                    space.color_ids,
+                                )
+                                assembly_path = os.path.join(
+                                    seq_path,
+                                    '%s_%04i_%04i.mpd'%(name, seq_id, frame_id)
+                                )
+                                assembly_scene.export_ldraw(assembly_path)
+                        
+                        action = index_hierarchy(seq['action'], frame_id)[i]
+                        action_name, *nyxc = self.action_space.unravel(action)
+                        action_subspace = (
+                            self.action_space.subspaces[action_name])
+                        if isinstance(action_subspace, MultiScreenPixelSpace):
+                            #n, *yxc = action_subspace.unravel(action_index)
+                            n, *yxc = nyxc
+                            if n != 'NO_OP':
+                                y, x, c = yxc
+                                action_image = images[n]
+                                color = (
+                                    self.embedding.cursor_colors[action_name][c]
+                                )
+                                draw_crosshairs(action_image, y, x, 5, color)
+                        
+                        '''
+                        for name in self.embedding.visual_cursor_names:
+                            observation_space = (
+                                self.observation_space['action'][name])
+                            o = frame_observation['action'][name]
+                            n, y, x, p = observation_space.unravel(o)
+                            color = self.embedding.cursor_colors[name][p]
+                            draw_box(images[n], x-3, y-3, x+3, y+3, color)
+                        '''
+                        '''
+                        expert = frame_observation['expert']
+                        for e in expert:
+                            expert_name, *nyxc = self.action_space.unravel(e)
+                            expert_subspace = (
+                                self.action_space.subspaces[expert_name])
+                            if isinstance(
+                                expert_subspace, MultiScreenPixelSpace
+                            ):
+                                #n, y, x, c = expert_subspace.unravel(expert_index)
+                                n, y, x, c = nyxc
+                                expert_image = images[n]
+                                color = numpy.array(
+                                    self.embedding.cursor_colors[expert_name][c]
+                                )
+                                pixel_color = (
+                                    expert_image[y,x] * 0.5 + color * 0.5)
+                                expert_image[y,x] = pixel_color.astype(
+                                    numpy.uint8)
+                        '''
+                        if images:
+                            out_image = stack_images_horizontal(
+                                images.values(), spacing=4)
+                            frame_path = os.path.join(
+                                seq_path,
+                                'frame_%04i_%06i_%04i.png'%(
+                                    epoch, seq_id, frame_id),
+                            )
+                            save_image(out_image, frame_path)
+                    
+                    summary_path = os.path.join(seq_path, 'summary.json')
+                    with open(summary_path, 'w') as f:
+                        json.dump(summary, f, indent=2, cls=NumpyEncoder)
+                    
+                    iterate.update(1)
+                    if iterate.n >= visualization_episodes_per_epoch:
+                        break
                 
-                action = index_hierarchy(seq['action'], frame_id)
-                action_name, *nyxc = self.action_space.unravel(action)
-                action_subspace = self.action_space.subspaces[action_name]
-                if isinstance(action_subspace, MultiScreenPixelSpace):
-                    #n, *yxc = action_subspace.unravel(action_index)
-                    n, *yxc = nyxc
-                    if n != 'NO_OP':
-                        y, x, c = yxc
-                        action_image = images[n]
-                        color = self.embedding.cursor_colors[action_name][c]
-                        draw_crosshairs(action_image, y, x, 5, color)
+                else:
+                    continue
                 
-                for name in self.embedding.visual_cursor_names:
-                    observation_space = self.observation_space['action'][name]
-                    o = frame_observation['action'][name]
-                    n, y, x, p = observation_space.unravel(o)
-                    color = self.embedding.cursor_colors[name][p]
-                    draw_box(images[n], x-3, y-3, x+3, y+3, color)
-                
-                expert = frame_observation['expert']
-                for e in expert:
-                    expert_name, *nyxc = self.action_space.unravel(e)
-                    expert_subspace = self.action_space.subspaces[expert_name]
-                    if isinstance(expert_subspace, MultiScreenPixelSpace):
-                        #n, y, x, c = expert_subspace.unravel(expert_index)
-                        n, y, x, c = nyxc
-                        expert_image = images[n]
-                        color = numpy.array(
-                            self.embedding.cursor_colors[expert_name][c])
-                        pixel_color = expert_image[y,x] * 0.5 + color * 0.5
-                        expert_image[y,x] = pixel_color.astype(numpy.uint8)
-                
-                if images:
-                    out_image = stack_images_horizontal(
-                        images.values(), spacing=4)
-                    frame_path = os.path.join(
-                        seq_path,
-                        'frame_%04i_%06i_%04i.png'%(epoch, seq_id, frame_id),
-                    )
-                    save_image(out_image, frame_path)
-            
-            summary_path = os.path.join(seq_path, 'summary.json')
-            with open(summary_path, 'w') as f:
-                json.dump(summary, f, indent=2, cls=NumpyEncoder)
+                break

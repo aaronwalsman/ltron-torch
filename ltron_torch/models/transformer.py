@@ -77,7 +77,9 @@ class Transformer(Module):
         
         if output_layers is None:
             output_layers = set()
+        
         xs = {}
+        xs['mask'] = mask
         
         for i, block in enumerate(self.blocks):
             x = block(x, pad, mask=mask, use_memory=use_memory)
