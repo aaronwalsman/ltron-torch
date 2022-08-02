@@ -1,27 +1,17 @@
-import random
 import os
 import json
 
 import numpy
 
 import torch
-from torch.nn import (
-    Module,
-    Linear,
-    LayerNorm,
-    Sequential,
-    ModuleDict,
-    Parameter,
-)
-from torch.distributions import Categorical
+from torch.nn import Module
 
 import tqdm
 
 from splendor.image import save_image
 from splendor.json_numpy import NumpyEncoder
 
-from ltron.name_span import NameSpan
-from ltron.hierarchy import len_hierarchy, index_hierarchy
+from ltron.hierarchy import index_hierarchy
 from ltron.bricks.brick_scene import BrickScene
 from ltron.gym.spaces import (
     MultiScreenPixelSpace, MaskedTiledImageSpace, AssemblySpace,
@@ -30,30 +20,21 @@ from ltron.visualization.drawing import (
     draw_crosshairs, draw_box, stack_images_horizontal,
 )
 
-from ltron_torch.models.mlp import linear_stack
-from ltron_torch.models.heads import LinearMultiheadDecoder
-from ltron_torch.models.positional_encoding import LearnedPositionalEncoding
 from ltron_torch.models.transformer import (
     TransformerConfig,
     Transformer,
-    TransformerBlock,
     init_weights,
 )
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
 from ltron_torch.models.auto_decoder import (
     AutoDecoderConfig, AutoDecoder)
-from ltron_torch.models.cursor_decoder import (
-    CoarseToFineVisualCursorDecoder,
-    CoarseToFineSymbolicCursorDecoder,
-)
-from ltron_torch.models.padding import (
-    cat_multi_padded_seqs, decat_padded_seq, get_seq_batch_indices,
-)
+from ltron_torch.models.padding import cat_multi_padded_seqs, decat_padded_seq
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
+    AutoDecoderConfig,
 ):
     action_decoder_dropout = 0.1
 
@@ -64,7 +45,10 @@ class AutoTransformer(Module):
         action_space,
         checkpoint=None
     ):
+        # Module super
         super().__init__()
+        
+        # save config, observation and action space
         self.config = config
         self.observation_space = observation_space
         self.action_space = action_space
@@ -80,67 +64,7 @@ class AutoTransformer(Module):
         # build the transformer
         self.encoder = Transformer(config)
         
-        # TEMP ================================
-        #time_steps = 10
-        #self.temp_weights = Parameter(
-        #    torch.zeros(config.channels, action_space.n)
-        #)
-        self.temp_decoder = Linear(config.channels, action_space.n)
-        # TEMP ================================
-        
-        '''
-        # build cursor decoders
-        decoders = {}
-        for name in self.embedding.visual_cursor_names:
-            subspace = self.action_space.subspaces[name]
-            coarse_cursor_keys = [
-                k for k in subspace.screen_span.keys() if k != 'NO_OP']
-            coarse_cursor_span = self.embedding.tile_position_layout.subspace(
-                coarse_cursor_keys)
-            fine_shape = self.embedding.cursor_fine_layout.get_shape(name)
-            decoders[name] = CoarseToFineVisualCursorDecoder(
-                coarse_cursor_span,
-                fine_shape,
-                channels=config.channels,
-                nonlinearity=config.nonlinearity,
-                default_k=4,
-            )
-        
-        for name in self.embedding.symbolic_cursor_names:
-            subspace = self.action_space.subspaces[name]
-            coarse_cursor_span = NameSpan()
-            for key in subspace.layout.keys():
-                if key != 'NO_OP':
-                    num_instances, num_snaps = subspace.layout.get_shape(key)
-                    coarse_cursor_span.add_names(**{key:num_instances})
-            fine_shape = (num_snaps,)
-            decoders[name] = CoarseToFineSymbolicCursorDecoder(
-                config, coarse_cursor_span, fine_shape)
-        
-        for name in self.embedding.brick_inserters:
-            pass
-        '''
-        ## build the noncursor decoder
-        #decoders['noncursor'] = Sequential(
-        #    linear_stack(
-        #        2,
-        #        config.channels,
-        #        nonlinearity=config.nonlinearity,
-        #        final_nonlinearity=True,
-        #        hidden_dropout=config.action_decoder_dropout,
-        #        out_dropout=config.action_decoder_dropout,
-        #    ),
-        #    LinearMultiheadDecoder(
-        #        config.channels,
-        #        {name:self.action_space.subspaces[name].n
-        #         for name in self.embedding.noncursor_names
-        #        }
-        #    ),
-        #)
-        
-        #self.decoders = ModuleDict(decoders)
-        
-        # initialize weights
+        # load checkpoint or initialize weights
         if checkpoint is not None:
             if isinstance(checkpoint, str):
                 checkpoint = torch.load(checkpoint)
@@ -152,100 +76,28 @@ class AutoTransformer(Module):
         self.encoder.zero_all_memory()
     
     def observation_to_tensors(self, batch, seq_pad):
-        device = next(iter(self.parameters())).device
+        # get the auto_embedding's tensors
         x = self.embedding.observation_to_tensors(batch, seq_pad)
+        
+        # add seq_pad
+        device = next(iter(self.parameters())).device
         x['seq_pad'] = torch.LongTensor(seq_pad).to(device)
+        
         return x
     
     def forward(self, x, t, pad, seq_pad, use_memory=None):
-    #    tile_x,
-    #    tile_t,
-    #    tile_yx,
-    #    tile_pad,
-    #    token_x,
-    #    token_t,
-    #    token_pad,
-    #    #assembly_shape,
-    #    #assembly_color,
-    #    #assembly_instance,
-    #    #assembly_pose,
-    #    #assembly_t,
-    #    #assembly_pad,
-    #    visual_cursor_t,
-    #    visual_cursor_fine_yxp,
-    #    visual_cursor_coarse_yx,
-    #    visual_cursor_pad,
-    #    #symbolic_cursor_x,
-    #    #symbolic_cursor_t,
-    #    #symbolic_cursor_pad,
-    #    auto_x,
-    #    auto_t,
-    #    auto_pad,
-    #    readout_x,
-    #    readout_t,
-    #    readout_pad,
-    #    seq_pad,
-    #    use_memory=None,
-    #):
         
-        readout_x = x['readout']
-        readout_t = t['readout']
-        
-        '''
-        # TEMP ============================
-        s, b = readout_t.shape
-        one_s, one_b = torch.where(readout_x == 1)
-        one_t = readout_t[one_s, one_b]
-        max_t = torch.max(one_t)
-        #min_t = torch.min(one_t)
-        #import pdb
-        #pdb.set_trace()
-        # only works with batch size 1
-        out = torch.zeros(
-            max_t+1, b, self.action_space.n, device=self.temp_weights.device)
-        out[one_t, one_b] = self.temp_weights[one_t]
-        out = self.temp_weights[one_t].view(-1, 1, self.action_space.n)
-        
-        #return out[one_t]
-        return out
-        # TEMP ============================
-        '''
-        
+        # use the embedding to compute the tokens, time steps and padding
         emb_x, emb_t, emb_pad = self.embedding(x, t, pad)
-        #    tile_x,
-        #    tile_t,
-        #    tile_yx,
-        #    tile_pad,
-        #    token_x,
-        #    token_t,
-        #    token_pad,
-        #    #assembly_shape,
-        #    #assembly_color,
-        #    #assembly_instance,
-        #    #assembly_pose,
-        #    #assembly_t,
-        #    #assembly_pad,
-        #    visual_cursor_t,
-        #    visual_cursor_fine_yxp,
-        #    visual_cursor_coarse_yx,
-        #    visual_cursor_pad,
-        #    #symbolic_cursor_x,
-        #    #symbolic_cursor_t,
-        #    #symbolic_cursor_pad,
-        #    auto_x,
-        #    auto_t,
-        #    auto_pad,
-        #    readout_x,
-        #    readout_t,
-        #    readout_pad,
-        #    seq_pad,
-        #)
         
-        # add the readout tokens to the beginning so we can pull them out easier
+        # concatenate all tokens
+        # readout tokens go first so we can pull them out easier
         order_x = [emb_x['readout']]
         order_t = [emb_t['readout']]
         order_pad = [emb_pad['readout']]
         name_seq = ['readout']
+        
+        # everything else goes after the readout tokens
         non_readout_pad = torch.zeros_like(emb_pad['readout'])
         for name in emb_x:
             if name == 'readout':
@@ -256,75 +108,20 @@ class AutoTransformer(Module):
             non_readout_pad = non_readout_pad + emb_pad[name]
             name_seq.append(name)
         
+        # do the concatenation
         cat_x, cat_pad = cat_multi_padded_seqs(order_x, order_pad)
         cat_t, _ = cat_multi_padded_seqs(order_t, order_pad)
         
-        # use the encoder to encode
+        # push the concatenated sequence through the transformer
         enc_x = self.encoder(cat_x, cat_t, cat_pad, use_memory=use_memory)[-1]
-        device = enc_x.device
-        s, b, c = enc_x.shape
         
-        # extract decoder tokens
-        #_, x = decat_padded_seq(
-        #    x,
-        #    tile_pad+token_pad+visual_cursor_pad+sum(auto_pad.values()),
-        #    readout_pad,
-        #)
+        # strip off the decoder tokens
         decat_x, _ = decat_padded_seq(
             enc_x, emb_pad['readout'], non_readout_pad
         )
         
-        '''
-        # TEMP ============================
-        s, b = readout_t.shape
-        one_s, one_b = torch.where(readout_x == 1)
-        
-        dec_x = decat_x[one_s, one_b]
-        dec_x = self.temp_decoder(dec_x)
-        
-        return dec_x.view(-1, 1, self.action_space.n)
-        # TEMP ============================
-        '''
-        
-        # use the decoders to decode
-        #max_seq = torch.max(seq_pad)
-        ##min_t = torch.min(readout_t, dim=0).values
-        #min_t = torch.min(t['readout'], dim=0).values
-        
-        head_x = self.decoder(decat_x, readout_x, readout_t, seq_pad)
-        
-        #import pdb
-        #pdb.set_trace()
-        
-        #import pdb
-        #pdb.set_trace()
-        
-        '''
-        head_xs = {}
-        
-        for name in self.embedding.readout_layout.keys():
-            if name == 'PAD':
-                continue
-            readout_index = self.decoder.readout_layout.ravel(name, 0)
-            readout_s, readout_b = torch.where(readout_x == readout_index)
-            readout_i = (readout_t - min_t.view(1,-1))[readout_s, readout_b]
-            name_x = x[readout_s, readout_b]
-            sb = name_x.shape[0]
-            name_x = self.decoders[name](name_x)
-            #if name in self.embedding.visual_cursor_names:
-            #    head_xs[name] = name_x
-            #elif name in self.embedding.symbolic_cursor_names:
-            #    head_xs[name] = name_x
-            #else:
-            #    head_xs.update(name_x)
-        
-        flat_x = torch.zeros(sb, self.action_space.n, device=device)
-        last_dim = len(flat_x.shape)-1
-        self.action_space.ravel_vector(head_xs, out=flat_x, dim=last_dim)
-        
-        out_x = torch.zeros(max_seq, b, self.action_space.n, device=device)
-        out_x[readout_i, readout_b] = flat_x
-        '''
+        # push the decoder tokens through the auto decoder
+        head_x = self.decoder(decat_x, x['readout'], t['readout'], seq_pad)
         
         return head_x
     
@@ -337,7 +134,6 @@ class AutoTransformer(Module):
         s, b, a = x.shape
         assert s == 1
         if mode == 'sample':
-            #distribution = Categorical(logits=x)
             distribution = self.tensor_to_distribution(x)
             actions = distribution.sample().cpu().view(b).numpy()
         elif mode == 'max':
@@ -348,28 +144,8 @@ class AutoTransformer(Module):
     def tensor_to_distribution(self, x):
         return self.decoder.tensor_to_distribution(x)
     
-    #def observation_to_labels(self, batch, pad):
-    #    device = next(self.parameters()).device
-    #    return torch.LongTensor(batch['observation']['expert']).to(device)
-    
-    def observation_to_uniform_single_label(self, batch, pad):
-        # get the labels
-        labels = self.observation_to_labels(batch, pad)
-        s, b = labels.shape[:2]
-        
-        # pull out the non-zero values
-        ss, bb, nn = torch.where(labels)
-        
-    
     def observation_to_label(self, batch, pad, supervision_mode):
         device = next(self.parameters()).device
-        
-        # get the labels
-        #labels = self.observation_to_labels(batch, pad)
-        #s, b = labels.shape[:2]
-        
-        # build the label tensor
-        #y = torch.zeros((s,b,self.action_space.n), device=device)
         
         if supervision_mode == 'action':
             # pull the actions
@@ -418,12 +194,6 @@ class AutoTransformer(Module):
         visualization_directory,
     ):
         # iterate through each episode
-        #for seq_id, batch in enumerate(tqdm.tqdm(episodes)):
-        #for seq_id in tqdm.tqdm(range(visualization_episodes_per_epoch)):
-        #for seq_id, batch in tqdm.tqdm(zip(
-        #    range(visualization_episodes_per_epoch), episodes),
-        #    total=visualization_episodes_per_epoch
-        #):
         with tqdm.tqdm(total=visualization_episodes_per_epoch) as iterate:
             for seq, pad in episodes:
                 b = pad.shape[0]
@@ -447,20 +217,8 @@ class AutoTransformer(Module):
                     }
                     
                     # compute action probabilities
-                    #seq_action_p = numpy.exp(numpy.clip(seq['activations'],-50,50))[:,0]
-                    #seq_action_n = numpy.sum(seq_action_p, axis=-1)
-                    #seq_action_p = seq_action_p / seq_action_n.reshape(-1,1)
-                    #max_action_p = numpy.max(seq_action_p, axis=-1)
                     seq_action_p = seq['distribution'][:,i]
                     max_action_p = numpy.max(seq_action_p, axis=-1)
-                    
-                    # get the cursor prediction maps
-                    # TODO: Fix this using unravel_vector now
-                    #subspace_p = self.action_space.unravel_subspace(seq_action_p)
-                    #cursor_maps = {}
-                    #for name, space in self.action_space.subspaces.items():
-                    #    if isinstance(space, MultiScreenPixelSpace):
-                    #        cursor_maps[name] = space.unravel_maps(subspace_p[name])
                     
                     # build the frames
                     for frame_id in range(seq_len):
@@ -510,7 +268,6 @@ class AutoTransformer(Module):
                         action_subspace = (
                             self.action_space.subspaces[action_name])
                         if isinstance(action_subspace, MultiScreenPixelSpace):
-                            #n, *yxc = action_subspace.unravel(action_index)
                             n, *yxc = nyxc
                             if n != 'NO_OP':
                                 y, x, c = yxc
@@ -520,35 +277,6 @@ class AutoTransformer(Module):
                                 )
                                 draw_crosshairs(action_image, y, x, 5, color)
                         
-                        '''
-                        for name in self.embedding.visual_cursor_names:
-                            observation_space = (
-                                self.observation_space['action'][name])
-                            o = frame_observation['action'][name]
-                            n, y, x, p = observation_space.unravel(o)
-                            color = self.embedding.cursor_colors[name][p]
-                            draw_box(images[n], x-3, y-3, x+3, y+3, color)
-                        '''
-                        '''
-                        expert = frame_observation['expert']
-                        for e in expert:
-                            expert_name, *nyxc = self.action_space.unravel(e)
-                            expert_subspace = (
-                                self.action_space.subspaces[expert_name])
-                            if isinstance(
-                                expert_subspace, MultiScreenPixelSpace
-                            ):
-                                #n, y, x, c = expert_subspace.unravel(expert_index)
-                                n, y, x, c = nyxc
-                                expert_image = images[n]
-                                color = numpy.array(
-                                    self.embedding.cursor_colors[expert_name][c]
-                                )
-                                pixel_color = (
-                                    expert_image[y,x] * 0.5 + color * 0.5)
-                                expert_image[y,x] = pixel_color.astype(
-                                    numpy.uint8)
-                        '''
                         if images:
                             out_image = stack_images_horizontal(
                                 images.values(), spacing=4)

@@ -1,13 +1,9 @@
-import numpy
-
 import torch
 from torch.nn import Module, ModuleDict, Dropout
 
 from gym.spaces import Discrete
 
-from ltron.constants import MAX_SNAPS_PER_BRICK
 from ltron.config import Config
-from ltron.name_span import NameSpan
 from ltron.gym.spaces import (
     MaskedTiledImageSpace,
     AssemblySpace,
@@ -17,11 +13,7 @@ from ltron.gym.spaces import (
     MultiScreenInstanceSnapSpace,
     SymbolicSnapSpace,
 )
-from ltron.compression import batch_deduplicate_from_masks
-from ltron.visualization.drawing import stack_images_horizontal, draw_crosshairs
 
-from ltron_torch.models.padding import cat_padded_seqs, cat_multi_padded_seqs
-from ltron_torch.models.positional_encoding import LearnedPositionalEncoding
 from ltron_torch.models.embedding import (
     TemporalEmbedding,
     build_shared_assembly_embeddings,
@@ -29,8 +21,6 @@ from ltron_torch.models.embedding import (
     DiscreteTemporalEmbedding,
     MultiDiscreteTemporalEmbedding,
 )
-from ltron_torch.models.heads import LinearMultiheadDecoder
-from ltron_torch.gym_tensor import default_tile_transform
 
 class AutoEmbeddingConfig(Config):
     channels = 768
@@ -42,8 +32,10 @@ class AutoEmbedding(Module):
         observation_space,
         readout_layout,
     ):
+        # Module super
         super().__init__()
         
+        # store observation space and readout layout
         self.observation_space = observation_space
         self.readout_layout = readout_layout
         
@@ -53,9 +45,6 @@ class AutoEmbedding(Module):
         
         self.time_step_name = None
         self.time_step_space = None
-        
-        # build the final dropout layer
-        self.dropout = Dropout(config.embedding_dropout)
         
         # build the temporal embedding
         for name, space in observation_space.items():
@@ -121,6 +110,9 @@ class AutoEmbedding(Module):
                     self.temporal_embedding,
                 )
         
+        # build the final dropout layer
+        self.dropout = Dropout(config.embedding_dropout)
+        
         # auto
         self.embeddings = ModuleDict(embeddings)
     
@@ -132,9 +124,6 @@ class AutoEmbedding(Module):
         time_step = torch.LongTensor(
             observation[self.time_step_name]).to(device)
         s, b = time_step.shape[:2]
-        
-        # move seq_pad to torch/device
-        seq_pad_t = torch.LongTensor(seq_pad).to(device)
         
         # generate the tensors for each embedding
         auto_x = {}
@@ -168,7 +157,6 @@ class AutoEmbedding(Module):
         readout_x = torch.cat(readout_x, dim=0)
         readout_t = torch.cat(readout_t, dim=0)
         readout_pad = sum(readout_pad)
-        
         assert 'readout' not in auto_x
         auto_x['readout'] = {'x':readout_x}
         auto_t['readout'] = readout_t
@@ -181,7 +169,7 @@ class AutoEmbedding(Module):
         out_t = {}
         out_pad = {}
         
-        # embeddings
+        # observation-based embeddings
         for name, embedding in self.embeddings.items():
             try:
                 x_n, t_n, pad_n = embedding(**x[name], t=t[name], pad=pad[name])
@@ -193,6 +181,7 @@ class AutoEmbedding(Module):
                 print('Forwward failed while embedding: %s'%name)
                 raise
         
+        # readout tokens
         name = 'readout'
         out_x[name], out_t[name], out_pad[name] = self.readout_embedding(
             **x[name], t=t[name], pad=pad[name])

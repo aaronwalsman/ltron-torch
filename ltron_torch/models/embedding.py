@@ -18,19 +18,6 @@ class NormalizedEmbedding(Module):
         x = self.norm(x)
         return x
 
-'''
-class TemporalEmbedding(Module):
-    def __init__(self, observation_space, channels):
-        super().__init__()
-        self.embedding = Embedding(observation_space.max_steps, channels)
-        self.norm = LayerNorm(channels)
-    
-    def forward(self, x):
-        x = self.embedding(x)
-        x = self.norm(x)
-        return x
-'''
-
 class TemporalEmbedding(NormalizedEmbedding):
     def __init__(self, observation_space, channels):
         super().__init__(observation_space.max_steps, channels)
@@ -64,32 +51,6 @@ class PoseEmbedding(Module):
         x = self.linear(x)
         x = self.norm(x)
         return x
-
-# observation space embeddings
-'''
-# Too clever... how would you batch this thing?
-class DiscreteLayoutEmbedding(Module):
-    def __init__(self, layout, channels):
-        self.temporal_embedding = temporal_embedding
-        
-        def make_layout_embedding(layout):
-            embedding = {}
-            for name in layout.keys():
-                shape = layout.get_shape(name)
-                if isinstance(shape, NameSpan):
-                    embedding[name] = make_layout_embedding(shape)
-                else:
-                    shape_embeddings = []
-                    for dim in shape:
-                        shape_embeddings.append(
-                            NormalizedEmbedding(dim, channels))
-            
-            return ModuleDict(embedding)
-        
-        self.norm = LayerNorm(channels)
-    
-    def forward(self, x):
-'''
 
 def MultiScreenPixelEmbedding(Module):
     def __init__(

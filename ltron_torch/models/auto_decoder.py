@@ -107,7 +107,6 @@ class AutoDecoder(Module):
         decoder_x = {}
         
         max_seq = torch.max(seq_pad)
-        #min_t = torch.min(readout_t, dim=0).values
         
         for name in self.readout_layout.keys():
             if name == 'PAD':
