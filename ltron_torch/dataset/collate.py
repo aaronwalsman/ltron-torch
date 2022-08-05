@@ -1,5 +1,7 @@
 from ltron.hierarchy import auto_pad_stack_numpy_hierarchies
 
+raise Exception('Deprecated')
+
 def pad_stack_collate(seqs):
     seqs, pad = auto_pad_stack_numpy_hierarchies(
         *seqs, pad_axis=0, stack_axis=1)

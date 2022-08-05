@@ -17,7 +17,8 @@ from ltron.rollout import rollout
 from ltron.dataset.tar_dataset import generate_tar_dataset
 
 from ltron_torch.models.padding import get_seq_batch_indices
-from ltron_torch.dataset.tar_dataset import TarDataset, build_episode_loader
+#from ltron_torch.dataset.tar_dataset import TarDataset, build_episode_loader
+from ltron_torch.dataset.webdataset import build_episode_loader_from_shards
 
 def rollout_epoch(
     name,
@@ -29,6 +30,7 @@ def rollout_epoch(
     batch_size=1,
     workers=0,
     shuffle=False,
+    shuffle_buffer=1000,
     tar_path=None,
     additional_tar_paths=None,
     shards=1,
@@ -109,7 +111,7 @@ def rollout_epoch(
     
     if tar_path:
         with torch.no_grad():
-            shards = generate_tar_dataset(
+            dataset_shards = generate_tar_dataset(
                 name,
                 episodes,
                 shards=shards,
@@ -124,9 +126,16 @@ def rollout_epoch(
             )
         
         if additional_tar_paths:
-            shards = shards + additional_tar_paths
-        dataset = TarDataset(shards)
-        loader = build_episode_loader(dataset, batch_size, workers, shuffle)
+            dataset_shards = dataset_shards + additional_tar_paths
+        #dataset = TarDataset(shards)
+        #loader = build_episode_loader(dataset, batch_size, workers, shuffle)
+        loader = build_episode_loader_from_shards(
+            dataset_shards,
+            batch_size,
+            workers,
+            shuffle=shuffle,
+            shuffle_buffer=shuffle_buffer,
+        )
     
     else:
         with torch.no_grad():
@@ -151,6 +160,7 @@ def train_epoch(
     data_loader,
     loss_log=None,
     agreement_log=None,
+    learning_rate_log=None,
     grad_norm_clip=None,
     supervision_mode='action',
     plot=False,
@@ -196,7 +206,7 @@ def train_epoch(
         loss.backward()
         if grad_norm_clip:
             clip_grad_norm_(model.parameters(), grad_norm_clip)
-
+        
         # step
         scheduler.step()
         optimizer.step()
@@ -205,6 +215,8 @@ def train_epoch(
         l = float(loss)
         if loss_log is not None:
             loss_log.log(l)
+        if learning_rate_log is not None:
+            learning_rate_log.log(scheduler.get_learning_rate())
         running_loss = running_loss or l
         running_loss = running_loss * 0.9 + l * 0.1
         iterate.set_description('loss: %.04f'%running_loss)
@@ -217,7 +229,7 @@ def train_epoch(
                 legend=True,
                 min_max_y=True,
                 colors={'loss':'RED'},
-                x_range=(0.2,1.),
+                x_range=(0.1,1.),
             )
             print(loss_chart)
         
@@ -228,9 +240,20 @@ def train_epoch(
                 legend=True,
                 min_max_y=True,
                 colors={'expert agreement':'YELLOW'},
-                x_range=(0.2,1.),
+                x_range=(0.1,1.),
             )
             print(agreement_chart)
+        
+        if learning_rate_log is not None:
+            learning_rate_chart = plot_logs(
+                {'learning rate':learning_rate_log},
+                border='line',
+                legend=True,
+                min_max_y=True,
+                colors={'learning rate':'MAGENTA'},
+                x_range=(0.1,1.),
+            )
+            print(learning_rate_chart)
 
 def evaluate_epoch(
     name,

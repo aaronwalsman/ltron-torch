@@ -9,7 +9,6 @@ import torch
 from conspiracy.log import Log
 
 from ltron.config import Config
-from ltron.dataset.paths import get_dataset_info
 from ltron.gym.rollout_storage import RolloutStorage
 from ltron.hierarchy import (
     stack_numpy_hierarchies,
@@ -17,7 +16,6 @@ from ltron.hierarchy import (
     index_hierarchy,
 )
 from ltron.visualization.drawing import write_text
-from ltron.dataset.tar_dataset import generate_tar_dataset
 
 from ltron_torch.train.reassembly_labels import make_reassembly_labels
 from ltron_torch.train.epoch import (
@@ -26,7 +24,6 @@ from ltron_torch.train.epoch import (
     evaluate_epoch,
     visualize_epoch,
 )
-from ltron_torch.dataset.tar_dataset import TarDataset, build_episode_loader
 
 # config definition ============================================================
 
@@ -68,27 +65,49 @@ def dagger(
     start_epoch=1,
     success_reward_value=0.,
     train_loss_log=None,
+    train_agreement_log=None,
+    learning_rate_log=None,
     train_reward_log=None,
     train_success_log=None,
-    train_agreement_log=None,
     test_reward_log=None,
     test_success_log=None,
 ):
     
     print('='*80)
     print('Begin DAgger')
+    print('-'*80)
+    print('Epochs: %i'%config.epochs)
+    print('Passes Per Epoch: %i'%config.passes_per_epoch)
+    print('Recent Epochs To Save: %i'%config.recent_epochs_to_save)
+    print('Batch Size: %i'%config.batch_size)
+    print('Workers: %i'%config.workers)
+    print('Train Frequency: %i'%config.train_frequency)
+    print('Test Frequency: %i'%config.test_frequency)
+    print('Checkpoint Frequency: %i'%config.checkpoint_frequency)
+    print('Visualization Frequency: %i'%config.visualization_frequency)
+    print('Train Episodes Per Epoch: %i'%config.train_episodes_per_epoch)
+    print('Test Episodes Per Epoch: %i'%config.test_episodes_per_epoch)
+    print('Visualization Episodes Per Epoch: %i'%
+        config.visualization_episodes_per_epoch)
+    print('Expert Probability Start: %.04f'%config.expert_probability_start)
+    print('Expert Probability End: %.04f'%config.expert_probability_end)
+    print('Expert Decay Start: %i'%config.expert_decay_start)
+    print('Expert Decay End: %i'%config.expert_decay_end)
+    
     train_start = time.time()
     
     print('-'*80)
     print('Building Logs')
     if train_loss_log is None:
         train_loss_log = Log()
+    if train_agreement_log is None:
+        train_agreement_log = Log()
+    if learning_rate_log is None:
+        learning_rate_log = Log()
     if train_reward_log is None:
         train_reward_log = Log()
     if train_success_log is None:
         train_success_log = Log()
-    if train_agreement_log is None:
-        train_agreement_log = Log()
     if test_reward_log is None:
         test_reward_log = Log()
     if test_success_log is None:
@@ -173,6 +192,7 @@ def dagger(
                     train_loader,
                     loss_log=train_loss_log,
                     agreement_log=train_agreement_log,
+                    learning_rate_log=learning_rate_log,
                     grad_norm_clip=config.grad_norm_clip,
                     supervision_mode=config.supervision_mode,
                     plot=(i==config.passes_per_epoch),
@@ -191,17 +211,18 @@ def dagger(
         # save checkpoint
         if checkpoint_this_epoch:
             save_checkpoint(
-                config,
-                epoch,
-                model,
-                optimizer,
-                scheduler,
-                train_loss_log,
-                train_reward_log,
-                train_success_log,
-                train_agreement_log,
-                test_reward_log,
-                test_success_log,
+                config=config,
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                train_loss_log=train_loss_log,
+                train_agreement_log=train_agreement_log,
+                learning_rate_log=learning_rate_log,
+                train_reward_log=train_reward_log,
+                train_success_log=train_success_log,
+                test_reward_log=test_reward_log,
+                test_success_log=test_success_log,
             )
         
         # rollout test episodes
@@ -255,9 +276,10 @@ def save_checkpoint(
     optimizer,
     scheduler,
     train_loss_log,
+    train_agreement_log,
+    learning_rate_log,
     train_reward_log,
     train_success_log,
-    train_agreement_log,
     test_reward_log,
     test_success_log,
 ):
@@ -275,9 +297,10 @@ def save_checkpoint(
         'optimizer' : optimizer.state_dict(),
         'scheduler' : scheduler.state_dict(),
         'train_loss_log' : train_loss_log.get_state(),
+        'train_agreement_log' : train_agreement_log.get_state(),
+        'learning_rate_log' : learning_rate_log.get_state(),
         'train_reward_log' : train_reward_log.get_state(),
         'train_success_log' : train_success_log.get_state(),
-        'train_agreement_log' : train_agreement_log.get_state(),
         'test_reward_log' : test_reward_log.get_state(),
         'test_success_log' : test_success_log.get_state(),
     }

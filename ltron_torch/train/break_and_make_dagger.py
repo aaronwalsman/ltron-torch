@@ -39,7 +39,7 @@ class BreakAndMakeDAggerConfig(
     use_checkpoint_config = False
     
     dataset = 'rca'
-    train_split = '2_2_sss_train_episodes'
+    train_split = '2_2_train'
     test_split = '2_2_test'
     train_subset = None
     test_subset = None
@@ -56,6 +56,18 @@ def train_break_and_make_dagger(config=None):
         print('Loading Config')
         config = BreakAndMakeDAggerConfig.from_commandline()
     
+    print('-'*80)
+    print('Dataset: %s'%config.dataset)
+    print('Train Split: %s'%config.train_split)
+    if config.train_subset:
+        print('  Subset: %s'%config.train_subset)
+    print('Test Split: %s'%config.test_split)
+    if config.test_subset:
+        print('  Subset: %s'%config.test_subset)
+    print('Parallel Envs: %i'%config.parallel_envs)
+    
+    print('-'*80)
+    print('Setting Random Seed: %i'%config.seed)
     random.seed(config.seed)
     numpy.random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -87,11 +99,12 @@ def train_break_and_make_dagger(config=None):
         scheduler_checkpoint = checkpoint['scheduler']
 
         # logs
-        train_loss_log_checkpoint = checkpoint.get('train_log_loss', None)
-        train_reward_log_checkpoint = checkpoint.get('train_reward_log', None)
-        train_success_log_checkpoint = checkpoint.get('train_success_log', None)
+        train_loss_log_checkpoint = checkpoint.get('train_loss_log', None)
         train_agreement_log_checkpoint = checkpoint.get(
             'train_agreement_log', None)
+        learning_rate_log_checkpoint = checkpoint.get('learning_rate_log', None)
+        train_reward_log_checkpoint = checkpoint.get('train_reward_log', None)
+        train_success_log_checkpoint = checkpoint.get('train_success_log', None)
         test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
         test_success_log_checkpoint = checkpoint.get('test_success_log', None)
         
@@ -103,9 +116,10 @@ def train_break_and_make_dagger(config=None):
         scheduler_checkpoint = None
 
         train_loss_log_checkpoint = None
+        train_agreement_log_checkpoint = None
+        learning_rate_log_checkpoint = None
         train_reward_log_checkpoint = None
         train_success_log_checkpoint = None
-        train_agreement_log_checkpoint = None
         test_reward_log_checkpoint = None
         test_success_log_checkpoint = None
 
@@ -176,9 +190,10 @@ def train_break_and_make_dagger(config=None):
     print('-'*80)
     print('Building Logs')
     train_loss_log = Log(state=train_loss_log_checkpoint)
+    train_agreement_log = Log(state=train_agreement_log_checkpoint)
+    learning_rate_log = Log(state=learning_rate_log_checkpoint)
     train_reward_log = Log(state=train_reward_log_checkpoint)
     train_success_log = Log(state=train_success_log_checkpoint)
-    train_agreement_log = Log(state=train_agreement_log_checkpoint)
     test_reward_log = Log(state=test_reward_log_checkpoint)
     test_success_log = Log(state=test_success_log_checkpoint)
     
@@ -191,9 +206,10 @@ def train_break_and_make_dagger(config=None):
         scheduler,
         start_epoch=start_epoch,
         train_loss_log=train_loss_log,
+        train_agreement_log=train_agreement_log,
+        learning_rate_log=learning_rate_log,
         train_reward_log=train_reward_log,
         train_success_log=train_success_log,
-        train_agreement_log=train_agreement_log,
         test_reward_log=test_reward_log,
         test_success_log=test_success_log,
     )

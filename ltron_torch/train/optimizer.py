@@ -88,6 +88,9 @@ class NoScheduler:
         self.config = config
         self.optimizer = optimizer
     
+    def get_learning_rate(self):
+        return self.config.learning_rate
+    
     def step(self):
         pass
     
@@ -101,11 +104,11 @@ class LinearWarmupCosineDecayScheduler:
     def __init__(self, config, optimizer):
         self.config = config
         self.optimizer = optimizer
-        self.steps = 0
-        self.base_lr = [
-            param_group['lr'] for param_group in optimizer.param_groups]
+        self.steps = 1
+        #self.base_lr = [
+        #    param_group['lr'] for param_group in optimizer.param_groups]
     
-    def step(self):
+    def get_learning_rate(self):
         lb = self.config.min_learning_rate_scale
         if self.steps < self.config.cosine_decay_start:
             lr_scale = self.steps / self.config.cosine_decay_start
@@ -116,8 +119,16 @@ class LinearWarmupCosineDecayScheduler:
             lr_scale = lb + 0.5 * (1. - lb) * (1 + math.cos(t * math.pi))
         else:
             lr_scale = lb
-        for group, lr in zip(self.optimizer.param_groups, self.base_lr):
-            group['lr'] = lr * lr_scale
+        #for group, lr in zip(self.optimizer.param_groups, self.base_lr):
+        #    group['lr'] = lr * lr_scale
+        learning_rate = self.config.learning_rate * lr_scale
+        
+        return learning_rate
+    
+    def step(self):
+        learning_rate = self.get_learning_rate()
+        for group in self.optimizer.param_groups:
+            group['lr'] = learning_rate
         
         self.steps += 1
     
@@ -125,11 +136,11 @@ class LinearWarmupCosineDecayScheduler:
         return {'steps':self.steps}
     
     def load_state_dict(self, state_dict):
-        if 'steps' in state_dict:
-            self.steps = state_dict['steps']
-        else:
-            self.steps = 0
-            print('NO STEPS FOUND, MAKE THIS AN ERROR AGAIN')
+        #if 'steps' in state_dict:
+        self.steps = state_dict['steps']
+        #else:
+        #    self.steps = 0
+        #    print('NO STEPS FOUND, MAKE THIS AN ERROR AGAIN')
 
 def build_scheduler(config, optimizer, checkpoint=None):
     if config.linear_warmup_cosine_decay:
