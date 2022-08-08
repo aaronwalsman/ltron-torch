@@ -34,7 +34,7 @@ def rollout_epoch(
     tar_path=None,
     additional_tar_paths=None,
     shards=1,
-    start_start=0,
+    start_shard=0,
     save_episode_frequency=256,
     **kwargs,
 ):
@@ -115,7 +115,7 @@ def rollout_epoch(
                 name,
                 episodes,
                 shards=shards,
-                #shard_start=shard_start,
+                start_shard=start_shard,
                 save_episode_frequency=save_episode_frequency,
                 env=env,
                 actor_fn=actor_fn,

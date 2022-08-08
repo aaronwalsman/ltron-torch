@@ -154,6 +154,8 @@ def dagger(
                 ]
             else:
                 scratch_path = None
+                additional_tar_paths = []
+                shard_index = 0
             
             train_loader = rollout_epoch(
                 'train',
