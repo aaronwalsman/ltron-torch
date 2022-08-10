@@ -156,6 +156,8 @@ def dagger(
                 ]
             else:
                 scratch_path = None
+                additional_tar_paths = []
+                shard_index = 0
             
             train_episodes = (
                 (len(additional_tar_paths)+1) * config.train_episodes_per_epoch)
