@@ -20,6 +20,8 @@ from ltron_torch.models.brick_decoder import BrickDecoder
 
 class AutoDecoderConfig(Config):
     channels = 768
+    tile_width = 16
+    tile_height = 16
 
 class AutoDecoder(Module):
     def __init__(self,
@@ -38,34 +40,53 @@ class AutoDecoder(Module):
         
         for name, space in action_space.subspaces.items():
             if isinstance(space, MultiScreenPixelSpace):
-                raise Exception('TODO')
-                #decoders[name] = CoarseToFineVisualCursorDecoder(
-                '''
-                self.visual_cursor_names.append(name)
+                #self.visual_cursor_names.append(name)
                 self.readout_layout.add_names(**{name:1})
-
+                
                 # build the cursor fine-grained embedding
-                first_key = next(
-                    k for k in space.screen_span.keys() if k != 'NO_OP')
-                mh = observation_space[first_key].mask_height
-                mw = observation_space[first_key].mask_width
-                h,w,c = space.screen_span.get_shape(first_key)
-                assert h % mh == 0
-                assert w % mw == 0
-                fh = h//mh
-                fw = w//mw
-                self.cursor_fine_layout.add_names(**{name:(fh,fw,2)})
-
-                self.cursor_colors[name] = []
-                for i in range(c):
-                    self.cursor_colors[name].append(visualization_colors[
-                            self.cursor_color_n % len(visualization_colors)])
-                    self.cursor_color_n += 1
-                '''
+                #first_key = next(
+                #    k for k in space.layout.keys() if k != 'NO_OP')
+                #mh = space[first_key].mask_height
+                #mw = space[first_key].mask_width
+                #h,w,c = space.screen_span.get_shape(first_key)
+                #assert h % mh == 0
+                #assert w % mw == 0
+                #fh = h//mh
+                #fw = w//mw
+                #self.cursor_fine_layout.add_names(**{name:(fh,fw,2)})
+                
+                #coarse_span = NameSpan()
+                #for screen in space.layout.keys():
+                #    if screen == 'NO_OP':
+                #        continue
+                #    sh, sw, _ = space.get_shape(screen).get_shape('screen')
+                #    assert sh % config.tile_height == 0
+                #    assert sw % config.tile_width == 0
+                #    ch = sh // config.tile_height
+                #    cw = sw // config.tile_width
+                #    coarse_span.add_names(screen=(ch, cw))
+                
+                #fine_shape = (config.tile_height, config.tile_width, 2)
+                
+                decoders[name] = CoarseToFineVisualCursorDecoder(
+                    #coarse_span,
+                    #fine_shape,
+                    space,
+                    (config.tile_height, config.tile_width, 2),
+                    channels=config.channels,
+                    default_k=4,
+                )
+                
+                #self.cursor_colors[name] = []
+                #for i in range(c):
+                #    self.cursor_colors[name].append(visualization_colors[
+                #            self.cursor_color_n % len(visualization_colors)])
+                #    self.cursor_color_n += 1
+                
             elif isinstance(space, SymbolicSnapSpace):
                 self.readout_layout.add_names(**{name:1})
                 decoders[name] = CoarseToFineSymbolicCursorDecoder(
-                    space.max_instances, config.channels,
+                    space.max_instances, config.channels, default_k=4,
                 )
             elif isinstance(space, BrickShapeColorSpace):
                 self.readout_layout.add_names(**{name:1})

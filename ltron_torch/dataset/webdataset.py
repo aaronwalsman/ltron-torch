@@ -11,14 +11,19 @@ def build_episode_loader(dataset, split, batch_size, workers, **kwargs):
     return build_episode_loader_from_shards(
         shards, batch_size, workers, **kwargs)
 
-def build_episode_loader_from_shards(shards, batch_size, workers, **kwargs):
+def build_episode_loader_from_shards(
+    shards,
+    batch_size,
+    workers,
+    **kwargs,
+):
     dataset = get_episode_webdataset_from_shards(
         shards,
         batch_size=batch_size,
         **kwargs,
     )
     
-    loader = DataLoader(
-        dataset, batch_size=None, num_workers=workers, collate_fn=lambda x : x)
+    #loader = DataLoader(
+    #    dataset, batch_size=None, num_workers=workers, collate_fn=lambda x : x)
     
-    return loader
+    return dataset #loader

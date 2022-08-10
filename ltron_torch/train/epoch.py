@@ -1,4 +1,5 @@
 import random
+import math
 import os
 import io
 import tarfile
@@ -29,8 +30,9 @@ def rollout_epoch(
     expert_probability=1.,
     batch_size=1,
     workers=0,
+    dataset_length=None,
     shuffle=False,
-    shuffle_buffer=1000,
+    shuffle_buffer=100,
     tar_path=None,
     additional_tar_paths=None,
     shards=1,
@@ -129,10 +131,12 @@ def rollout_epoch(
             dataset_shards = dataset_shards + additional_tar_paths
         #dataset = TarDataset(shards)
         #loader = build_episode_loader(dataset, batch_size, workers, shuffle)
+        batched_length = math.ceil(dataset_length / batch_size)
         loader = build_episode_loader_from_shards(
             dataset_shards,
             batch_size,
             workers,
+            batched_length=batched_length,
             shuffle=shuffle,
             shuffle_buffer=shuffle_buffer,
         )
@@ -158,6 +162,7 @@ def train_epoch(
     optimizer,
     scheduler,
     data_loader,
+    #loader_length=None,
     loss_log=None,
     agreement_log=None,
     learning_rate_log=None,
@@ -173,7 +178,7 @@ def train_epoch(
     model.train()
     
     running_loss = None
-    iterate = tqdm.tqdm(data_loader)
+    iterate = tqdm.tqdm(data_loader) #, total=loader_length)
     for batch, seq_pad in iterate:
         
         # convert observations to input tensors (x) and labels (y)
@@ -257,11 +262,12 @@ def train_epoch(
 
 def evaluate_epoch(
     name,
-    episodes,
+    loader,
     model,
     success_value,
-    reward_log,
-    success_log,
+    #loader_length=None,
+    reward_log=None,
+    success_log=None,
 ):
     print('-'*80)
     print('Evaluating: %s'%name)
@@ -269,7 +275,7 @@ def evaluate_epoch(
     avg_terminal_reward = 0.
     total_success = 0.
     total_episodes = 0
-    for seq, pad in episodes:
+    for seq, pad in tqdm.tqdm(loader):
         
         s, b = seq['reward'].shape
         reward = seq['reward'][pad-1, range(b)]
@@ -282,11 +288,13 @@ def evaluate_epoch(
         avg_success = total_success/total_episodes
 
     print('Average Terminal Reward: %f'%avg_terminal_reward)
-    reward_log.log(avg_terminal_reward)
+    if reward_log is not None:
+        reward_log.log(avg_terminal_reward)
 
     print('Average Success: %f (%i/%i)'%(
         avg_success, total_success, total_episodes))
-    success_log.log(avg_success)
+    if success_log is not None:
+        success_log.log(avg_success)
 
     chart = plot_logs_grid(
         [[{'%s_reward'%name:reward_log}, {'%s_success'%name:success_log}]],

@@ -131,12 +131,17 @@ class AutoEmbedding(Module):
         auto_pad = {}
         for name, embedding in self.embeddings.items():
             name_obs = observation[name]
-            a_x, a_t, a_pad = embedding.observation_to_tensors(
-                name_obs,
-                observation[self.time_step_name],
-                seq_pad,
-                device,
-            )
+            try:
+                a_x, a_t, a_pad = embedding.observation_to_tensors(
+                    name_obs,
+                    observation[self.time_step_name],
+                    seq_pad,
+                    device,
+                )
+            except:
+                print('observation_to_tensors failed for: %s'%name)
+                raise
+            
             auto_x[name] = a_x
             auto_t[name] = a_t
             auto_pad[name] = a_pad
@@ -178,7 +183,7 @@ class AutoEmbedding(Module):
                 out_t[name] = t_n
                 out_pad[name] = pad_n
             except:
-                print('Forwward failed while embedding: %s'%name)
+                print('forward failed while embedding: %s'%name)
                 raise
         
         # readout tokens

@@ -32,6 +32,8 @@ class DAggerConfig(Config):
     passes_per_epoch = 3
     recent_epochs_to_save = 8
     
+    save_episode_frequency = 256
+    
     batch_size = 8
     workers = 4
     
@@ -155,6 +157,8 @@ def dagger(
             else:
                 scratch_path = None
             
+            train_episodes = (
+                (len(additional_tar_paths)+1) * config.train_episodes_per_epoch)
             train_loader = rollout_epoch(
                 'train',
                 config.train_episodes_per_epoch,
@@ -164,11 +168,13 @@ def dagger(
                 expert_probability=expert_probability,
                 batch_size=config.batch_size,
                 workers=config.workers,
+                dataset_length=train_episodes,
                 shuffle=True,
                 tar_path=scratch_path,
                 additional_tar_paths=additional_tar_paths,
                 shards=1,
                 start_shard=shard_index,
+                save_episode_frequency=config.save_episode_frequency,
             )
             
             # evaluate training episodes
@@ -177,8 +183,9 @@ def dagger(
                 train_loader,
                 model,
                 success_reward_value,
-                train_reward_log,
-                train_success_log,
+                #loader_length=train_loader_length,
+                reward_log=train_reward_log,
+                success_log=train_success_log,
             )
         
         # train
@@ -190,6 +197,7 @@ def dagger(
                     optimizer,
                     scheduler,
                     train_loader,
+                    #loader_length=train_loader_length,
                     loss_log=train_loss_log,
                     agreement_log=train_agreement_log,
                     learning_rate_log=learning_rate_log,
@@ -237,8 +245,6 @@ def dagger(
                 batch_size=config.batch_size,
                 workers=config.workers,
                 shuffle=False,
-                #True,
-                #visualize_this_epoch,
             )
         
         # evaluate test episodes
@@ -248,8 +254,8 @@ def dagger(
                 test_loader,
                 model,
                 success_reward_value,
-                test_reward_log,
-                test_success_log,
+                reward_log=test_reward_log,
+                success_log=test_success_log,
             )
         
         # visualize training episodes

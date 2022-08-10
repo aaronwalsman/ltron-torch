@@ -4,6 +4,9 @@ import torch
 from torch.nn import (
     Module, ModuleList, ModuleDict, Linear, Embedding, LayerNorm)
 
+from ltron.compression import batch_deduplicate_from_masks
+
+from ltron_torch.gym_tensor import default_tile_transform
 from ltron_torch.models.padding import compress_tensors
 
 # raw data type embeddings
@@ -86,9 +89,11 @@ def MultiScreenPixelEmbedding(Module):
         
         self.sum_norm = LayerNorm(channels)
     
-    def observation_to_tensors(observations, t, pad, device):
+    def observation_to_tensors(self, observations, t, pad, device):
         coarse_x = []
         fine_x = []
+        
+        raise Exception('needs updating')
         
         # doing this in a loop is not ideal, but it's fast
         for i in observations:
@@ -128,6 +133,8 @@ def build_shared_masked_tiled_image_embeddings(
             temporal_embedding,
             tile_embedding=tile_embedding,
         )
+    
+    return embeddings
 
 class MaskedTiledImageEmbedding(Module):
     def __init__(self,
@@ -138,6 +145,8 @@ class MaskedTiledImageEmbedding(Module):
     ):
         super().__init__()
         
+        self.space = space
+        
         # temporal embedding
         self.temporal_embedding = temporal_embedding
         
@@ -147,18 +156,30 @@ class MaskedTiledImageEmbedding(Module):
         
         # spatial position encoding
         positions = space.mask_height * space.mask_width
-        self.position_encoding = LearnedPositionalEncoding(channels, positions)
-        self.spatial_norm = LayerNorm(channels)
+        #self.position_encoding = LearnedPositionalEncoding(channels, positions)
+        #self.position_encoding = Embedding(channels, positions)
+        #self.spatial_norm = LayerNorm(channels)
+        self.spatial_embedding = NormalizedEmbedding(positions, channels)
+        
         self.sum_norm = LayerNorm(channels)
     
-    def observation_to_tensors(self, observation):
-        pass
+    def observation_to_tensors(self, observation, t, pad, device):
+        tiles, tile_tyx, tile_pad = batch_deduplicate_from_masks(
+            observation['image'], observation['tile_mask'], t, pad)
+        x = {}
+        x['x'] = default_tile_transform(tiles).to(device).contiguous()
+        py = torch.LongTensor(tile_tyx[...,1]).to(device)
+        px = torch.LongTensor(tile_tyx[...,2]).to(device)
+        x['p'] = py * self.space.mask_width + px
+        t = torch.LongTensor(tile_tyx[...,0]).to(device)
+        pad = torch.LongTensor(tile_pad).to(device)
+        
+        return x, t, pad
     
-    def forward(x, p, t, pad):
-        raise Exception('THIS NEEDS SCRUTINY FIRST, IS EVERYTHING BELOW GOOD?')
+    def forward(self, x, p, t, pad):
         x = self.tile_embedding(x)
+        x = x + self.spatial_embedding(p)
         x = x + self.temporal_embedding(t)
-        x = x + self.spatial_norm(self.position_encoding(p))
         x = self.sum_norm(x)
         
         return x, t, pad
