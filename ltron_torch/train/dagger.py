@@ -41,6 +41,7 @@ class DAggerConfig(Config):
     test_frequency = 1
     checkpoint_frequency = 10
     visualization_frequency = 1
+    evaluate_train = True
     
     train_episodes_per_epoch = 4096
     test_episodes_per_epoch = 1024
@@ -54,6 +55,8 @@ class DAggerConfig(Config):
     expert_decay_end = 50
     
     supervision_mode = 'expert_uniform_distribution'
+    
+    shuffle_train = True
 
 # train functions ==============================================================
 
@@ -171,7 +174,7 @@ def dagger(
                 batch_size=config.batch_size,
                 workers=config.workers,
                 dataset_length=train_episodes,
-                shuffle=True,
+                shuffle=config.shuffle_train,
                 tar_path=scratch_path,
                 additional_tar_paths=additional_tar_paths,
                 shards=1,
@@ -180,15 +183,16 @@ def dagger(
             )
             
             # evaluate training episodes
-            evaluate_epoch(
-                'train',
-                train_loader,
-                model,
-                success_reward_value,
-                #loader_length=train_loader_length,
-                reward_log=train_reward_log,
-                success_log=train_success_log,
-            )
+            if config.evaluate_train:
+                evaluate_epoch(
+                    'train',
+                    train_loader,
+                    model,
+                    success_reward_value,
+                    #loader_length=train_loader_length,
+                    reward_log=train_reward_log,
+                    success_log=train_success_log,
+                )
         
         # train
         if train_this_epoch:

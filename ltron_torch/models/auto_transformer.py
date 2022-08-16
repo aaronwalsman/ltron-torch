@@ -17,7 +17,7 @@ from ltron.gym.spaces import (
     MultiScreenPixelSpace, MaskedTiledImageSpace, AssemblySpace,
 )
 from ltron.visualization.drawing import (
-    draw_crosshairs, draw_box, stack_images_horizontal,
+    draw_crosshairs, draw_box, write_text, stack_images_horizontal,
 )
 
 from ltron_torch.models.transformer import (
@@ -37,6 +37,7 @@ class AutoTransformerConfig(
     AutoDecoderConfig,
 ):
     action_decoder_dropout = 0.1
+    strict_load = True
 
 class AutoTransformer(Module):
     def __init__(self,
@@ -68,7 +69,7 @@ class AutoTransformer(Module):
         if checkpoint is not None:
             if isinstance(checkpoint, str):
                 checkpoint = torch.load(checkpoint)
-            self.load_state_dict(checkpoint)
+            self.load_state_dict(checkpoint, strict=config.strict_load)
         elif config.init_weights:
             self.apply(init_weights)
     
@@ -158,7 +159,9 @@ class AutoTransformer(Module):
             bb = torch.arange(b).view(1,b).expand(s,b).reshape(-1).cuda()
             y[ss,bb,actions.view(-1)] = 1
         
-        elif supervision_mode == 'expert_uniform_distribution':
+        elif (supervision_mode == 'expert_uniform_distribution' or
+            supervision_mode == 'expert_all'
+        ):
             # pull the expert labels
             labels = torch.LongTensor(batch['observation']['expert']).to(device)
             s, b = labels.shape[:2]
@@ -168,9 +171,10 @@ class AutoTransformer(Module):
             ss, bb, nn = torch.where(labels)
             ll = labels[ss,bb,nn]
             y[ss,bb,ll] = 1
-            total = torch.sum(y, dim=-1, keepdim=True)
-            total[total == 0] = 1 # (handle the padded values)
-            y = y/total
+            if supervision_mode == 'expert_uniform_distribution':
+                total = torch.sum(y, dim=-1, keepdim=True)
+                total[total == 0] = 1 # (handle the padded values)
+                y = y/total
         
         elif supervision_mode == 'expert_uniform_sample':
             # pull the expert labels
@@ -216,6 +220,11 @@ class AutoTransformer(Module):
                         'reward':seq['reward'][:pad[i],i],
                     }
                     
+                    for key, value in seq['observation'].items():
+                        if 'cursor' in key and 'selected' in value:
+                            summary['%s_selected'%key] = (
+                                value['selected'][:,i])
+                    
                     # compute action probabilities
                     seq_action_p = seq['distribution'][:,i]
                     max_action_p = numpy.max(seq_action_p, axis=-1)
@@ -224,6 +233,9 @@ class AutoTransformer(Module):
                     for frame_id in range(seq_len):
                         frame_observation = index_hierarchy(index_hierarchy(
                             seq['observation'], frame_id), i)
+                        distribution = seq['distribution'][frame_id,i]
+                        name_distribution = self.action_space.unravel_vector(
+                            distribution)
                         
                         # add the action to the summary
                         summary['action'].append(
@@ -234,6 +246,8 @@ class AutoTransformer(Module):
                         for name, space in self.observation_space.items():
                             if isinstance(space, MaskedTiledImageSpace):
                                 image = frame_observation[name]['image']
+                                
+                                '''
                                 for map_name, maps in cursor_maps.items():
                                     if name in maps:
                                         colors = self.embedding.cursor_colors[
@@ -247,7 +261,7 @@ class AutoTransformer(Module):
                                             mc = mc.reshape(*mc.shape, 1)
                                             image = (
                                                 image * (1.-mc) + mc*colors[c])
-
+                                '''
                                 images[name] = image.astype(numpy.uint8)
                             
                             elif isinstance(space, AssemblySpace):
@@ -268,14 +282,61 @@ class AutoTransformer(Module):
                         action_subspace = (
                             self.action_space.subspaces[action_name])
                         if isinstance(action_subspace, MultiScreenPixelSpace):
-                            n, *yxc = nyxc
+                            n, m, *yxc = nyxc
                             if n != 'NO_OP':
-                                y, x, c = yxc
-                                action_image = images[n]
-                                color = (
-                                    self.embedding.cursor_colors[action_name][c]
-                                )
-                                draw_crosshairs(action_image, y, x, 5, color)
+                                action_image = images[n + '_color_tiles']
+                                decoder = self.decoder.decoders[action_name]
+                                #color = decoder.color
+                                if m == 'deselect':
+                                    color = [0,255,0]
+                                    action_image[0,:] = color
+                                    action_image[-1,:] = color
+                                    action_image[:,0] = color
+                                    action_image[:,-1] = color
+                                else:
+                                    y, x, c = yxc
+                                    if c:
+                                        color = [0,0,255]
+                                    else:
+                                        color = [255,0,0]
+                                    draw_crosshairs(
+                                        action_image, y, x, 5, color)
+                        
+                        #for name in self.action_space.keys():
+                        #    subspace = self.action_space.subspaces[name]
+                            #if isinstance(subspace, MultiScreenPixelSpace):
+                            #subshape = self.action_space.get_shape(name)
+                            #for subname in subshape.keys():
+                            action_distribution = name_distribution[action_name]
+                            for subname in action_distribution.keys():
+                                if subname == 'NO_OP':
+                                    continue
+                                #subsubshape = subshape.get_shape(subname)
+                                #screen_shape = (
+                                #    subsubshape.get_shape('screen'))
+                                screen_dist = name_distribution[
+                                    action_name][subname]['screen']
+                                #screen_dist = sub_dist['screen']
+                                #max_pol = numpy.max(screen_dist, axis=-1)
+                                neg_dist = screen_dist[...,0]
+                                pos_dist = screen_dist[...,1]
+                                m = numpy.max(screen_dist) * 2.
+                                if m > 0.:
+                                    #max_pol = max_pol / m
+                                    neg_dist = neg_dist / m
+                                    pos_dist = pos_dist / m
+                                #h,w = max_pol.shape
+                                #max_pol = max_pol.reshape(h,w,1)
+                                decoder = self.decoder.decoders[action_name]
+                                for dist, color in [
+                                    (neg_dist, [255,0,0]), (pos_dist, [0,0,255])
+                                ]:
+                                    h,w = dist.shape
+                                    dist = dist.reshape(h,w,1)
+                                    images[subname + '_color_tiles'] = (
+                                        images[subname + '_color_tiles'] *
+                                        (1. - dist) +
+                                        numpy.array(color) * dist)
                         
                         if images:
                             out_image = stack_images_horizontal(
@@ -285,6 +346,8 @@ class AutoTransformer(Module):
                                 'frame_%04i_%06i_%04i.png'%(
                                     epoch, seq_id, frame_id),
                             )
+                            action_string = str((action_name,) + tuple(nyxc))
+                            out_image = write_text(out_image, action_string)
                             save_image(out_image, frame_path)
                     
                     summary_path = os.path.join(seq_path, 'summary.json')

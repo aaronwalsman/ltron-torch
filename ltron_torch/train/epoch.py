@@ -193,9 +193,9 @@ def train_epoch(
         
         # average loss over valid entries
         s_i, b_i = get_seq_batch_indices(torch.LongTensor(seq_pad))
-        
         loss = loss[s_i, b_i].mean()
         
+        # log agreement
         if agreement_log is not None:
             s, b, c = x.shape
             max_x = torch.argmax(x, dim=-1).reshape(-1)
@@ -203,6 +203,7 @@ def train_epoch(
             bb = torch.arange(b).view(1,b).expand(s,b).reshape(-1)
             max_y = y[ss, bb, max_x].reshape(s, b)[s_i, b_i]
             agreement = torch.sum(max_y > 0) / max_y.shape[0]
+            
             a = float(agreement.detach().cpu())
             agreement_log.log(a)
         
@@ -235,6 +236,7 @@ def train_epoch(
                 min_max_y=True,
                 colors={'loss':'RED'},
                 x_range=(0.1,1.),
+                hollow_mean=True,
             )
             print(loss_chart)
         
@@ -246,6 +248,7 @@ def train_epoch(
                 min_max_y=True,
                 colors={'expert agreement':'YELLOW'},
                 x_range=(0.1,1.),
+                hollow_mean=True,
             )
             print(agreement_chart)
         

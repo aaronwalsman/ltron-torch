@@ -1,9 +1,10 @@
 import torch
 from torch.nn import Module, ModuleDict, Dropout
 
-from gym.spaces import Discrete
+from gym.spaces import Discrete, Dict
 
 from ltron.config import Config
+from ltron.hierarchy import hierarchy_branch
 from ltron.gym.spaces import (
     MaskedTiledImageSpace,
     AssemblySpace,
@@ -25,6 +26,7 @@ from ltron_torch.models.embedding import (
 class AutoEmbeddingConfig(Config):
     channels = 768
     embedding_dropout = 0.1
+    skip_embeddings = None
 
 class AutoEmbedding(Module):
     def __init__(self,
@@ -38,6 +40,10 @@ class AutoEmbedding(Module):
         # store observation space and readout layout
         self.observation_space = observation_space
         self.readout_layout = readout_layout
+        if config.skip_embeddings is None:
+            self.skip_embeddings = set()
+        else:
+            self.skip_embeddings = set(config.skip_embeddings.split(','))
         
         # find token generating elements of the observation space
         tile_shapes = set()
@@ -68,6 +74,7 @@ class AutoEmbedding(Module):
         tile_subspaces = {
             name:subspace for name, subspace in observation_space.items()
             if isinstance(subspace, MaskedTiledImageSpace)
+            and name not in self.skip_embeddings
         }
         if len(tile_subspaces):
             tile_embeddings = build_shared_masked_tiled_image_embeddings(
@@ -81,6 +88,7 @@ class AutoEmbedding(Module):
         assembly_subspaces = {
             name:subspace for name, subspace in observation_space.items()
             if isinstance(subspace, AssemblySpace)
+            and name not in self.skip_embeddings
         }
         if len(assembly_subspaces):
             assembly_embeddings = build_shared_assembly_embeddings(
@@ -90,8 +98,10 @@ class AutoEmbedding(Module):
             )
             embeddings.update(assembly_embeddings)
         
-        # build other embeddings
-        for name, space in observation_space.items():
+        def build_embedding(name, space):
+            if name in self.skip_embeddings:
+                return
+            
             if isinstance(space, MultiScreenInstanceSnapSpace):
                 embeddings[name] = MultiDiscreteTemporalEmbedding(
                     space,
@@ -109,6 +119,14 @@ class AutoEmbedding(Module):
                     config.channels,
                     self.temporal_embedding,
                 )
+            
+            elif isinstance(space, Dict) and name not in embeddings:
+                for key, value in space.items():
+                    build_embedding('%s__%s'%(name, key), value)
+        
+        # build other embeddings
+        for name, space in observation_space.items():
+            build_embedding(name, space)
         
         # build the final dropout layer
         self.dropout = Dropout(config.embedding_dropout)
@@ -130,7 +148,11 @@ class AutoEmbedding(Module):
         auto_t = {}
         auto_pad = {}
         for name, embedding in self.embeddings.items():
-            name_obs = observation[name]
+            #sub_names = name.split('__')
+            #name_obs = observation
+            #for sub_name in sub_names:
+            #    name_obs = name_obs[sub_name]
+            name_obs = hierarchy_branch(observation, name.split('__'))
             try:
                 a_x, a_t, a_pad = embedding.observation_to_tensors(
                     name_obs,
