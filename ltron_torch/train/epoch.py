@@ -236,7 +236,6 @@ def train_epoch(
                 min_max_y=True,
                 colors={'loss':'RED'},
                 x_range=(0.1,1.),
-                hollow_mean=True,
             )
             print(loss_chart)
         
@@ -248,7 +247,6 @@ def train_epoch(
                 min_max_y=True,
                 colors={'expert agreement':'YELLOW'},
                 x_range=(0.1,1.),
-                hollow_mean=True,
             )
             print(agreement_chart)
         
