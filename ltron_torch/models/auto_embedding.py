@@ -126,6 +126,8 @@ class AutoEmbedding(Module):
         
         # build other embeddings
         for name, space in observation_space.items():
+            if name == 'expert':
+                continue
             build_embedding(name, space)
         
         # build the final dropout layer

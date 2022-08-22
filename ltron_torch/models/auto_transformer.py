@@ -145,7 +145,7 @@ class AutoTransformer(Module):
     def tensor_to_distribution(self, x):
         return self.decoder.tensor_to_distribution(x)
     
-    def observation_to_label(self, batch, pad, supervision_mode):
+    def observation_to_label(self, x, batch, pad, supervision_mode):
         device = next(self.parameters()).device
         
         if supervision_mode == 'action':
@@ -308,25 +308,27 @@ class AutoTransformer(Module):
                             #subshape = self.action_space.get_shape(name)
                             #for subname in subshape.keys():
                             action_distribution = name_distribution[action_name]
+                            max_p = 0.
                             for subname in action_distribution.keys():
                                 if subname == 'NO_OP':
                                     continue
-                                #subsubshape = subshape.get_shape(subname)
-                                #screen_shape = (
-                                #    subsubshape.get_shape('screen'))
                                 screen_dist = name_distribution[
                                     action_name][subname]['screen']
-                                #screen_dist = sub_dist['screen']
-                                #max_pol = numpy.max(screen_dist, axis=-1)
+                                max_screen_p = numpy.max(screen_dist)
+                                max_p = max(max_p, max_screen_p)
+                            
+                            for subname in action_distribution.keys():
+                                if subname == 'NO_OP':
+                                    continue
+                                screen_dist = name_distribution[
+                                    action_name][subname]['screen']
                                 neg_dist = screen_dist[...,0]
                                 pos_dist = screen_dist[...,1]
-                                m = numpy.max(screen_dist) * 2.
-                                if m > 0.:
-                                    #max_pol = max_pol / m
-                                    neg_dist = neg_dist / m
-                                    pos_dist = pos_dist / m
-                                #h,w = max_pol.shape
-                                #max_pol = max_pol.reshape(h,w,1)
+                                #m = numpy.max(screen_dist) * 2.
+                                #if m > 0.:
+                                if max_p > 0.:
+                                    neg_dist = neg_dist / (max_p * 2.)
+                                    pos_dist = pos_dist / (max_p * 2.)
                                 decoder = self.decoder.decoders[action_name]
                                 for dist, color in [
                                     (neg_dist, [255,0,0]), (pos_dist, [0,0,255])

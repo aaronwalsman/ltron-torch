@@ -32,8 +32,6 @@ class DAggerConfig(Config):
     passes_per_epoch = 3
     recent_epochs_to_save = 8
     
-    save_episode_frequency = 256
-    
     batch_size = 8
     workers = 4
     
@@ -45,6 +43,9 @@ class DAggerConfig(Config):
     
     train_episodes_per_epoch = 4096
     test_episodes_per_epoch = 1024
+    save_episode_frequency = 256
+    shards_per_epoch = 1
+    
     visualization_episodes_per_epoch = 16
     
     checkpoint_directory = './checkpoint'
@@ -148,24 +149,26 @@ def dagger(
             
             if config.recent_epochs_to_save:
                 e = epoch - 1
-                shard_index = e % config.recent_epochs_to_save
-                #scratch_path = './data_scratch/recent_%04i.tar'%r
+                shard_epoch_index = e % config.recent_epochs_to_save
                 scratch_path = './data_scratch'
                 additional_tar_paths = [
-                    '%s/train_%04i.tar'%(scratch_path, i)
+                    '%s/train_%04i_%04i.tar'%(scratch_path, i, j)
                     for i in range(config.recent_epochs_to_save)
-                    if i != shard_index and i < e
-                    and os.path.exists('%s/train_%04i.tar'%(scratch_path, i))
+                    for j in range(config.shards_per_epoch)
+                    if i != shard_epoch_index and i < e
+                    and os.path.exists(
+                        '%s/train_%04i_%04i.tar'%(scratch_path, i, j))
                 ]
             else:
                 scratch_path = None
                 additional_tar_paths = []
-                shard_index = 0
+                shard_epoch_index = 0
             
+            training_epochs = min(epoch, config.recent_epochs_to_save)
             train_episodes = (
-                (len(additional_tar_paths)+1) * config.train_episodes_per_epoch)
+                training_epochs * config.train_episodes_per_epoch)
             train_loader = rollout_epoch(
-                'train',
+                'train_%04i'%shard_epoch_index,
                 config.train_episodes_per_epoch,
                 train_env,
                 model=model,
@@ -177,8 +180,8 @@ def dagger(
                 shuffle=config.shuffle_train,
                 tar_path=scratch_path,
                 additional_tar_paths=additional_tar_paths,
-                shards=1,
-                start_shard=shard_index,
+                shards=config.shards_per_epoch,
+                start_shard=0,
                 save_episode_frequency=config.save_episode_frequency,
             )
             
