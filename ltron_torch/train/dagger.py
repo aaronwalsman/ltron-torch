@@ -56,6 +56,8 @@ class DAggerConfig(Config):
     
     supervision_mode = 'expert_uniform_distribution'
     
+    test_rollout_mode = 'max'
+    
     shuffle_train = True
 
 # train functions ==============================================================
@@ -246,7 +248,7 @@ def dagger(
                 config.test_episodes_per_epoch,
                 test_env,
                 model,
-                rollout_mode='max',
+                rollout_mode=config.test_rollout_mode,
                 expert_probability=0.,
                 batch_size=config.batch_size,
                 workers=config.workers,
