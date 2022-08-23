@@ -145,7 +145,7 @@ class AutoTransformer(Module):
     def tensor_to_distribution(self, x):
         return self.decoder.tensor_to_distribution(x)
     
-    def observation_to_label(self, x, batch, pad, supervision_mode):
+    def observation_to_label(self, batch, pad, supervision_mode):
         device = next(self.parameters()).device
         
         if supervision_mode == 'action':

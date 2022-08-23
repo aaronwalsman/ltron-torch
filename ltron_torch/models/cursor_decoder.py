@@ -32,7 +32,7 @@ class CoarseToFineVisualCursorDecoder(Module):
         for screen in space.layout.keys():
             if screen == 'NO_OP':
                 continue
-            sh, sw, _ = space.get_shape(screen).get_shape('screen')
+            sh, sw, *_ = space.get_shape(screen).get_shape('screen')
             assert sh % tile_height == 0
             assert sh % tile_width == 0
             ch = sh // tile_height
