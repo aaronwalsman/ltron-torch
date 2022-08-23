@@ -129,6 +129,7 @@ def rollout_epoch(
         
         if additional_tar_paths:
             dataset_shards = dataset_shards + additional_tar_paths
+        
         #dataset = TarDataset(shards)
         #loader = build_episode_loader(dataset, batch_size, workers, shuffle)
         batched_length = math.ceil(dataset_length / batch_size)
@@ -162,7 +163,6 @@ def train_epoch(
     optimizer,
     scheduler,
     data_loader,
-    #loader_length=None,
     loss_log=None,
     agreement_log=None,
     learning_rate_log=None,
@@ -178,7 +178,7 @@ def train_epoch(
     model.train()
     
     running_loss = None
-    iterate = tqdm.tqdm(data_loader) #, total=loader_length)
+    iterate = tqdm.tqdm(data_loader)
     for batch, seq_pad in iterate:
         
         # convert observations to input tensors (x) and labels (y)
@@ -190,6 +190,9 @@ def train_epoch(
         
         # compute loss
         loss = torch.sum(-torch.log_softmax(x, dim=-1) * y, dim=-1)
+        y_sum = torch.sum(y, dim=-1)
+        y_sum[y_sum == 0] = 1 # avoid divide by zero
+        loss = loss / y_sum
         
         # average loss over valid entries
         s_i, b_i = get_seq_batch_indices(torch.LongTensor(seq_pad))

@@ -1,5 +1,4 @@
 import random
-import argparse
 
 import numpy
 
@@ -139,6 +138,7 @@ def train_break_and_make_dagger(config=None):
         split='train_split',
         subset='train_subset',
     )
+    train_config.tile_color_render = ('transformer' in config.model)
     train_env = vector_ltron(
         config.parallel_envs,
         BreakAndMakeEnv,
@@ -147,7 +147,7 @@ def train_break_and_make_dagger(config=None):
         print_traceback=True,
     )
     
-    if test_on_train:
+    if config.test_on_train:
         test_env = train_env
     else:
         print('Building Test Env')
@@ -156,6 +156,7 @@ def train_break_and_make_dagger(config=None):
             split='test_split',
             subset='test_subset',
         )
+        test_config.tile_color_render = ('transformer' in config.model)
         test_env = vector_ltron(
             config.parallel_envs,
             BreakAndMakeEnv,
