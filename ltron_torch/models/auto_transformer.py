@@ -29,7 +29,8 @@ from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
 from ltron_torch.models.auto_decoder import (
     AutoDecoderConfig, AutoDecoder)
-from ltron_torch.models.padding import cat_multi_padded_seqs, decat_padded_seq
+from ltron_torch.models.padding import (
+    cat_multi_padded_seqs, decat_padded_seq, get_seq_batch_indices)
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
@@ -44,6 +45,7 @@ class AutoTransformer(Module):
         config,
         observation_space,
         action_space,
+        no_op_action,
         checkpoint=None
     ):
         # Module super
@@ -53,6 +55,7 @@ class AutoTransformer(Module):
         self.config = config
         self.observation_space = observation_space
         self.action_space = action_space
+        self.no_op_action = no_op_action
         
         # build the decoder
         # (do this before the encoder because we need the readout_layout)
@@ -114,7 +117,8 @@ class AutoTransformer(Module):
         cat_t, _ = cat_multi_padded_seqs(order_t, order_pad)
         
         # push the concatenated sequence through the transformer
-        enc_x = self.encoder(cat_x, cat_t, cat_pad, use_memory=use_memory)[-1]
+        trans_x = self.encoder(cat_x, cat_t, cat_pad, use_memory=use_memory)
+        enc_x = trans_x[-1]
         
         # strip off the decoder tokens
         decat_x, _ = decat_padded_seq(
@@ -124,6 +128,15 @@ class AutoTransformer(Module):
         # push the decoder tokens through the auto decoder
         head_x = self.decoder(decat_x, x['readout'], t['readout'], seq_pad)
         
+        #print('==================')
+        #b = head_x.shape[1]
+        #for i in range(b):
+        #    print('------------------')
+        #    print('seq %i'%i)
+        #    for name, name_pad in zip(name_seq, order_pad):
+        #        print('  %s contributed %i tokens'%(name, name_pad[i].cpu()))
+        #        print('   ', t[name][:,i])
+        
         return head_x
     
     def forward_rollout(self, terminal, *args, **kwargs):
@@ -131,6 +144,7 @@ class AutoTransformer(Module):
         use_memory = torch.BoolTensor(~terminal).to(device)
         return self(*args, **kwargs, use_memory=use_memory)
     
+    '''
     def tensor_to_actions(self, x, mode='sample'):
         s, b, a = x.shape
         assert s == 1
@@ -141,9 +155,28 @@ class AutoTransformer(Module):
             actions = torch.argmax(x, dim=-1).cpu().view(b).numpy()
 
         return actions
+    '''
+    
+    def empty_distribution(self):
+        return numpy.zeros((self.action_space.n,))
     
     def tensor_to_distribution(self, x):
         return self.decoder.tensor_to_distribution(x)
+    
+    def expert_distribution(self, expert_actions):
+        expert_actions = list(set([
+            a for a in expert_actions
+            if a != self.no_op_action
+        ]))
+        ## TMP
+        #if not len(expert_actions):
+        #    expert_actions = [self.no_op_action]
+        #expert_action = random.choice(expert_actions)
+        #actions[i] = expert_action
+        d = numpy.zeros(self.action_space.n)
+        d[expert_actions] = 1. / len(expert_actions)
+        
+        return d
     
     def observation_to_label(self, batch, pad, supervision_mode):
         device = next(self.parameters()).device
@@ -189,6 +222,23 @@ class AutoTransformer(Module):
             y[ss,bb,ll.view(-1)] = 1
         
         return y
+    
+    def loss(self, x, y, seq_pad):
+        #if True:
+        #    p = torch.softmax(x, dim=-1).detach()
+        #    y = p * y
+        loss = torch.sum(-torch.log_softmax(x, dim=-1) * y, dim=-1)
+
+        # automatically normalize the labels? why?
+        #y_sum = torch.sum(y, dim=-1)
+        #y_sum[y_sum == 0] = 1 # avoid divide by zero
+        #loss = loss / y_sum
+
+        # average loss over valid entries
+        s_i, b_i = get_seq_batch_indices(torch.LongTensor(seq_pad))
+        loss = loss[s_i, b_i].mean()
+        
+        return loss
     
     def visualize_episodes(
         self,
@@ -348,7 +398,8 @@ class AutoTransformer(Module):
                                 'frame_%04i_%06i_%04i.png'%(
                                     epoch, seq_id, frame_id),
                             )
-                            action_string = str((action_name,) + tuple(nyxc))
+                            action_string = str(
+                                (action_name,) + tuple(nyxc)) + ' (%i)'%action
                             out_image = write_text(out_image, action_string)
                             save_image(out_image, frame_path)
                     

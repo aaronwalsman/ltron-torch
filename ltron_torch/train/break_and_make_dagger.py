@@ -16,6 +16,7 @@ from ltron_torch.models.auto_transformer import (
     AutoTransformerConfig,
     AutoTransformer,
 )
+from ltron_torch.train.runs import redirect_output_to_new_run
 from ltron_torch.train.optimizer import (
     OptimizerConfig,
     build_optimizer,
@@ -33,6 +34,8 @@ class BreakAndMakeDAggerConfig(
 ):
     device = 'cuda'
     model = 'transformer'
+    
+    run_directory = '.'
     
     load_checkpoint = None
     use_checkpoint_config = False
@@ -55,6 +58,9 @@ def train_break_and_make_dagger(config=None):
         print('='*80)
         print('Loading Config')
         config = BreakAndMakeDAggerConfig.from_commandline()
+    
+    if config.run_directory:
+        redirect_output_to_new_run(run_directory=config.run_directory)
     
     print('-'*80)
     print('Dataset: %s'%config.dataset)
@@ -172,11 +178,13 @@ def train_break_and_make_dagger(config=None):
     if config.model == 'transformer':
         observation_space = test_env.metadata['observation_space']
         action_space = test_env.metadata['action_space']
+        no_op_action = test_env.metadata['no_op_action']
         model = AutoTransformer(
             config,
             observation_space,
             action_space,
-            model_checkpoint,
+            no_op_action,
+            checkpoint=model_checkpoint,
         ).to(device)
     else:
         raise ValueError(
