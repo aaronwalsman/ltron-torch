@@ -24,11 +24,13 @@ class CoarseToFineDecoder(Module):
         channels=768,
         dropout=0.,
         default_k=1,
+        #partial_normalize=True,
     ):
         super().__init__()
         
         self.shape = shape
         self.default_k = default_k
+        #self.partial_normalize = partial_normalize
         
         self.heads = ModuleList([
             linear_stack(
@@ -92,7 +94,7 @@ class CoarseToFineDecoder(Module):
             coords = (b_coord,) + tuple(out_coords)
             
             #lse_sampled = torch.logsumexp(head_out_x, dim=-1, keepdim=True)
-            lse_unsampled = log(n)
+            #lse_unsampled = log(n)
             
             # normalizing using the lse might actually be a bad idea here
             # this restricts the magnitude of the output logits, which might
@@ -100,8 +102,17 @@ class CoarseToFineDecoder(Module):
             # logits when this is added to other decoders
             # yeah, turned out this was terrible.
             head_shape = [b*dim_k, self.shape[dim]] + [1] * (dims-dim-1)
-            lse_shape = [b*dim_k] + [1] * (dims-dim)
-            out_x = out_x - lse_unsampled
+            #lse_shape = [b*dim_k] + [1] * (dims-dim)
+            
+            # this does absolutely nothing!
+            # not to the sampled distribution, not to the gradients
+            # this does nothing!
+            # softmax is invariant to constant shifts, so unless we do the
+            # thing before where we add this back in where we actually sample
+            # this does absolutely nothing!
+            #if self.partial_normalize:
+            #    out_x = out_x - lse_unsampled
+            
             out_x[coords] = (
                 out_x[coords] +
                 #lse_unsampled +

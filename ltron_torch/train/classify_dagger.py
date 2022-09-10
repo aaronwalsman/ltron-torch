@@ -7,10 +7,7 @@ import torch
 from conspiracy.log import Log
 
 from ltron.gym.envs.ltron_env import async_ltron, sync_ltron
-from ltron.gym.envs.break_and_make_env import (
-    BreakAndMakeEnvConfig,
-    BreakAndMakeEnv,
-)
+from ltron.gym.envs.classify_env import ClassifyEnvConfig, ClassifyEnv
 
 from ltron_torch.models.auto_transformer import (
     AutoTransformerConfig,
@@ -26,25 +23,23 @@ from ltron_torch.train.dagger import (
     DAggerConfig, dagger,
 )
 
-class BreakAndMakeDAggerConfig(
-    BreakAndMakeEnvConfig,
+class ClassifyDAggerConfig(
+    ClassifyEnvConfig,
     AutoTransformerConfig,
     OptimizerConfig,
     DAggerConfig,
 ):
     device = 'cuda'
     model = 'transformer'
-    
+
     run_directory = '.'
-    
+
     load_checkpoint = None
     use_checkpoint_config = False
-    
+
     dataset = 'rca'
     train_split = '2_2_train'
     test_split = '2_2_test'
-    train_subset = None
-    test_subset = None
 
     parallel_envs = 4
 
@@ -52,23 +47,19 @@ class BreakAndMakeDAggerConfig(
 
     seed = 1234567890
 
-def train_break_and_make_dagger(config=None):
+def train_classify_dagger(config=None):
     if config is None:
         print('='*80)
         print('Loading Config')
-        config = BreakAndMakeDAggerConfig.from_commandline()
-    
+        config = ClassifyDAggerConfig.from_commandline()
+
     if config.run_directory:
         redirect_output_to_new_run(run_directory=config.run_directory)
     
     print('-'*80)
     print('Dataset: %s'%config.dataset)
     print('Train Split: %s'%config.train_split)
-    if config.train_subset:
-        print('  Subset: %s'%config.train_subset)
     print('Test Split: %s'%config.test_split)
-    if config.test_subset:
-        print('  Subset: %s'%config.test_subset)
     print('Parallel Envs: %i'%config.parallel_envs)
     
     print('-'*80)
@@ -85,12 +76,12 @@ def train_break_and_make_dagger(config=None):
         if config.use_checkpoint_config:
             assert 'config' in checkpoint, (
                 '"config" not found in checkpoint: %s'%config.load_checkpoint)
-            config = BreakAndMakeDAggerConfig(**checkpoint['config'])
+            config = BreakAndEstimateDAggerConfig(**checkpoint['config'])
 
         # model
         model_checkpoint = checkpoint['model']
-
-        # optimizer
+        
+         # optimizer
         if config.train_frequency:
             if 'optimizer' in checkpoint:
                 optimizer_checkpoint = checkpoint['optimizer']
@@ -104,6 +95,7 @@ def train_break_and_make_dagger(config=None):
         scheduler_checkpoint = checkpoint['scheduler']
 
         # logs
+        '''
         train_loss_log_checkpoint = checkpoint.get('train_loss_log', None)
         train_agreement_log_checkpoint = checkpoint.get(
             'train_agreement_log', None)
@@ -112,14 +104,19 @@ def train_break_and_make_dagger(config=None):
         train_success_log_checkpoint = checkpoint.get('train_success_log', None)
         test_reward_log_checkpoint = checkpoint.get('test_reward_log', None)
         test_success_log_checkpoint = checkpoint.get('test_success_log', None)
+        '''
+        logs_checkpoint = checkpoint.get('logs', None)
+        logs = {name : Log(state=log) for name,log in logs_checkpoint.items()}
         
         # epoch
         start_epoch = checkpoint.get('epoch', 0) + 1
+    
     else:
         model_checkpoint = None
         optimizer_checkpoint = None
         scheduler_checkpoint = None
-
+        
+        '''
         train_loss_log_checkpoint = None
         train_agreement_log_checkpoint = None
         learning_rate_log_checkpoint = None
@@ -127,7 +124,9 @@ def train_break_and_make_dagger(config=None):
         train_success_log_checkpoint = None
         test_reward_log_checkpoint = None
         test_success_log_checkpoint = None
-
+        '''
+        logs = None
+        
         start_epoch = 1
     
     device = torch.device(config.device)
@@ -138,31 +137,18 @@ def train_break_and_make_dagger(config=None):
         vector_ltron = async_ltron
     else:
         vector_ltron = sync_ltron
-    train_config = BreakAndMakeDAggerConfig.translate(
-        config,
-        split='train_split',
-        subset='train_subset',
-    )
-    train_config.tile_color_render = ('transformer' in config.model)
+    config.tile_color_render = ('transformer' in config.model)
     train_env = vector_ltron(
         config.parallel_envs,
-        BreakAndMakeEnv,
-        train_config,
+        ClassifyEnv,
+        config,
         include_expert=True,
         print_traceback=True,
     )
-    
-    print('Building Test Env')
-    test_config = BreakAndMakeDAggerConfig.translate(
-        config,
-        split='test_split',
-        subset='test_subset',
-    )
-    test_config.tile_color_render = ('transformer' in config.model)
     test_env = vector_ltron(
         config.parallel_envs,
-        BreakAndMakeEnv,
-        test_config,
+        ClassifyEnv,
+        config,
         print_traceback=True,
     )
     
@@ -196,6 +182,7 @@ def train_break_and_make_dagger(config=None):
     print('Building Scheduler')
     scheduler = build_scheduler(config, optimizer, scheduler_checkpoint)
     
+    '''
     print('-'*80)
     print('Building Logs')
     train_loss_log = Log(state=train_loss_log_checkpoint)
@@ -205,6 +192,7 @@ def train_break_and_make_dagger(config=None):
     train_success_log = Log(state=train_success_log_checkpoint)
     test_reward_log = Log(state=test_reward_log_checkpoint)
     test_success_log = Log(state=test_success_log_checkpoint)
+    '''
     
     dagger(
         config,
@@ -214,11 +202,12 @@ def train_break_and_make_dagger(config=None):
         optimizer,
         scheduler,
         start_epoch=start_epoch,
-        train_loss_log=train_loss_log,
-        train_agreement_log=train_agreement_log,
-        learning_rate_log=learning_rate_log,
-        train_reward_log=train_reward_log,
-        train_success_log=train_success_log,
-        test_reward_log=test_reward_log,
-        test_success_log=test_success_log,
+        logs=logs,
+        #train_loss_log=train_loss_log,
+        #train_agreement_log=train_agreement_log,
+        #learning_rate_log=learning_rate_log,
+        #train_reward_log=train_reward_log,
+        #train_success_log=train_success_log,
+        #test_reward_log=test_reward_log,
+        #test_success_log=test_success_log,
     )

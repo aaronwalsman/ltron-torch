@@ -159,7 +159,11 @@ class MaskedTiledImageEmbedding(Module):
         #self.position_encoding = LearnedPositionalEncoding(channels, positions)
         #self.position_encoding = Embedding(channels, positions)
         #self.spatial_norm = LayerNorm(channels)
-        self.spatial_embedding = NormalizedEmbedding(positions, channels)
+        if True:
+            self.spatial_embedding = NormalizedEmbedding(positions, channels)
+        else:
+            self.spatial_embedding = Embedding(positions, channels)
+            torch.nn.init.zeros_(self.spatial_embedding.weight)
         
         self.sum_norm = LayerNorm(channels)
     
@@ -338,7 +342,8 @@ class AssemblyEmbedding(Module):
         
         s_coord, b_coord, i_coord = torch.where(shape)
         instance_id = torch.arange(n, device=device).view(1,1,n).expand(s,b,n)
-        t = torch.arange(s, device=device).view(s, 1, 1).expand(s,b,n)
+        #t = torch.arange(s, device=device).view(s, 1, 1).expand(s,b,n)
+        t = torch.LongTensor(t).to(device).view(s,b,1).expand(s,b,n)
         (padded_shape,
          padded_color,
          padded_pose,

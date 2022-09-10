@@ -1,7 +1,7 @@
 import torch
 from torch.nn import Module, ModuleDict, Dropout
 
-from gym.spaces import Discrete, Dict
+from gym.spaces import Discrete, MultiDiscrete, Dict
 
 from ltron.config import Config
 from ltron.hierarchy import hierarchy_branch
@@ -27,6 +27,8 @@ class AutoEmbeddingConfig(Config):
     channels = 768
     embedding_dropout = 0.1
     skip_embeddings = None
+    
+    share_temporal_embedding = False
 
 class AutoEmbedding(Module):
     def __init__(self,
@@ -60,14 +62,18 @@ class AutoEmbedding(Module):
                 self.time_step_space = space
         
         assert self.time_step_space is not None
-        self.temporal_embedding = TemporalEmbedding(
-            self.time_step_space, config.channels)
+        if config.share_temporal_embedding:
+            self.temporal_embedding = TemporalEmbedding(
+                self.time_step_space, config.channels)
+        else:
+            self.temporal_embedding = None
         
         # build the readout embedding
         self.readout_embedding = DiscreteTemporalEmbedding(
             readout_layout.total,
             config.channels,
-            self.temporal_embedding,
+            temporal_embedding=self.temporal_embedding or TemporalEmbedding(
+                self.time_step_space, config.channels)
         )
         
         # build the tile embeddings
@@ -80,7 +86,8 @@ class AutoEmbedding(Module):
             tile_embeddings = build_shared_masked_tiled_image_embeddings(
                 tile_subspaces,
                 config.channels,
-                self.temporal_embedding,
+                temporal_embedding=self.temporal_embedding or TemporalEmbedding(
+                    self.time_step_space, config.channels)
             )
             embeddings.update(tile_embeddings)
         
@@ -94,7 +101,8 @@ class AutoEmbedding(Module):
             assembly_embeddings = build_shared_assembly_embeddings(
                 assembly_subspaces,
                 config.channels,
-                self.temporal_embedding,
+                temporal_embedding=self.temporal_embedding or TemporalEmbedding(
+                    self.time_step_space, config.channels)
             )
             embeddings.update(assembly_embeddings)
         
@@ -106,7 +114,9 @@ class AutoEmbedding(Module):
                 embeddings[name] = MultiDiscreteTemporalEmbedding(
                     space,
                     config.channels,
-                    self.temporal_embedding,
+                    temporal_embedding=(
+                        self.temporal_embedding or TemporalEmbedding(
+                            self.time_step_space, config.channels))
                 )
             
             elif isinstance(space, TimeStepSpace):
@@ -117,7 +127,24 @@ class AutoEmbedding(Module):
                 embeddings[name] = DiscreteTemporalEmbedding(
                     space.n,
                     config.channels,
-                    self.temporal_embedding,
+                    temporal_embedding=(
+                        self.temporal_embedding or TemporalEmbedding(
+                            self.time_step_space, config.channels))
+                )
+            #elif isinstance(space, Box) and space.dtype == numpy.int64:
+            #    embeddings[name] = IntegerBoxTemporalEmbedding(
+            #        space,
+            #        config.channels,
+            #        #self.temporal_embedding
+            #        TemporalEmbedding(self.time_step_space, config.channels),
+            #    )
+            elif isinstance(space, MultiDiscrete):
+                embeddings[name] = MultiDiscreteTemporalEmbedding(
+                    space,
+                    config.channels,
+                    temporal_embedding=(
+                        self.temporal_embedding or TemporalEmbedding(
+                            self.time_step_space, config.channels))
                 )
             
             elif isinstance(space, Dict) and name not in embeddings:
@@ -126,8 +153,8 @@ class AutoEmbedding(Module):
         
         # build other embeddings
         for name, space in observation_space.items():
-            if name == 'expert':
-                continue
+            #if name == 'expert':
+            #    continue
             build_embedding(name, space)
         
         # build the final dropout layer
@@ -190,6 +217,17 @@ class AutoEmbedding(Module):
         auto_x['readout'] = {'x':readout_x}
         auto_t['readout'] = readout_t
         auto_pad['readout'] = readout_pad
+        
+        debug = False
+        if debug:
+            print('======================')
+            print('observation_to_tensors')
+            for i in range(b):
+                print('----------------------')
+                print('trajectory: %i'%i)
+                for name, p in auto_pad.items():
+                    print('component %s contributed %i tokens'%(name, p[i]))
+                    print('   ', auto_t[name][:,i].cpu().numpy())
         
         return {'x':auto_x, 't':auto_t, 'pad':auto_pad}
     

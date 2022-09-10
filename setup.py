@@ -26,6 +26,8 @@ setuptools.setup(
             'train_break_and_estimate_dagger='
                 'ltron_torch.train.break_and_estimate_dagger:'
                 'train_break_and_estimate_dagger',
+            'train_classify_dagger='
+                'ltron_torch.train.classify_dagger:train_classify_dagger',
             'train_edit_bc='
                 'ltron_torch.train.edit_bc:train_edit_bc',
             'train_edit_dagger='
