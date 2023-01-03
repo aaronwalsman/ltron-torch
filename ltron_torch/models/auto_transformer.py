@@ -35,7 +35,7 @@ from ltron_torch.models.padding import (
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
-    AutoDecoderConfig,
+    UnsharedMLPAutoDecoderConfig,
 ):
     action_decoder_dropout = 0.1
     strict_load = True
