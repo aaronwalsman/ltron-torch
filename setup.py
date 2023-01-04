@@ -40,6 +40,10 @@ setuptools.setup(
             'ltron_break_and_make_dataset='
                 'ltron_torch.dataset.break_and_make:'
                 'ltron_break_and_make_dataset',
+            'train_select_connection_point='
+                'ltron_torch.train.select_connection_point:'
+                'train_select_connection_point',
+            'train_break=ltron_torch.train.break:train_break',
         ]
     }
 )

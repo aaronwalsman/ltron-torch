@@ -35,23 +35,27 @@ class AutoDecoder(Module):
         
         self.action_space = action_space
         
+        # build the uncombined decoders
         self.readout_layout = NameSpan(PAD=1)
-        
         self.combined_decoder_names = []
-        
         decoders = {}
-        
         for name, space in action_space.subspaces.items():
             if isinstance(space, MultiScreenPixelSpace):
                 self.readout_layout.add_names(**{name:1})
                 decoders[name] = CoarseToFineVisualCursorDecoder(
-                    #coarse_span,
-                    #fine_shape,
                     space,
                     (config.tile_height, config.tile_width, 2),
                     channels=config.channels,
                     default_k=4,
-                    #partial_normalize=config.partial_normalize_coarse_to_fine,
+                )
+            
+            elif isinstance(space, PixelSpace):
+                self.readout_layout.add_names(**{name:1})
+                decoders[name] = PixelDecoder(
+                    space,
+                    (config.tile_height, config.tile_width, 2),
+                    channels=config.channels,
+                    default_k=4,
                 )
                 
             elif isinstance(space, SymbolicSnapSpace):
@@ -59,24 +63,9 @@ class AutoDecoder(Module):
                 decoders[name] = CoarseToFineSymbolicCursorDecoder(
                     space.max_instances, config.channels, default_k=4,
                 )
+            
             elif isinstance(space, BrickShapeColorSpace):
                 self.readout_layout.add_names(**{name:1})
-                '''
-                decoders[name] = BrickDecoder(
-                    space.num_shapes,
-                    space.num_colors,
-                    config.channels,
-                    include_pose=False,
-                    #partial_normalize=config.partial_normalize_coarse_to_fine,
-                )
-                '''
-                '''
-                decoders[name] = SimpleBrickDecoder(
-                    space.num_shapes,
-                    space.num_colors,
-                    channels=config.channels,
-                )
-                '''
                 decoders[name] = ExplicitBrickDecoder(
                     space.num_shapes,
                     space.num_colors,
@@ -141,10 +130,6 @@ class AutoDecoder(Module):
                 decoder_x.update(name_x)
             else:
                 decoder_x[name] = name_x
-        
-        #print('==============')
-        #for name in decoder_x:
-        #    print(name, ':', decoder_x[name].shape)
         
         ts = torch.max(seq_pad)
         tb = seq_pad.shape[0]

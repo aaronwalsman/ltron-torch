@@ -4,7 +4,67 @@ from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
 from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 
-class MemoryAttention(Module):
+class Attention(Module):
+    def __init__(self,
+        channels,
+        heads,
+        attention_dropout=0.,
+        content_dropout=0.,
+    ):
+        super().__init__()
+        
+        # save arguments
+        assert channels % heads == 0, '%s MOD %s = %s'%(
+            channels, heads, channels%heads)
+        self.c = channels
+        self.h = heads
+        self.hc = self.c // self.h
+        
+        # build qkv layers
+        self.q_linear = Linear(self.c, self.c)
+        self.k_linear = Linear(self.c, self.c)
+        self.v_linear = Linear(self.c, self.c)
+        self.attention_dropout = Dropout(attention_dropout)
+        
+        # build forward projection
+        self.content_linear = Linear(self.c, self.c)
+        self.content_dropout = Dropout(content_dropout)
+    
+    def forward(self, xq, xk=None, xv=None):
+        
+        # defaults
+        if xk is None:
+            xk = xq
+        if xv is None:
+            xv = xk
+        
+        # pull shape
+        qs, b = xq.shape[:2]
+        ks = xk.shape[0]
+        
+        # compute q,k,v
+        q = self.q_linear(xq).view(qs, b, self.h, self.hc)
+        k = self.k_linear(xk).view(ks, b, self.h, self.hc)
+        v = self.v_linear(xv).view(ks, b, self.h, self.hc)
+        
+        # compute attention
+        qk = torch.einsum('sbhc,tbhc->stbh', q, k)
+        temperature = 1. / self.hc ** 0.5
+        a = qk * temperature
+        
+        p = torch.softmax(a, dim=1)
+        #p = torch.nan_to_num(p)
+        p = self.attention_dropout(p)
+        
+        # compute forward projection
+        x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(qs,b,self.c)
+        x = self.content_linear(x)
+        x = self.content_dropout(x)
+        
+        return x
+        
+
+class CausalAttention(Attention):
     '''
     Implements a standard multi-head attention module, but adds memory
     functionality to enable more efficient step-by-step rollouts.  To do this
@@ -29,7 +89,9 @@ class MemoryAttention(Module):
         attention_dropout=0.,
         content_dropout=0.,
     ):
-        super(MemoryAttention, self).__init__()
+        raise Exception('NEED TO MAKE INHERIT CORRECTLY')
+        
+        super().__init__()
         
         # store values we need for later
         assert channels % heads == 0, '%s MOD %s = %s'%(
@@ -61,7 +123,7 @@ class MemoryAttention(Module):
         self.content_dropout = Dropout(content_dropout)
     
     def forward(self,
-        xq, pad, xk=None, xv=None, mask=None, use_memory=None,
+        xq, xk=None, xv=None, pad=None, mask=None, use_memory=None,
     ):
         
         # set defaults
@@ -69,6 +131,11 @@ class MemoryAttention(Module):
             xk = xq
         if xv is None:
             xv = xk
+        if pad is None:
+            raise Exception(
+                'SHOULD BE AUTO-ONES OR SOMETHING, '
+                'BUT SHOULD HAVE PAD FOR K/Q TOO?'
+            )
         
         # pull shape
         qs, b = xq.shape[:2]
@@ -121,18 +188,10 @@ class MemoryAttention(Module):
                 seq_dim=1, batch_dim=2, pad_value=True)
             mask = expanded_mask
         
-        #print('Adding:')
-        #print(pad)
-        #print(self.memory_length)
-        
         # concatenate k and v onto the memory
         kv = torch.cat((k, v), dim=-1)
         self.memory_kv, self.memory_length = cat_padded_seqs(
             self.memory_kv, kv, self.memory_length, pad)
-        
-        #print('Result:')
-        #print(self.memory_length)
-        #print(self.memory_kv.shape)
         
         # chop off extra sequence elements
         max_len = torch.max(self.memory_length)

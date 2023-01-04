@@ -7,7 +7,7 @@ from torch.nn import (
 from ltron.config import Config
 
 from ltron_torch.models.mlp import make_nonlinearity
-from ltron_torch.models.memory_attention import MemoryAttention
+from ltron_torch.models.attention import Attention, CausalAttention
 from ltron_torch.models.mask import padded_causal_mask
 
 class TransformerConfig(Config):
@@ -28,11 +28,11 @@ class TransformerConfig(Config):
             self.residual_channels = 4 * self.channels
 
 class TransformerBlock(Module):
-    def __init__(self, config):
+    def __init__(self, config, AttentionModule):
         super(TransformerBlock, self).__init__()
         
         self.attention_norm = LayerNorm(config.channels)
-        self.attention = MemoryAttention(
+        self.attention = AttentionModule(
             config.channels,
             config.heads,
             attention_dropout = config.attention_dropout,
@@ -47,48 +47,92 @@ class TransformerBlock(Module):
             Dropout(config.residual_dropout),
         )
     
-    def forward(self,
-        x, pad, xk=None, mask=None, use_memory=None
-    ):
+    def forward(self, x, xk=None, xv=None, *args, **kwargs):
         xq = self.attention_norm(x)
         if xk is not None:
             xk = self.attention_norm(xk)
-        x = x + self.attention(xq, pad, xk=xk, mask=mask, use_memory=use_memory)
+        if xv is not None:
+            xv = self.attention_norm(xv)
+        x = x + self.attention(xq, xk=xk, xv=xv, *args, **kwargs)
         x = x + self.projection_residual(x)
         
         return x
+    
+    #def forward(self,
+    #    x, pad, xk=None, mask=None, use_memory=None
+    #):
+    #    xq = self.attention_norm(x)
+    #    if xk is not None:
+    #        xk = self.attention_norm(xk)
+    #    x = x + self.attention(xq, pad, xk=xk, mask=mask, use_memory=use_memory)
+    #    x = x + self.projection_residual(x)
+    #    
+    #    return x
 
 class Transformer(Module):
     '''
     This class implements a stack of multiple transformer blocks without the
     token embedding or any output decoders.
     '''
+    
+    AttentionModule = Attention
+    
     def __init__(self, config):
         super(Transformer, self).__init__()
         
-        self.blocks = ModuleList(
-            [TransformerBlock(config) for _ in range(config.blocks)])
+        self.blocks = ModuleList([
+            TransformerBlock(config, self.AttentionModule)
+            for _ in range(config.blocks)
+        ])
         
-        if config.init_weights:
-            self.apply(init_weights)
+        #if config.init_weights:
+        #    self.apply(init_weights)
     
-    def forward(self, x, t, pad, use_memory=None, output_layers=None):
-        mask = padded_causal_mask(t, pad)
-        
+    def forward(self, x, output_layers=None, **kwargs):
         if output_layers is None:
             output_layers = set()
         
-        xs = {}
-        xs['mask'] = mask
+        x_out = {}
         
         for i, block in enumerate(self.blocks):
-            x = block(x, pad, mask=mask, use_memory=use_memory)
+            x = block(x, **kwargs)
             if i in output_layers:
-                xs[i] = x
+                x_out[i] = x
         
-        xs[-1] = x
+        x_out[-1] = x
         
-        return xs
+        return x_out
+    
+    #def forward(self, x, t, pad, use_memory=None, output_layers=None):
+    #    mask = padded_causal_mask(t, pad)
+    #    
+    #    if output_layers is None:
+    #        output_layers = set()
+    #    
+    #    xs = {}
+    #    xs['mask'] = mask
+    #    
+    #    for i, block in enumerate(self.blocks):
+    #        x = block(x, pad, mask=mask, use_memory=use_memory)
+    #        if i in output_layers:
+    #            xs[i] = x
+    #    
+    #    xs[-1] = x
+    #    
+    #    return xs
+    
+
+class CausalTransformer(Transformer):
+    
+    AttentionModule = CausalAttention
+    
+    def forward(self, x, t, pad, output_layers=None, **kwargs):
+        mask = padded_causal_mask(t, pad)
+        x_out = super().forward(
+            x, output_layers=output_layers, pad=pad, **kwargs)
+        x_out['mask'] = mask
+        
+        return x_out
     
     def zero_all_memory(self):
         for block in self.blocks:

@@ -5,9 +5,9 @@ import numpy
 
 import gym.spaces as spaces
 
-from ltron.gym.spaces import (
-    ImageSpace, InstanceMaskSpace, TimeStepSpace, EdgeSpace
-)
+#from ltron.gym.spaces import (
+#    ImageSpace, InstanceMaskSpace, TimeStepSpace, EdgeSpace
+#)
 #from ltron.torch.brick_geometric import (
 #        BrickList, BrickGraph, BrickListBatch, BrickGraphBatch)
 
