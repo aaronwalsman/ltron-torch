@@ -21,6 +21,8 @@ class DictEmbedding(nn.ModuleDict):
         return {name : module(**x[name]) for name, module in self.items()}
     
     def observation_to_kwargs(self, obs, info, done, model_output):
+        if not isinstance(info, dict):
+            breakpoint()
         return {'x' : {
             name : module.observation_to_kwargs(
                 obs[name], info.get(name, {}), done, None)

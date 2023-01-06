@@ -24,7 +24,7 @@ from ltron_torch.models.auto_embedding import (
 from ltron_torch.models.transformer import (
     TransformerConfig, Transformer, init_weights)
 from ltron_torch.models.auto_decoder import (
-    AutoDecoderConfig, AutoDecoder)
+    AutoDecoderConfig, AutoActorDecoder, AutoActorCriticDecoder)
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
@@ -41,7 +41,7 @@ class AutoTransformer(nn.Module):
         observation_space,
         action_space,
         checkpoint=None,
-        build_value_head=False,
+        decode_mode='actor',
     ):
         # Module super
         super().__init__()
@@ -62,8 +62,10 @@ class AutoTransformer(nn.Module):
         self.encoder = Transformer(config)
         
         # build the decoder
-        self.decoder = AutoDecoder(
-            config, action_space, build_value_head=build_value_head)
+        if decode_mode == 'actor':
+            self.decoder = AutoActorDecoder(config, action_space)
+        elif decode_mode == 'actor_critic':
+            self.decoder = AutoActorCriticDecoder(config, action_space)
         
         # load checkpoint or initialize weights
         if checkpoint is not None:
@@ -80,8 +82,14 @@ class AutoTransformer(nn.Module):
     def sample_action(self, output, observation, info):
         return self.decoder.sample_action(output, observation, info)
     
-    def log_probs(self, output, action):
-        return self.decoder.log_probs(output, action)
+    def log_prob(self, output, action):
+        return self.decoder.log_prob(output, action)
+    
+    def entropy(self, output):
+        return self.decoder.entropy(output)
+    
+    def value(self, output):
+        return self.decoder.value(output)
     
     def forward(self, *args, **kwargs):
         

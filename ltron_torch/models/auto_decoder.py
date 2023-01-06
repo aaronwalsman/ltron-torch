@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from torch.distributions import Categorical
 
-from gymnasium.spaces import Discrete, MultiDiscrete, Dict
+from gymnasium.spaces import Discrete, MultiDiscrete, Dict, Tuple
 
 from avarice.data import torch_to_numpy
 
@@ -81,24 +81,97 @@ the entire history of tokens so far... but guess what that is?  It's the same
 as a single decoder token.  Sheesh.  Ok, so single decoder token it is.
 '''
 
-class UnsharedMLPAutoDecoderConfig(Config):
-    channels = 768
-    layers = 3
-    nonlinearity = 'gelu'
+class AbstractAutoActorDecoder(nn.Module):
+    def sample_action(self, output, observation, info):
+        action = torch_to_numpy(output['sample'])
+        return action
+    
+    def log_prob(self, output, action):
+        return output['log_prob']
+    
+    def entropy(self, output):
+        return output['entropy']
 
-class AutoDecoderHead(nn.Module):
-    def __init__(self, config, num_outputs):
+class DictAutoDecoder(AbstractAutoActorDecoder):
+    def __init__(self, config, space):
+        super().__init__()
+        modules = OrderedDict()
+        for name, subspace in space.items():
+            modules[name] = AutoActorDecoder(config, subspace)
+        self.submodules = nn.ModuleDict(modules)
+    
+    def forward(self, x):
+        out = {'logits' : {}, 'sample' : {}, 'log_prob' : 0., 'entropy' : 0.}
+        for name, module in self.submodules.items():
+            #thing = module(x)
+            #if len(thing) != 2:
+            #    breakpoint()
+            module_out, x = module(x)
+            out['logits'][name] = module_out['logits']
+            out['sample'][name] = module_out['sample']
+            out['log_prob'] = out['log_prob'] + module_out['log_prob']
+            out['entropy'] = out['entropy'] + module_out['entropy']
+        
+        return out, x
+
+class TupleAutoDecoder(AbstractAutoActorDecoder):
+    def __init__(self, config, space):
+        super().__init__()
+        modules = []
+        for subspace in space:
+            modules.append(AutoActorDecoder(config, subspace))
+        self.submodules = nn.ModuleList(modules)
+    
+    def forward(self, x):
+        out = {'logits' : [], 'sample' : [], 'log_prob' : 0., 'entropy' : 0.}
+        for module in self.submodules:
+            module_out, x = module(x)
+            out['logits'].append(module_out['logits'])
+            out['sample'].append(module_out['sample'])
+            out['log_prob'] = out['log_prob'] + module_out['log_prob']
+            out['entropy'] = out['entropy'] + module_out['entropy']
+        return out, x
+
+class DiscreteAutoDecoder(AbstractAutoActorDecoder):
+    def __init__(self, config, space):
         super().__init__()
         self.config = config
         self.mlp = linear_stack(
             self.config.layers,
             self.config.channels,
             hidden_channels=self.config.channels,
-            out_channels=num_outputs,
+            out_channels=space.n,
             nonlinearity=self.config.nonlinearity,
         )
-        self.embedding = nn.Embedding(num_outputs, self.config.channels)
+        self.embedding = nn.Embedding(space.n, self.config.channels)
+    
+    def forward(self, x):
+        out = {}
+        out['logits'] = self.mlp(x)
+        distribution = Categorical(logits=out['logits'])
+        out['sample'] = distribution.sample()
+        out['entropy'] = distribution.entropy()
+        out['log_prob'] = distribution.log_prob(out['sample'])
+        embedding = self.embedding(out['sample'])
+        x = x + embedding
+        return out, x
 
+class MultiDiscreteAutoDecoder(TupleAutoDecoder):
+    def __init__(self, config, space):
+        super().__init__(config, Tuple(Discrete(n) for n in space.nvec))
+    
+    #def sample_action(self, output, observation, info):
+    #    action = torch_to_numpy(output['sample'])
+    #    breakpoint()
+    #    return action
+    
+    def forward(self, x):
+        out, x = super().forward(x)
+        out['logits'] = torch.stack(out['logits'], dim=1)
+        out['sample'] = torch.stack(out['sample'], dim=1)
+        return out, x
+
+'''
 class UnsharedMLPAutoDecoder(nn.Module):
     def __init__(self,
         config,
@@ -143,25 +216,26 @@ class UnsharedMLPAutoDecoder(nn.Module):
                 'Discrete and MultiDiscrete action spaces'
             )
     
-    def compute_single_output(self, x, module):
-        logits = module.mlp(x)
-        distribution = Categorical(logits=logits)
-        sample = distribution.sample()
-        log_prob = distribution.log_prob(sample)
-        embedding = module.embedding(sample)
-        x = x + embedding
-        return logits, distribution, sample, log_prob, x #embedding, x
+    #def compute_single_output(self, x, module):
+        #logits, distribution, sample, embedding = module.mlp(x)
+        #distribution = Categorical(logits=logits)
+        #sample = distribution.sample()
+        #log_prob = distribution.log_prob(sample)
+        #embedding = module.embedding(sample)
+        #x = x + embedding
+        #return logits, distribution, sample, log_prob, x #embedding, x
     
     def compute_nested_output(self, x, module):
         if isinstance(module, nn.ModuleDict):
             logits = OrderedDict()
-            distributions = OrderedDict()
+            #distributions = OrderedDict()
             samples = OrderedDict()
             log_prob = 0.
+            entropy = 0.
             #embeddings = OrderedDict()
             for name, sub_module in module.items():
                 #l,d,s,p,e,x = self.compute_nested_output(x, sub_module)
-                l,d,s,p,x = self.compute_nested_output(x, sub_module)
+                l,s,p,e,x = self.compute_nested_output(x, sub_module)
                 logits[name] = l
                 distributions[name] = d
                 samples[name] = s
@@ -170,21 +244,25 @@ class UnsharedMLPAutoDecoder(nn.Module):
             return logits, distributions, samples, log_prob, x #embeddings, x
         elif isinstance(module, nn.ModuleList):
             logits = []
-            distributions = []
+            #distributions = []
             samples = []
+            entropy = 0.
             log_prob = 0.
             #embeddings = []
             for sub_module in module:
                 #l,d,s,p,e,x = self.compute_nested_output(x, sub_module)
-                l,d,s,p,x = self.compute_nested_output(x, sub_module)
+                l,s,p,e,x = self.compute_nested_output(x, sub_module)
                 logits.append(l)
-                distributions.append(d)
+                #distributions.append(d)
                 samples.append(s)
                 log_prob = log_prob + p
+                entropy = entropy + e
                 #embeddings.append(e)
-            return logits, distributions, samples, log_prob, x, #embeddings, x
+            #return logits, distributions, samples, log_prob, x, #embeddings, x
+            return logits, samples, log_prob, entropy, x
         else:
-            return self.compute_single_output(x, module)
+            #return self.compute_single_output(x, module)
+            return module(x)
     
     def forward(self, x):
         b, c = x.shape
@@ -218,3 +296,56 @@ def AutoDecoder(config, action_space, *args, **kwargs):
         return UnsharedMLPAutoDecoder(config, action_space, *args, **kwargs)
     else:
         raise NotImplementedError
+'''
+
+class AutoDecoderConfig(Config):
+    channels = 768
+    layers = 3
+    nonlinearity = 'gelu'
+
+def AutoActorDecoder(config, space):
+    if isinstance(space, Dict):
+        return DictAutoDecoder(config, space)
+    elif isinstance(space, Tuple):
+        return TupleAutoDecoder(config, space)
+    elif isinstance(space, MultiDiscrete):
+        return MultiDiscreteAutoDecoder(config, space)
+    elif isinstance(space, Discrete):
+        return DiscreteAutoDecoder(config, space)
+
+class CriticDecoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.stack = linear_stack(
+            config.layers,
+            config.channels,
+            hidden_channels=config.channels,
+            out_channels=1,
+            nonlinearity=config.nonlinearity,
+        )
+    
+    def forward(self, x):
+        return self.stack(x).view(-1)
+
+class AutoActorCriticDecoder(nn.Module):
+    def __init__(self, config, space):
+        super().__init__()
+        self.actor = AutoActorDecoder(config, space)
+        self.critic = CriticDecoder(config)
+    
+    def forward(self, x):
+        a, _ = self.actor(x)
+        c = self.critic(x)
+        return {'actor' : a, 'critic' : c}
+    
+    def sample_action(self, output, observation, info):
+        return self.actor.sample_action(output['actor'], observation, info)
+    
+    def log_prob(self, output, action):
+        return self.actor.log_prob(output['actor'], action)
+    
+    def entropy(self, output):
+        return self.actor.entropy(output['actor'])
+    
+    def value(self, output):
+        return output['critic']
