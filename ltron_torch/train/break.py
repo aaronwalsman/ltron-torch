@@ -2,7 +2,7 @@ import copy
 
 from ltron.gym.envs.break_env import BreakEnvConfig
 from ltron.gym.wrappers.break_vector_reward import (
-    BreakVectorEnvRenderRewardWrapper,
+    BreakVectorEnvAssemblyRewardWrapper,
 )
 
 from ltron_torch.models.auto_transformer import (
@@ -15,6 +15,16 @@ from avarice.trainers import PPOTrainerConfig, PPOTrainer, env_fn_wrapper
 class BreakTrainerConfig(
     BreakEnvConfig, PPOTrainerConfig, AutoTransformerConfig
 ):
+    # override defaults
+    channels = 256
+    heads = 4
+    
+    batch_size = 32
+    parallel_train_envs = 16
+    parallel_eval_envs = 16
+    
+    recurrent = 1
+    
     train_env = 'LTRON/Break-v0'
     train_dataset = 'rca'
     train_split = '2_2_train'
@@ -55,9 +65,10 @@ class BreakTrainer(PPOTrainer):
         return env_fn
     
     def initilize_new_vector_env(self, env_fns):
+        breakpoint()
         vector_env = super().initialize_new_vector_env(env_fns)
         if self.config.brick_identification_mode == 'render':
-            vector_env = BreakVectorEnvRenderRewardWrapper(vector_env)
+            vector_env = BreakVectorEnvAssemblyRewardWrapper(vector_env)
         else:
             raise NotImplementedError
         
@@ -65,10 +76,10 @@ class BreakTrainer(PPOTrainer):
     
     def initialize_new_model(self, *args, **kwargs):
         return super().initialize_new_model(
-            *args, build_value_head=True, **kwargs)
+            *args, decode_mode='actor_critic', **kwargs)
 
 def train_break():
     config = BreakTrainerConfig.from_commandline()
     trainer = BreakTrainer(config, ModelClass=AutoTransformer)
     
-    breakpoint()
+    trainer.train()
