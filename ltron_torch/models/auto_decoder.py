@@ -14,6 +14,8 @@ from steadfast.config import Config
 from steadfast.hierarchy import flatten_hierarchy
 from steadfast.name_span import NameSpan
 
+from ltron.gym.components.cursor import CursorActionSpace
+
 from ltron_torch.models.mlp import linear_stack
 
 '''
@@ -86,51 +88,110 @@ class AbstractAutoActorDecoder(nn.Module):
         action = torch_to_numpy(output['sample'])
         return action
     
-    def log_prob(self, output, action):
-        return output['log_prob']
-    
-    def entropy(self, output):
-        return output['entropy']
 
 class DictAutoDecoder(AbstractAutoActorDecoder):
     def __init__(self, config, space):
         super().__init__()
-        modules = OrderedDict()
+        submodules = OrderedDict()
         for name, subspace in space.items():
-            modules[name] = AutoActorDecoder(config, subspace)
-        self.submodules = nn.ModuleDict(modules)
+            submodules[name] = AutoActorDecoder(config, subspace)
+        self.submodules = nn.ModuleDict(submodules)
     
     def forward(self, x):
-        out = {'logits' : {}, 'sample' : {}, 'log_prob' : 0., 'entropy' : 0.}
+        #out = {'logits' : {}, 'sample' : {}, 'log_prob' : 0., 'entropy' : 0.}
+        out = {'logits' : {}, 'distribution' : {}, 'sample' : {}}
         for name, module in self.submodules.items():
             #thing = module(x)
             #if len(thing) != 2:
             #    breakpoint()
             module_out, x = module(x)
             out['logits'][name] = module_out['logits']
+            out['distribution'][name] = module_out['distribution']
             out['sample'][name] = module_out['sample']
-            out['log_prob'] = out['log_prob'] + module_out['log_prob']
-            out['entropy'] = out['entropy'] + module_out['entropy']
+            #out['log_prob'] = out['log_prob'] + module_out['log_prob']
+            #out['entropy'] = out['entropy'] + module_out['entropy']
         
         return out, x
+    
+    def log_prob(self, output, observation, info, action):
+        log_prob = 0.
+        for name, distribution in output['distribution']:
+            name_info = None
+            if name in info:
+                name_info = info[name]
+            
+            log_prob = log_prob + self.submodules[name].log_prob(
+                output[name], observation[name], name_info, action[name])
+        
+        return log_prob
+    
+    def entropy(self, output, observation, info, action):
+        entropy = 0.
+        for name, distribution in output['distribution']:
+            name_info = None
+            if name in info:
+                name_info = info[name]
+            
+            entropy = entropy + self.submodules[name].entropy(
+                output[name], observation[name], name_info, action[name])
+        
+        return entropy
+
+class CursorAutoDecoder(DictAutoDecoder):
+    def __init__(self, config, space):
+        super().__init__(config, space)
+    
+    def log_prob(self, output, target):
+        breakpoint()
+    
+    def entropy(self, output, target):
+        breakpoint()
 
 class TupleAutoDecoder(AbstractAutoActorDecoder):
     def __init__(self, config, space):
         super().__init__()
-        modules = []
+        submodules = []
         for subspace in space:
-            modules.append(AutoActorDecoder(config, subspace))
-        self.submodules = nn.ModuleList(modules)
+            submodules.append(AutoActorDecoder(config, subspace))
+        self.submodules = nn.ModuleList(submodules)
     
     def forward(self, x):
-        out = {'logits' : [], 'sample' : [], 'log_prob' : 0., 'entropy' : 0.}
+        #out = {'logits' : [], 'sample' : [], 'log_prob' : 0., 'entropy' : 0.}
+        out = {'logits' : [], 'distribution' : [], 'sample' : []}
         for module in self.submodules:
             module_out, x = module(x)
             out['logits'].append(module_out['logits'])
+            out['distribution'].append(module_out['distribution'])
             out['sample'].append(module_out['sample'])
-            out['log_prob'] = out['log_prob'] + module_out['log_prob']
-            out['entropy'] = out['entropy'] + module_out['entropy']
+            #out['log_prob'] = out['log_prob'] + module_out['log_prob']
+            #out['entropy'] = out['entropy'] + module_out['entropy']
         return out, x
+    
+    def log_prob(self, output, observation, info, action):
+        log_prob = 0.
+        for i, distribution in enumerate(output['distribution']):
+            i_info = None
+            if info is not None and info != {}:
+                i_info = info[i]
+            
+            log_prob = log_prob + self.submodules[i].log_prob(
+                output[i], observation[i], i_info, action[i])
+        
+        return log_prob
+    
+    def entropy(self, output, observation, info, action):
+        entropy = 0.
+        for i, distribution in enumerate(output['distribution']):
+            i_info = None
+            if info is not None and info != {}:
+                i_info = info[i]
+            
+            entropy = entropy + self.submodules[i].entropy(
+                output[i], observation[i], i_info, action[i])
+        
+        return entropy
+        
+        return entropy
 
 class DiscreteAutoDecoder(AbstractAutoActorDecoder):
     def __init__(self, config, space):
@@ -149,12 +210,19 @@ class DiscreteAutoDecoder(AbstractAutoActorDecoder):
         out = {}
         out['logits'] = self.mlp(x)
         distribution = Categorical(logits=out['logits'])
+        out['distribution'] = distribution
         out['sample'] = distribution.sample()
-        out['entropy'] = distribution.entropy()
-        out['log_prob'] = distribution.log_prob(out['sample'])
+        #out['entropy'] = distribution.entropy()
+        #out['log_prob'] = distribution.log_prob(out['sample'])
         embedding = self.embedding(out['sample'])
         x = x + embedding
         return out, x
+    
+    def log_prob(self, output, observation, info, action):
+        return output['distribution'].log_prob(action)
+    
+    def entropy(self, output):
+        return output['distribution'].entropy()
 
 class MultiDiscreteAutoDecoder(TupleAutoDecoder):
     def __init__(self, config, space):
@@ -272,7 +340,7 @@ class UnsharedMLPAutoDecoder(nn.Module):
         l,d,s,p,_ = self.compute_nested_output(x, self.conditional_mlps)
         out['logits'] = l
         out['distributions'] = d
-        out['samples'] = s
+        out['sample'] = s
         out['log_prob'] = p
         #out['embeddings'] = e
         
@@ -304,7 +372,9 @@ class AutoDecoderConfig(Config):
     nonlinearity = 'gelu'
 
 def AutoActorDecoder(config, space):
-    if isinstance(space, Dict):
+    if isinstance(space, CursorActionSpace):
+        return CursorAutoDecoder(config, space)
+    elif isinstance(space, Dict):
         return DictAutoDecoder(config, space)
     elif isinstance(space, Tuple):
         return TupleAutoDecoder(config, space)
@@ -341,8 +411,8 @@ class AutoActorCriticDecoder(nn.Module):
     def sample_action(self, output, observation, info):
         return self.actor.sample_action(output['actor'], observation, info)
     
-    def log_prob(self, output, action):
-        return self.actor.log_prob(output['actor'], action)
+    def log_prob(self, output, target):
+        return self.actor.log_prob(output['actor'], target)
     
     def entropy(self, output):
         return self.actor.entropy(output['actor'])
