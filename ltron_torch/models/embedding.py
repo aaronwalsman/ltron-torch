@@ -10,17 +10,13 @@ from steadfast.config import Config
 default_image_mean = [0.485, 0.456, 0.406]
 default_image_std = [0.229, 0.224, 0.225]
 
-class AutoEmbeddingConfig(Config):
-    channels = 768
-    tile_height = 16
-    tile_width = 16
-
+'''
 class DictEmbedding(nn.ModuleDict):
     def __init__(self, config, observation_space):
         super().__init__({
             name : AutoEmbedding(config, subspace)
             for name, subspace in observation_space.items()
-            if 'equivalence' not in name
+            if not isinstance(subspace, IgnoreSpace)
         })
     
     def forward(self, x):
@@ -40,6 +36,7 @@ class TupleEmbedding(nn.ModuleList):
         super().__init__([
             AutoEmbedding(config, subspace)
             for i, subspace in enumerate(observation_space)
+            if not isinstance(subspace, IgnoreSpace)
         ])
        
     def forward(self, x):
@@ -55,7 +52,7 @@ class TupleEmbedding(nn.ModuleList):
             model_kwargs.append(module.observation_to_kwargs(
                 observation[i], module_info, done, None))
         return {'x' : model_kwargs}
-
+'''
 class DiscreteEmbedding(nn.Embedding):
     def __init__(self, config, observation_space):
         super().__init__(observation_space.n, config.channels)
@@ -67,21 +64,21 @@ class DiscreteEmbedding(nn.Embedding):
         return super().forward(x)
 
 class ImageSpaceEmbedding(nn.Module):
-    def __init__(self, config, observation_space):
+    def __init__(self, observation_space, tile_width, tile_height, channels):
         super().__init__()
-        assert observation_space.height % config.tile_height == 0
-        assert observation_space.width % config.tile_width == 0
-        self.y_tiles = observation_space.height // config.tile_height
-        self.x_tiles = observation_space.width // config.tile_width
+        assert observation_space.height % tile_height == 0
+        assert observation_space.width % tile_width == 0
+        self.y_tiles = observation_space.height // tile_height
+        self.x_tiles = observation_space.width // tile_width
         self.total_tiles = self.y_tiles * self.x_tiles
 
         self.tile_conv = nn.Conv2d(
             in_channels=observation_space.channels,
-            out_channels=config.channels,
-            kernel_size=(config.tile_height, config.tile_width),
-            stride=(config.tile_height, config.tile_width)
+            out_channels=channels,
+            kernel_size=(tile_height, tile_width),
+            stride=(tile_height, tile_width)
         )
-        self.tile_embedding = nn.Embedding(self.total_tiles, config.channels)
+        self.tile_embedding = nn.Embedding(self.total_tiles, channels)
 
     def forward(self, x):
         x = self.tile_conv(x)
@@ -99,9 +96,18 @@ class ImageSpaceEmbedding(nn.Module):
         x = x.permute(0,3,1,2)
         
         return {'x' : x}
+'''
+class AutoEmbeddingConfig(Config):
+    channels = 768
+    tile_height = 16
+    tile_width = 16
 
 def AutoEmbedding(config, observation_space):
+    if isinstance(observation_space, IgnoreSpace):
+        return None
+    
     this_module = sys.modules[__name__]
-    auto_embedding_name = type(observation_space).__name__ + 'Embedding'
-    EmbeddingClass = getattr(this_module, auto_embedding_name)
+    EmbeddingClass = getattr(
+        this_module, type(observation_space).__name__ + 'Embedding')
     return EmbeddingClass(config, observation_space)
+'''

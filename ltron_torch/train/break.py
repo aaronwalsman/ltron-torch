@@ -5,15 +5,20 @@ from ltron.gym.wrappers.break_vector_reward import (
     BreakVectorEnvAssemblyRewardWrapper,
 )
 
-from ltron_torch.models.auto_transformer import (
-    AutoTransformer,
-    AutoTransformerConfig,
+from ltron_torch.models.ltron_visual_transformer import (
+    LtronVisualTransformerConfig,
+    LtronVisualTransformer,
 )
+
+#from ltron_torch.models.auto_transformer import (
+#    AutoTransformer,
+#    AutoTransformerConfig,
+#)
 
 from avarice.trainers import PPOTrainerConfig, PPOTrainer, env_fn_wrapper
 
 class BreakTrainerConfig(
-    BreakEnvConfig, PPOTrainerConfig, AutoTransformerConfig
+    BreakEnvConfig, PPOTrainerConfig, LtronVisualTransformerConfig
 ):
     # override defaults
     channels = 256
@@ -37,10 +42,10 @@ class BreakTrainerConfig(
     eval_subset = None
     eval_repeat = 1
     
-    brick_identification_mode = 'render'
+    brick_identification_mode = 'assembly'
 
 class BreakTrainer(PPOTrainer):
-    def make_single_train_env_fn(self):
+    def make_single_train_env_fn(self, parallel_index):
         env_fn = env_fn_wrapper(
             self.config.train_env,
             config=self.config,
@@ -49,10 +54,12 @@ class BreakTrainer(PPOTrainer):
             dataset_subset=self.config.train_subset,
             dataset_repeat=self.config.train_repeat,
             dataset_shuffle=True,
+            train=True,
+            parallel_index=parallel_index,
         )
         return env_fn
     
-    def make_single_eval_env_fn(self):
+    def make_single_eval_env_fn(self, parallel_index):
         env_fn = env_fn_wrapper(
             self.config.eval_env,
             config=self.config,
@@ -61,13 +68,14 @@ class BreakTrainer(PPOTrainer):
             dataset_subset=self.config.eval_subset,
             dataset_repeat=self.config.eval_repeat,
             dataset_shuffle=False,
+            train=False,
+            parallel_index=parallel_index,
         )
         return env_fn
     
-    def initilize_new_vector_env(self, env_fns):
-        breakpoint()
+    def initialize_new_vector_env(self, env_fns):
         vector_env = super().initialize_new_vector_env(env_fns)
-        if self.config.brick_identification_mode == 'render':
+        if self.config.brick_identification_mode == 'assembly':
             vector_env = BreakVectorEnvAssemblyRewardWrapper(vector_env)
         else:
             raise NotImplementedError
@@ -80,6 +88,6 @@ class BreakTrainer(PPOTrainer):
 
 def train_break():
     config = BreakTrainerConfig.from_commandline()
-    trainer = BreakTrainer(config, ModelClass=AutoTransformer)
+    trainer = BreakTrainer(config, ModelClass=LtronVisualTransformer)
     
     trainer.train()

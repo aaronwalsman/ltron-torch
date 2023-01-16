@@ -76,8 +76,14 @@ class AutoTransformer(nn.Module):
             self.apply(init_weights)
     
     def observation_to_kwargs(self, observation, info, done, model_output):
-        return self.embedding.observation_to_kwargs(
+        embedding_kwargs = self.embedding.observation_to_kwargs(
             observation, info, done, model_output)
+        decoder_kwargs = self.decoder.observation_to_kwargs(
+            observation, info, done, model_output)
+        return {
+            'embedding_kwargs' : embedding_kwargs,
+            'decoder_kwargs' : decoder_kwargs,
+        }
     
     def sample_action(self, output, observation, info):
         return self.decoder.sample_action(output, observation, info)
@@ -91,10 +97,10 @@ class AutoTransformer(nn.Module):
     def value(self, output):
         return self.decoder.value(output)
     
-    def forward(self, *args, **kwargs):
+    def forward(self, embedding_kwargs, decoder_kwargs):
         
         # use the embedding to compute the tokens
-        x = self.embedding(*args, **kwargs)
+        x = self.embedding(**embedding_kwargs)
         
         # extract and concatenate all tokens
         all_tokens = flatten_hierarchy(x)
@@ -113,7 +119,7 @@ class AutoTransformer(nn.Module):
         x = x[-1]
         
         # push the decoder tokens through the auto decoder
-        x = self.decoder(x)
+        x = self.decoder(x, **decoder_kwargs)
         
         return x
     

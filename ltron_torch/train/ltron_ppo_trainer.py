@@ -1,32 +1,47 @@
 import copy
 
-import gymnasium as gym
+from ltron.gym.envs.break_env import BreakEnvConfig
 
-from ltron.gym.envs.select_connection_point import SelectConnectionPointConfig
-
-from ltron_torch.models.auto_transformer import (
-    AutoTransformer,
-    AutoTransformerConfig,
+from ltron_torch.models.ltron_visual_transformer import (
+    LtronVisualTransformerConfig,
+    LtronVisualTransformer,
 )
+
+#from ltron_torch.models.auto_transformer import (
+#    AutoTransformer,
+#    AutoTransformerConfig,
+#)
 
 from avarice.trainers import PPOTrainerConfig, PPOTrainer, env_fn_wrapper
 
-class SelectConnectionPointTrainerConfig(
-    SelectConnectionPointConfig, PPOTrainerConfig, AutoTransformerConfig
+class LtronPPOTrainerConfig(
+    BreakEnvConfig, PPOTrainerConfig, LtronVisualTransformerConfig
 ):
-    train_env = 'LTRON/SelectConnectionPoint-v0'
+    # override defaults
+    channels = 256
+    heads = 4
+    
+    batch_size = 32
+    parallel_train_envs = 16
+    parallel_eval_envs = 16
+    
+    recurrent = 1
+    
+    train_env = 'LTRON/Break-v0'
     train_dataset = 'rca'
     train_split = '2_2_train'
     train_subset = None
     train_repeat = 1
     
-    eval_env = 'LTRON/SelectConnectionPoint-v0'
+    eval_env = 'LTRON/Break-v0'
     eval_dataset = 'rca'
     eval_split = '2_2_test'
     eval_subset = None
     eval_repeat = 1
+    
+    brick_identification_mode = 'assembly'
 
-class SelectConnectionPointTrainer(PPOTrainer):
+class LTronPPOTrainer(PPOTrainer):
     def make_single_train_env_fn(self, parallel_index):
         env_fn = env_fn_wrapper(
             self.config.train_env,
@@ -36,7 +51,7 @@ class SelectConnectionPointTrainer(PPOTrainer):
             dataset_subset=self.config.train_subset,
             dataset_repeat=self.config.train_repeat,
             dataset_shuffle=True,
-            parallel_index=parallel_index,
+            train=True,
         )
         return env_fn
     
@@ -49,16 +64,10 @@ class SelectConnectionPointTrainer(PPOTrainer):
             dataset_subset=self.config.eval_subset,
             dataset_repeat=self.config.eval_repeat,
             dataset_shuffle=False,
-            parallel_index=parallel_index,
+            train=False,
         )
         return env_fn
     
     def initialize_new_model(self, *args, **kwargs):
-        no_op_action = self.train_env.call('no_op_action')[0]
-        super().initialize_new_model(no_op_action, *args, **kwargs)
-
-def train_select_connection_point():
-    config = SelectConnectionPointTrainerConfig.from_commandline()
-    trainer = SelectConnectionPointTrainer(config, ModelClass=AutoTransformer)
-    
-    breakpoint()
+        return super().initialize_new_model(
+            *args, decode_mode='actor_critic', **kwargs)
