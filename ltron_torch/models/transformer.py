@@ -139,11 +139,13 @@ class CausalTransformer(Transformer):
             block.attention.zero_all_memory()
     
 def init_weights(module):
-    if isinstance(module, (Linear, Embedding)):
+    if isinstance(module, Linear):
         module.weight.data.normal_(mean=0., std=0.02)
         #init.kaiming_uniform_(module.weight.data, nonlinearity='relu')
         if isinstance(module, Linear) and module.bias is not None:
             module.bias.data.zero_()
+    elif isinstance(module, Embedding):
+        module.weight.data.zero_()
     elif isinstance(module, LayerNorm):
         module.bias.data.zero_()
         module.weight.data.fill_(1.)

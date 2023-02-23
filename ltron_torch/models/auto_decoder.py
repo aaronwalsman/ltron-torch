@@ -16,6 +16,10 @@ from steadfast.name_span import NameSpan
 #from ltron.gym.components.cursor import CursorActionSpace
 
 from ltron_torch.models.mlp import linear_stack
+from ltron_torch.models.equivalence import (
+    equivalent_outcome_categorical,
+    avg_equivalent_logprob,
+)
 
 class DictAutoDecoder(nn.Module):
     def __init__(self, config, space):
@@ -25,7 +29,7 @@ class DictAutoDecoder(nn.Module):
             submodules[name] = AutoDecoder(config, subspace)
         self.submodules = nn.ModuleDict(submodules)
     
-    def forward(self, x):
+    def forward(self, x, equivalence=None):
         out = {}
         for name, module in self.submodules.items():
             module_out, x = module(x)
@@ -95,31 +99,50 @@ class DiscreteAutoDecoder(nn.Module):
             nonlinearity=self.config.nonlinearity,
         )
         self.embedding = nn.Embedding(space.n, self.config.channels)
+        self.embedding_norm = nn.LayerNorm(self.config.channels)
     
-    def forward(self, x, sample=None):
+    def forward(self,
+        x,
+        sample=None,
+        equivalence=None,
+        equivalence_dropout=0.5,
+    ):
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()
+        
         distribution = Categorical(logits=logits)
         if sample is None:
             sample = distribution.sample()
-        log_prob = distribution.log_prob(sample)
-        entropy = distribution.entropy()
+        
+        if equivalence is not None:
+            eq_distribution = equivalent_outcome_categorical(
+                logits, equivalence, dropout=equivalence_dropout)
+            b = logits.shape[0]
+            eq_sample = equivalence[range(b),sample]
+            log_prob = eq_distribution.log_prob(eq_sample)
+            entropy = eq_distribution.entropy()
+        else:
+            log_prob = distribution.log_prob(sample)
+            entropy = distribution.entropy()
         
         embedding = self.embedding(sample)
-        x = x + embedding
-        return sample, log_prob, entropy, x
+        x = x + self.embedding_norm(embedding)
+        return sample, log_prob, entropy, x, logits
     
-    '''
-    def sample_action(self, output, observation=None, info=None):
-        return output['sample']
+class ConstantDecoder(nn.Module):
+    def __init__(self, config, index):
+        super().__init__()
+        self.config = config
+        self.index = index
     
-    def log_prob(self, output, action):
-        return output['distribution'].log_prob(action)
-    
-    def entropy(self, output):
-        return output['distribution'].entropy()
-    '''
+    def forward(self, x, sample=None):
+        b = x.shape[0]
+        device = x.device
+        if sample is None:
+            sample = torch.full((b,), self.index, device=device)
+        
+        return sample, 0., 0., x, torch.zeros(b, 1, device=device)
 
 class MultiDiscreteAutoDecoder(TupleAutoDecoder):
     def __init__(self, config, space):
