@@ -1,6 +1,7 @@
 import os
 import json
 
+
 import numpy
 
 import torch
@@ -207,6 +208,7 @@ class LtronVisualTransformer(nn.Module):
         neg_snap_eq,
         shape_eq,
         color_eq,
+        sample=None
     ):
         
         # use the embedding to compute the tokens
@@ -250,7 +252,7 @@ class LtronVisualTransformer(nn.Module):
         # push the decoder tokens through the auto decoder
         #x = self.decoder(x, **decoder_kwargs)
         
-        return {
+        output = {
             'decode_x' : decode_x,
             'image_x' : image_x,
             'pos_snap_eq' : pos_snap_eq,
@@ -260,7 +262,6 @@ class LtronVisualTransformer(nn.Module):
             'value' : value,
         }
     
-    def sample_log_prob(self, output, sample=None):
         decode_x = output['decode_x']
         image_x = output['image_x']
         
@@ -348,26 +349,28 @@ class LtronVisualTransformer(nn.Module):
                 'release' : torch.zeros((b,2), dtype=torch.long).to(device),
             }
         
-        return {
+        output.update({
             'sample' : out_sample,
             'log_prob' : log_prob,
             'entropy' : entropy,
             'logits' : logits,
             #'click_logits' : c_logits,
             #'release_logits' : r_logits,
-        }
+        })
+        
+        return output
     
-    def sample_output_to_log_prob(self, sample_output):
-        return sample_output['log_prob']
+    def log_prob(self, model_output):
+        return model_output['log_prob']
     
-    def sample_output_to_entropy(self, sample_output):
-        return sample_output['entropy']
+    def entropy(self, model_output):
+        return model_output['entropy']
     
-    def sample_output_to_sample(self, sample_output):
+    def compute_sample(self, sample_output):
         return sample_output['sample']
     
-    def sample_output_to_action(self, sample_output):
-        action = torch_to_numpy(sample_output['sample'])
+    def compute_action(self, model_output):
+        action = torch_to_numpy(model_output['sample'])
         # all of the below is to support instances where you only want some
         # decoders
         #if 'viewpoint' not in action:
