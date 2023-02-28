@@ -9,7 +9,7 @@ from ltron_torch.models.equivalence import (
     equivalent_outcome_categorical,
     avg_equivalent_logprob,
 )
-from ltron_torch.models.discrete_decoder import DiscreteDecoder
+from ltron_torch.models.decoder import DiscreteDecoder
 
 class CursorDecoder(nn.Module):
     def __init__(self, config):

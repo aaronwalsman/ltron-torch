@@ -111,7 +111,7 @@ class LtronVisualTransformer(nn.Module):
                 continue
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
-            elif name in ('pick_and_place', 'remove')
+            elif name in ('pick_and_place', 'remove'):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
             elif name in ('viewpoint', 'rotate'):
                 primitive_decoders[name] = DiscreteDecoder(
