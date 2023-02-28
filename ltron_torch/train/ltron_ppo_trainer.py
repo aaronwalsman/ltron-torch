@@ -137,16 +137,10 @@ class LtronPPOTrainer(PPOTrainer):
         sample_output,
     ):
         images = observation['image']
-        #pos_eqs = observation['pos_equivalence']
-        #neg_eqs = observation['neg_equivalence']
         
         mode = action['action_primitives']['mode']
         mode_space = (
             self.eval_env.single_action_space['action_primitives']['mode'])
-        #switch_map = (
-        #    self.train_env.metadata['action_primitives']['switch_map'])
-        
-        #if sample_output['click_logits'] is not None:
         
         button_sample = sample_output['sample']['cursor']['button'].view(-1,1,1)
         device = button_sample.device
@@ -209,12 +203,21 @@ class LtronPPOTrainer(PPOTrainer):
             )
             
             click_p_map = click_eq_dist.probs[i][click_islands[i]].detach()
+            click_min = torch.min(click_p_map)
+            click_max = torch.max(click_p_map)
+            click_p_map = (click_p_map - click_min) / (click_max - click_min)
             click_p_map = (click_p_map.cpu().numpy() * 255).astype(numpy.uint8)
             h, w = click_p_map.shape
             click_p_map = click_p_map.reshape(h,w,1).repeat(3, axis=2)
             
             release_p_map = release_eq_dist.probs[i][
                 release_islands[i]].detach()
+            release_min = torch.min(release_p_map)
+            release_max = torch.max(release_p_map)
+            release_p_map = (
+                (release_p_map - release_min) / 
+                (release_max - release_min)
+            )
             release_p_map = (release_p_map.cpu().numpy() * 255).astype(
                 numpy.uint8)
             h, w = release_p_map.shape

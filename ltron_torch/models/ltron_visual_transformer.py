@@ -30,19 +30,24 @@ from ltron_torch.models.transformer import (
     TransformerConfig, Transformer, init_weights)
 from ltron_torch.models.cursor_decoder import CursorDecoder
 from ltron_torch.models.insert_decoder import InsertDecoder
-from ltron_torch.models.auto_decoder import (
-    AutoDecoderConfig,
-    AutoDecoder,
-    AutoActorCriticDecoder,
+#from ltron_torch.models.auto_decoder import (
+#    AutoDecoderConfig,
+#    AutoDecoder,
+#    CriticDecoder,
+#    DiscreteAutoDecoder,
+#    ConstantDecoder,
+#)
+from ltron_torch.models.decoder import (
+    DecoderConfig,
+    DiscreteDecoder,
     CriticDecoder,
-    DiscreteAutoDecoder,
     ConstantDecoder,
 )
 
 class LtronVisualTransformerConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
-    AutoDecoderConfig,
+    DecoderConfig,
 ):
     embedding_dropout = 0.1
     strict_load = True
@@ -95,8 +100,8 @@ class LtronVisualTransformer(nn.Module):
         self.predecoder_norm = nn.LayerNorm(config.channels)
         
         # build the decoder
-        self.mode_decoder = DiscreteAutoDecoder(
-            config, action_space['action_primitives']['mode'])
+        self.mode_decoder = DiscreteDecoder(
+            config, action_space['action_primitives']['mode'].n)
         self.mode_decoder_names = (
             action_space['action_primitives']['mode'].names)
         
@@ -106,10 +111,11 @@ class LtronVisualTransformer(nn.Module):
                 continue
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
-            elif isinstance(subspace, Discrete) and subspace.n == 2:
+            elif name in ('pick_and_place', 'remove')
                 primitive_decoders[name] = ConstantDecoder(config, 1)
-            else:
-                primitive_decoders[name] = AutoDecoder(config, subspace)
+            elif name in ('viewpoint', 'rotate'):
+                primitive_decoders[name] = DiscreteDecoder(
+                    config, subspace.n-1, sample_offset=1)
         
         self.primitive_decoders = nn.ModuleDict(primitive_decoders)
         self.cursor_decoder = CursorDecoder(config)

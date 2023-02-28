@@ -9,12 +9,12 @@ from ltron_torch.models.equivalence import (
     equivalent_outcome_categorical,
     avg_equivalent_logprob,
 )
-from ltron_torch.models.auto_decoder import AutoDecoder
+from ltron_torch.models.discrete_decoder import DiscreteDecoder
 
 class CursorDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.button_decoder = AutoDecoder(config, Discrete(2))
+        self.button_decoder = DiscreteDecoder(config, 2)
         self.click_decoder = ScreenDecoder(config)
         self.release_decoder = ScreenDecoder(config)
         self.forward_passes = 0
@@ -71,34 +71,6 @@ class CursorDecoder(nn.Module):
         #self.forward_passes += 1
         
         return out_sample, log_prob, entropy, x, logits
-    '''
-    def forward(self, decode_x, image_x, click_eq, release_eq):
-        button_out, decode_x = self.button_decoder(decode_x)
-        click_out, decode_x = self.click_decoder(
-            decode_x, image_x, click_eq)
-        release_out, decode_x = self.release_decoder(
-            decode_x, image_x, release_eq)
-        
-        return {
-            'button' : button_out,
-            'click' : click_out,
-            'release' : release_out,
-        }
-    '''
-    '''
-    def log_prob(self, output, action, include_release=True):
-        b = self.button_decoder.log_prob(output['button'], action['button'])
-        c = self.click_decoder.log_prob(output['click'], action['click'])
-        r = self.release_decoder.log_prob(
-            output['release'], action['release']) * include_release
-        return b + c + r
-    
-    def entropy(self, output, include_release=True):
-        b = self.button_decoder.entropy(output['button'])
-        c = self.click_decoder.entropy(output['click'])
-        r = self.release_decoder.entropy(output['release']) * include_release
-        return b + c + r
-    '''
 
 class ScreenDecoder(nn.Module):
     def __init__(self, config):
