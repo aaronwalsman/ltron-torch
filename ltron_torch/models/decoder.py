@@ -11,20 +11,24 @@ class DecoderConfig(Config):
     decoder_layers = 3
     nonlinearity = 'gelu'
     image_attention_channels = 16
+    sigmoid_screen_attention = False
+    screen_equivalence = True
 
 class DiscreteDecoder(nn.Module):
-    def __init__(self, config, num_classes, sample_offset=0):
+    def __init__(self, config, num_classes): #, sample_offset=0):
         super().__init__()
         self.config = config
         self.mlp = linear_stack(
             self.config.decoder_layers,
             self.config.channels,
             out_channels=num_classes,
+            first_norm=True,
             nonlinearity=self.config.nonlinearity,
+            Norm=nn.LayerNorm,
         )
         self.embedding = nn.Embedding(num_classes, self.config.channels)
-        self.embedding_norm = nn.LayerNorm(self.config.channels)
-        self.sample_offset = sample_offset
+        #self.embedding_norm = nn.LayerNorm(self.config.channels)
+        #self.sample_offset = sample_offset
 
     def forward(self,
         x,
@@ -39,9 +43,9 @@ class DiscreteDecoder(nn.Module):
         distribution = Categorical(logits=logits)
         if sample is None:
             physical_index = distribution.sample()
-            sample = physical_index + self.sample_offset
+            sample = physical_index # + self.sample_offset
         else:
-            physical_index = sample - self.sample_offset
+            physical_index = sample # - self.sample_offset
 
         if equivalence is not None:
             eq_distribution = equivalent_outcome_categorical(
@@ -55,7 +59,8 @@ class DiscreteDecoder(nn.Module):
             entropy = distribution.entropy()
 
         embedding = self.embedding(physical_index)
-        x = x + self.embedding_norm(embedding)
+        #x = x + self.embedding_norm(embedding)
+        x = x + embedding
         return sample, log_prob, entropy, x, logits
 
 class CriticDecoder(nn.Module):

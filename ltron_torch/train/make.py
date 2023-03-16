@@ -10,16 +10,22 @@ from ltron_torch.train.ltron_ppo_trainer import (
     LtronPPOTrainerConfig,
     LtronPPOTrainer,
 )
+from ltron_torch.train.ltron_interactive_trainer import (
+    LtronInteractiveTrainerConfig,
+    train_ltron_teacher_distill,
+)
 
-class MakePPOTrainerConfig(LtronPPOTrainerConfig):
+class MakeTrainerConfig(LtronInteractiveTrainerConfig):
     pass
 
-class MakePPOTrainer(LtronPPOTrainer):
+class MakeTrainer(LtronPPOTrainer):
     pass
 
 def train_make():
     print('Loading Config')
-    config = MakePPOTrainerConfig.from_commandline()
-    trainer = MakePPOTrainer(config, ModelClass=LtronVisualTransformer)
-    
-    trainer.train()
+    config = MakeTrainerConfig.from_commandline()
+    if config.algorithm == 'ppo':
+        trainer = MakePPOTrainer(config, ModelClass=LtronVisualTransformer)
+        trainer.train()
+    elif config.algorithm == 'teacher_distill':
+        train_ltron_teacher_distill(config)

@@ -10,8 +10,14 @@ from ltron_torch.train.ltron_ppo_trainer import (
     LtronPPOTrainerConfig,
     LtronPPOTrainer,
 )
+from ltron_torch.train.ltron_interactive_trainer import (
+    LtronInteractiveTrainerConfig,
+    train_ltron_teacher_distill,
+)
 
-class BreakPPOTrainerConfig(LtronPPOTrainerConfig):
+class BreakTrainerConfig(LtronInteractiveTrainerConfig):
+    #, LtronPPOTrainerConfig):
+    #algorithm = 'ppo'
     brick_identification_mode = 'assembly'
 
 class BreakPPOTrainer(LtronPPOTrainer):
@@ -25,8 +31,10 @@ class BreakPPOTrainer(LtronPPOTrainer):
         return vector_env
 
 def train_break():
-    config = BreakPPOTrainerConfig.from_commandline()
-    trainer = BreakPPOTrainer(config, ModelClass=LtronVisualTransformer)
-    #trainer = BreakPPOTrainer(config, ModelClass=LtronResNet)
-    
-    trainer.train()
+    print('Loading Config')
+    config = BreakTrainerConfig.from_commandline()
+    if config.algorithm == 'ppo':
+        trainer = BreakPPOTrainer(config, ModelClass=LtronVisualTransformer)
+        trainer.train()
+    elif config.algorithm == 'teacher_distill':
+        train_ltron_teacher_distill(config)

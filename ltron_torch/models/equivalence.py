@@ -2,8 +2,23 @@ import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
+def equivalent_probs_categorical(unnormed_probs, equivalence):
+    b, *c = unnormed_probs.shape
+    unnormed_probs = unnormed_probs.view(b,-1)
+    device = unnormed_probs.device
+    eq_classes = torch.max(equivalence)+1
+    if eq_classes == 1:
+        eq_unnormed_probs = torch.zeros((b,1), device=device)
+    else:
+        eq_unnormed_probs = torch.zeros((b, eq_classes), device=device)
+        eq_unnormed_probs.scatter_add_(
+            1, equivalence.view(b,-1), unnormed_probs)
+    
+    return Categorical(probs=eq_unnormed_probs)
+
 def equivalent_outcome_categorical(
-    logits, equivalence, temperature=1., dropout=0.):
+    logits, equivalence, temperature=1., dropout=0.
+):
     b, *c = logits.shape
     device = logits.device
     logits = logits.view(b,-1) * (1./temperature)

@@ -23,6 +23,7 @@ def stack(
     hidden_channels=None,
     out_channels=None,
     first_norm=False,
+    intermediate_norm=False,
     Norm=None,
     nonlinearity='relu',
     final_nonlinearity=False,
@@ -43,14 +44,16 @@ def stack(
     layers = []
     if first_norm:
         assert Norm is not None
-        layers.append(Norm())
+        layers.append(Norm(in_channels))
     
     for i, (in_f, out_f) in enumerate(zip(features[:-1], features[1:])):
         layers.append(Layer(in_f, out_f, **kwargs))
         
         if i != num_layers-1:
-            if Norm is not None:
-                layers.append(Norm())
+            #if Norm is not None:
+            if intermediate_norm:
+                assert Norm is not None
+                layers.append(Norm(out_f))
             if hidden_dropout:
                 layers.append(Dropout(hidden_dropout))
             if nonlinearity is not None:

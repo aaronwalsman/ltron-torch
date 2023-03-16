@@ -1,5 +1,7 @@
 import sys
 
+import numpy
+
 import torch
 import torch.nn as nn
 
@@ -8,6 +10,8 @@ import torchvision.transforms.functional as tF
 from gymnasium.spaces import Discrete
 
 from steadfast.config import Config
+
+from ltron.constants import NUM_SHAPE_CLASSES, NUM_COLOR_CLASSES
 
 #default_image_mean = [0.485, 0.456, 0.406]
 #default_image_std = [0.229, 0.224, 0.225]
@@ -63,7 +67,7 @@ class DiscreteEmbedding(nn.Embedding):
         super().__init__(observation_space.n, config.channels)
     
     def observation_to_kwargs(self, o, i, d, model_output):
-        return {'input' : torch.LongTensor(o).to(self.weight.device)}
+        return {'x' : torch.LongTensor(o).to(self.weight.device)}
     
     def forward(self, x):
         return super().forward(x)
@@ -99,12 +103,6 @@ class ImageSpaceEmbedding(nn.Module):
         #self.embedding_norm = nn.LayerNorm(config.channels)
 
     def forward(self, x):
-        #x = self.tile_conv(x)
-        #b, c, h, w = x.shape
-        #x = x.view(b, c, h*w).permute(2,0,1)
-        
-        #x = x + self.embedding_norm(self.tile_embedding.weight.view(h*w, 1, c))
-        
         b, h, w, c = x.shape
         x = x.view(
             b,
@@ -125,16 +123,61 @@ class ImageSpaceEmbedding(nn.Module):
         return x
     
     def observation_to_kwargs(self, o, i, d, model_output):
-        x = torch.FloatTensor(
-        #    ((o / 255.) - default_image_mean) / default_image_std
-            (o / 255.)).to(self.linear.weight.device)
-        #x = x.permute(0,3,1,2)
-        #).to(self.tile_conv.weight.device)
-        #x = x.permute(0,3,1,2)
-        #x = tF.to_tensor(o)
-        
-        
+        x = torch.FloatTensor((o / 255.)).to(self.linear.weight.device)
         return {'x' : x}
+
+class AssemblySpaceEmbedding(nn.Module):
+    def __init__(self, config, observation_space):
+        super().__init__()
+        self.config = config
+        self.shape_embedding = nn.Embedding(NUM_SHAPE_CLASSES, config.channels)
+        self.color_embedding = nn.Embedding(NUM_COLOR_CLASSES, config.channels)
+        self.pose_embedding = MultiSE3SpaceEmbedding(
+            config, observation_space['pose'])
+    
+    def forward(self, shape, color, pose):
+        shape = self.shape_embedding(shape)
+        color = self.color_embedding(color)
+        pose = self.pose_embedding(pose)
+        x = shape + color + pose
+        x = x.permute(1,0,2)
+        
+        return x
+    
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        batch_indices, shape_indices = numpy.where(observation['shape'])
+        num_bricks = numpy.max(shape_indices)
+        device = self.shape_embedding.weight.device
+        shape = torch.LongTensor(
+            observation['shape'][:,:num_bricks+1]).to(device)
+        color = torch.LongTensor(
+            observation['color'][:,:num_bricks+1]).to(device)
+        pose = self.pose_embedding.observation_to_kwargs(
+            observation['pose'], info.get('pose', {}), done, None)
+        pose = pose[:,:num_bricks+1]
+        
+        return {'shape':shape, 'color':color, 'pose':pose}
+
+class SE3SpaceEmbedding(nn.Module):
+    def __init__(self, config, observation_space):
+        super().__init__()
+        self.pose_embedding = torch.nn.Linear(16, config.channels)
+        bbox = numpy.array(observation_space.world_bbox)
+        #self.position_scale = 1. / (bbox[1] - bbox[0])
+        self.position_scale = 1./20.
+    
+    def forward(self, pose):
+        return self.pose_embedding(pose)
+    
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        pose = torch.FloatTensor(observation)
+        pose[...,:3,3] *= self.position_scale
+        *s, h, w = pose.shape
+        pose = pose.view(*s,16)
+        device = self.pose_embedding.weight.device
+        return pose.to(device)
+
+MultiSE3SpaceEmbedding = SE3SpaceEmbedding
 
 def AutoEmbedding(config, observation_space):
     this_module = sys.modules[__name__]

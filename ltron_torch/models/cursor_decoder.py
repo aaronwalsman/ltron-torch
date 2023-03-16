@@ -6,8 +6,8 @@ from gymnasium.spaces import Discrete
 
 from ltron_torch.models.mlp import linear_stack, conv2d_stack
 from ltron_torch.models.equivalence import (
+    equivalent_probs_categorical,
     equivalent_outcome_categorical,
-    avg_equivalent_logprob,
 )
 from ltron_torch.models.decoder import DiscreteDecoder
 
@@ -105,7 +105,9 @@ class ScreenDecoder(nn.Module):
             self.config.decoder_layers,
             self.config.channels,
             out_channels=config.image_attention_channels,
+            first_norm=True,
             nonlinearity=config.nonlinearity,
+            Norm=nn.LayerNorm,
         )
         #self.k_head = conv2d_stack(
         #    self.config.decoder_layers,
@@ -116,12 +118,14 @@ class ScreenDecoder(nn.Module):
         self.content_linear = nn.Linear(
             config.image_attention_channels, config.channels)
         
+        #self.updates = 0
+        
         #self.y_embedding = nn.Embedding(
         #    config.image_height, config.channels)
         #self.x_embedding = nn.Embedding(
         #    config.image_width, config.channels)
         
-        self.norm = nn.LayerNorm(config.channels)
+        #self.norm = nn.LayerNorm(config.channels)
     
     #def forward(self, decode_x, image_x, equivalence=None):
     #    return (decode_x, image_x, equivalence)
@@ -136,6 +140,7 @@ class ScreenDecoder(nn.Module):
         sample=None,
     ):
         
+        # get dimension sizes
         b,c,h,w = image_x.shape
         th = self.config.tile_height 
         tw = self.config.tile_width
@@ -143,16 +148,24 @@ class ScreenDecoder(nn.Module):
         ih = self.config.image_height
         iw = self.config.image_width
         
+        # compute q and k
         q = self.q_head(x)
         k = self.k_head(image_x)
         #k = k.view(b,ac,th,tw,h,w).permute(0,1,4,2,5,3).reshape(b,ac,ih,iw)
         
+        # compute the attention weights
         qk = torch.einsum('bc,bchw->bhw', q, k)
         temperature = 1. / ac ** 0.5
         a = qk * temperature
         
-        click_distribution = Categorical(logits=a.view(b,ih*iw))
+        if self.config.sigmoid_screen_attention:
+            p = torch.sigmoid(a)
+            click_distribution = Categorical(probs=p.view(b,ih*iw))
+        else:
+            click_distribution = Categorical(logits=a.view(b,ih*iw))
+        screen_logits = click_distribution.logits.view(b, ih, iw)
         
+        # get the sample
         if sample is None:
             flat_sample = click_distribution.sample()
             sample_y = torch.div(flat_sample, iw, rounding_mode='floor')
@@ -168,31 +181,34 @@ class ScreenDecoder(nn.Module):
             log_prob = click_distribution.log_prob(flat_sample)
             entropy = click_distribution.entropy()
         else:
-            if self.training:
-                eq_dropout = 0.5
+            if self.config.screen_equivalence:
+                if self.config.sigmoid_screen_attention:
+                    eq_distribution = equivalent_probs_categorical(
+                        p, equivalence)
+                
+                else:
+                    if self.training:
+                        eq_dropout = 0.5
+                    else:
+                        eq_dropout = 0.0
+                    eq_distribution = equivalent_outcome_categorical(
+                        a, equivalence, dropout=eq_dropout)
+                
+                eq_sample = equivalence[range(b),sample_y,sample_x]
+                log_prob = eq_distribution.log_prob(eq_sample)
+                entropy = eq_distribution.entropy()
             else:
-                eq_dropout = 0.0
-            eq_distribution = equivalent_outcome_categorical(
-                a, equivalence, dropout=eq_dropout)
-            eq_sample = equivalence[range(b),sample_y,sample_x]
-            log_prob = eq_distribution.log_prob(eq_sample)
-            
-            # TMP
-            #print('WARNING TURNED OFF EQ')
-            #log_prob_eq = eq_distribution.log_prob(eq_sample)
-            #log_prob = click_distribution.log_prob(flat_sample)
-            # TMP
-            
-            entropy = eq_distribution.entropy()
+                log_prob = click_distribution.log_prob(flat_sample)
+                entropy = click_distribution.entropy()
         
+        # we used to have separate embeddings for the x,y locations
         #x_pe = self.x_embedding(sample_x)
         #y_pe = self.y_embedding(sample_y)
         content_x = self.content_linear(k[range(b),:,sample_y,sample_x])
         
         #x = x + self.norm(content_x + x_pe + y_pe)
-        x = self.norm(content_x)
-        
-        screen_logits = click_distribution.logits.view(b, ih, iw)
+        #x = self.norm(content_x)
+        x = x + content_x
         
         return sample, log_prob, entropy, x, screen_logits
     

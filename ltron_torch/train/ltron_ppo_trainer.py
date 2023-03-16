@@ -87,29 +87,29 @@ class LtronPPOTrainer(PPOTrainer):
         synthetic_sample['cursor']['click'] = click_location
         synthetic_sample['cursor']['release'] = release_location
         
-        sample_output = self.model.sample_log_prob(
+        model_output = self.model.sample_log_prob(
             model_output, sample=synthetic_sample)
         
         button_loss = F.cross_entropy(
-            sample_output['logits']['cursor']['button'],
+            model_output['logits']['cursor']['button'],
             synthetic_sample['cursor']['button'],
             reduction='none',
         )
-        click_logits = sample_output['logits']['cursor']['click']
+        click_logits = model_output['logits']['cursor']['click']
         b,h,w = click_logits.shape
         click_logits = click_logits.view(b,-1)
         click_target = synthetic_sample['cursor']['click']
         click_target = click_target[:,0] * w + click_target[:,1]
         click_loss = F.cross_entropy(
             click_logits, click_target, reduction='none')
-        release_logits = sample_output['logits']['cursor']['release']
+        release_logits = model_output['logits']['cursor']['release']
         release_logits = release_logits.view(b,-1)
         release_target = synthetic_sample['cursor']['release']
         release_target = release_target[:,0] * w + release_target[:,1]
         release_loss = F.cross_entropy(
             release_logits, release_target, reduction='none')
         ce_policy_loss = (button_loss + click_loss + release_loss).mean()
-        lp_policy_loss = -sample_output['log_prob'].mean()
+        lp_policy_loss = -model_output['log_prob'].mean()
         
         print('button loss', button_loss)
         print('click loss', click_loss)
@@ -120,7 +120,7 @@ class LtronPPOTrainer(PPOTrainer):
         #breakpoint()
         
         #value = self.model.value(model_output)
-        device = sample_output['log_prob'].device
+        device = model_output['log_prob'].device
         losses = {}
         #losses['policy_loss'] = 
         losses['policy_loss'] = lp_policy_loss
@@ -134,7 +134,6 @@ class LtronPPOTrainer(PPOTrainer):
         action,
         reward,
         model_output,
-        sample_output,
     ):
         images = observation['image']
         
@@ -142,7 +141,7 @@ class LtronPPOTrainer(PPOTrainer):
         mode_space = (
             self.eval_env.single_action_space['action_primitives']['mode'])
         
-        button_sample = sample_output['sample']['cursor']['button'].view(-1,1,1)
+        button_sample = model_output['sample']['cursor']['button'].view(-1,1,1)
         device = button_sample.device
         pos_islands = torch.LongTensor(
             cursor_islands(observation['pos_snap_render'])).to(device)
@@ -153,9 +152,9 @@ class LtronPPOTrainer(PPOTrainer):
         release_islands = (
             pos_islands * (1-button_sample) + neg_islands * button_sample)
         
-        if 'cursor' in sample_output['logits']:
-            click_logits = sample_output['logits']['cursor']['click']
-            release_logits = sample_output['logits']['cursor']['release']
+        if 'cursor' in model_output['logits']:
+            click_logits = model_output['logits']['cursor']['click']
+            release_logits = model_output['logits']['cursor']['release']
             b,h,w = click_logits.shape
             click_heatmaps = torch.softmax(
                 click_logits.view(b,h*w), dim=-1).view(b,h,w,1)
