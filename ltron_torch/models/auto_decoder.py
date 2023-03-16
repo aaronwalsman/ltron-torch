@@ -1,163 +1,261 @@
+from collections import OrderedDict
+
 import torch
-from torch.nn import Module, ModuleDict, Sequential
+import torch.nn as nn
+
 from torch.distributions import Categorical
 
-from ltron.config import Config
-from ltron.name_span import NameSpan
-from ltron.gym.spaces import (
-    MultiScreenPixelSpace,
-    SymbolicSnapSpace,
-    BrickShapeColorSpace,
-    BrickShapeColorPoseSpace,
-)
+from gymnasium.spaces import Discrete, MultiDiscrete, Dict, Tuple
+
+from avarice.data import torch_to_numpy
+
+from steadfast.config import Config
+from steadfast.hierarchy import flatten_hierarchy
+from steadfast.name_span import NameSpan
+
+#from ltron.gym.components.cursor import CursorActionSpace
 
 from ltron_torch.models.mlp import linear_stack
-from ltron_torch.models.heads import LinearMultiheadDecoder
-from ltron_torch.models.cursor_decoder import (
-    CoarseToFineVisualCursorDecoder,
-    CoarseToFineSymbolicCursorDecoder,
+from ltron_torch.models.equivalence import (
+    equivalent_outcome_categorical,
+    avg_equivalent_logprob,
 )
-from ltron_torch.models.brick_decoder import (
-    BrickDecoder, SimpleBrickDecoder, ExplicitBrickDecoder)
+
+class DictAutoDecoder(nn.Module):
+    def __init__(self, config, space):
+        super().__init__()
+        submodules = OrderedDict()
+        for name, subspace in space.items():
+            submodules[name] = AutoDecoder(config, subspace)
+        self.submodules = nn.ModuleDict(submodules)
+    
+    def forward(self, x, equivalence=None):
+        out = {}
+        for name, module in self.submodules.items():
+            module_out, x = module(x)
+            out[name] = module_out
+        
+        return out, x
+    
+    def sample_action(self, output, observation=None, info=None):
+        return {
+            name : submodule.sample_action(output[name])
+            for name, submodule in self.submodules.items()
+        }
+    
+    def log_prob(self, output, action):
+        return sum(
+            submodule.log_prob(output[name], action[name])
+            for name, submodule in self.submodules.items()
+        )
+    
+    def entropy(self, output):
+        return sum(
+            submodule.entropy(output[name])
+            for name, submodule in self.submodules.items()
+        )
+
+class TupleAutoDecoder(nn.Module):
+    def __init__(self, config, space):
+        super().__init__()
+        submodules = []
+        for subspace in space:
+            submodules.append(AutoDecoder(config, subspace))
+        self.submodules = nn.ModuleList(submodules)
+    
+    def forward(self, x):
+        out = []
+        for i, submodule in enumerate(self.submodules):
+            module_out, x = submodule(x)
+            out.append(module_out)
+        return out, x
+    
+    def sample_action(self, output, observation=None, info=None):
+        return [
+            submodule.sample_action(output[i])
+            for i, submodule in enumerate(self.submodules)
+        ]
+    
+    def log_prob(self, output, action):
+        return sum(
+            submodule.log_prob(output[i], action[i])
+            for i, submodule in enumerate(self.submodules)
+        )
+    
+    def entropy(self, output, observation, info, action):
+        return sum(
+            submodule.entropy(output[i])
+            for i, submodule in enumerate(self.submodules)
+        )
+
+class DiscreteAutoDecoder(nn.Module):
+    def __init__(self, config, space):
+        super().__init__()
+        self.config = config
+        self.mlp = linear_stack(
+            self.config.decoder_layers,
+            self.config.channels,
+            out_channels=space.n,
+            nonlinearity=self.config.nonlinearity,
+        )
+        self.embedding = nn.Embedding(space.n, self.config.channels)
+        self.embedding_norm = nn.LayerNorm(self.config.channels)
+    
+    def forward(self,
+        x,
+        sample=None,
+        equivalence=None,
+        equivalence_dropout=0.5,
+    ):
+        logits = self.mlp(x)
+        if torch.any(~torch.isfinite(logits)):
+            breakpoint()
+        
+        distribution = Categorical(logits=logits)
+        if sample is None:
+            sample = distribution.sample()
+        
+        if equivalence is not None:
+            eq_distribution = equivalent_outcome_categorical(
+                logits, equivalence, dropout=equivalence_dropout)
+            b = logits.shape[0]
+            eq_sample = equivalence[range(b),sample]
+            log_prob = eq_distribution.log_prob(eq_sample)
+            entropy = eq_distribution.entropy()
+        else:
+            log_prob = distribution.log_prob(sample)
+            entropy = distribution.entropy()
+        
+        embedding = self.embedding(sample)
+        x = x + self.embedding_norm(embedding)
+        return sample, log_prob, entropy, x, logits
+    
+class ConstantDecoder(nn.Module):
+    def __init__(self, config, index):
+        super().__init__()
+        self.config = config
+        self.index = index
+    
+    def forward(self, x, sample=None):
+        b = x.shape[0]
+        device = x.device
+        if sample is None:
+            sample = torch.full((b,), self.index, device=device)
+        
+        return sample, 0., 0., x, torch.zeros(b, 1, device=device)
+
+class MultiDiscreteAutoDecoder(TupleAutoDecoder):
+    def __init__(self, config, space):
+        super().__init__(config, Tuple(Discrete(n) for n in space.nvec))
+    
+    #def sample_action(self, output, observation, info):
+    #    action = torch_to_numpy(output['sample'])
+    #    breakpoint()
+    #    return action
+    
+    def forward(self, x):
+        o, x = super().forward(x, [{} for _ in self.submodules])
+        out = {}
+        out['logits'] = torch.stack([oo['logits'] for oo in o], dim=1)
+        out['distribution'] = [oo['distribution'] for oo in o]
+        out['sample'] = torch.stack([oo['sample'] for oo in o], dim=1)
+        #out['logits'] = torch.stack(out['logits'], dim=1)
+        #out['sample'] = torch.stack(out['sample'], dim=1)
+        return out, x
+    
+    def sample_action(self, output, observation=None, info=None):
+        return output['sample']
+    
+    def log_prob(self, output, action):
+        return sum(
+            distribution.log_prob(output['sample'][:,i])
+            for i, distribution in enumerate(output['distribution'])
+        )
+    
+    def entropy(self, output, observation, info, action):
+        return sum(
+            distribution.entropy()
+            for distribution in output['distribution']
+        )
+
+'''
+class CursorAutoDecoder(DictAutoDecoder):
+    def __init__(self, config, space):
+        super().__init__(config, space)
+    
+    def forward(self, x, snap_map=None):
+        #out = super().forward(x, submodule_kwargs={name:None for name in self.submodules})
+        breakpoint()
+    
+    def log_prob(self, output, action):
+        breakpoint()
+    
+    def entropy(self, output, target):
+        breakpoint()
+    
+    def observation_to_kwargs(self, observation, info, done, output):
+        if 'snap_map' in observation:
+            return {'snap_map':observation['snap_map']}
+        else:
+            return {}
+'''
 
 class AutoDecoderConfig(Config):
     channels = 768
-    tile_width = 16
-    tile_height = 16
-    #partial_normalize_coarse_to_fine = True
+    decoder_layers = 3
+    nonlinearity = 'gelu'
+    image_attention_channels = 16
 
-class AutoDecoder(Module):
-    def __init__(self,
-        config,
-        action_space,
-    ):
+def AutoDecoder(config, space):
+    #if isinstance(space, CursorActionSpace):
+    #    return CursorAutoDecoder(config, space)
+    if isinstance(space, Dict):
+        return DictAutoDecoder(config, space)
+    elif isinstance(space, Tuple):
+        return TupleAutoDecoder(config, space)
+    elif isinstance(space, MultiDiscrete):
+        return MultiDiscreteAutoDecoder(config, space)
+    elif isinstance(space, Discrete):
+        return DiscreteAutoDecoder(config, space)
+
+class CriticDecoder(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        
-        self.action_space = action_space
-        
-        self.readout_layout = NameSpan(PAD=1)
-        
-        self.combined_decoder_names = []
-        
-        decoders = {}
-        
-        for name, space in action_space.subspaces.items():
-            if isinstance(space, MultiScreenPixelSpace):
-                self.readout_layout.add_names(**{name:1})
-                decoders[name] = CoarseToFineVisualCursorDecoder(
-                    #coarse_span,
-                    #fine_shape,
-                    space,
-                    (config.tile_height, config.tile_width, 2),
-                    channels=config.channels,
-                    default_k=4,
-                    #partial_normalize=config.partial_normalize_coarse_to_fine,
-                )
-                
-            elif isinstance(space, SymbolicSnapSpace):
-                self.readout_layout.add_names(**{name:1})
-                decoders[name] = CoarseToFineSymbolicCursorDecoder(
-                    space.max_instances, config.channels, default_k=4,
-                )
-            elif isinstance(space, BrickShapeColorSpace):
-                self.readout_layout.add_names(**{name:1})
-                '''
-                decoders[name] = BrickDecoder(
-                    space.num_shapes,
-                    space.num_colors,
-                    config.channels,
-                    include_pose=False,
-                    #partial_normalize=config.partial_normalize_coarse_to_fine,
-                )
-                '''
-                '''
-                decoders[name] = SimpleBrickDecoder(
-                    space.num_shapes,
-                    space.num_colors,
-                    channels=config.channels,
-                )
-                '''
-                decoders[name] = ExplicitBrickDecoder(
-                    space.num_shapes,
-                    space.num_colors,
-                    channels=config.channels,
-                )
-            
-            elif isinstance(space, BrickShapeColorPoseSpace):
-                self.readout_layout.add_names(**{name:1})
-                decoders[name] = BrickDecoder(
-                    space['shape_color'].num_shapes,
-                    space['shape_color'].num_colors,
-                    config.channels,
-                    include_pose=True,
-                )
-            else:
-                self.combined_decoder_names.append(name)
-        
-        self.readout_layout.add_names(combined=1)
-        
-        # build the combined decoder
-        decoders['combined'] = Sequential(
-            linear_stack(
-                2,
-                config.channels,
-                nonlinearity=config.nonlinearity,
-                final_nonlinearity=True,
-                hidden_dropout=config.action_decoder_dropout,
-                out_dropout=config.action_decoder_dropout,
-            ),
-            LinearMultiheadDecoder(
-                config.channels,
-                {
-                    name:self.action_space.name_size(name)
-                    for name in self.combined_decoder_names
-                }
-            ),
+        self.stack = linear_stack(
+            config.decoder_layers,
+            config.channels,
+            out_channels=1,
+            nonlinearity=config.nonlinearity,
         )
-        
-        self.decoders = ModuleDict(decoders)
     
-    def forward(self, x, readout_x, readout_t, seq_pad):
-        device = next(iter(self.parameters())).device
-        s, b, c = x.shape
-        
-        decoder_x = {}
-        
-        max_seq = torch.max(seq_pad)
-        
-        for name in self.readout_layout.keys():
-            if name == 'PAD':
-                continue
-            
-            # get index associated with this readout name
-            readout_index = self.readout_layout.ravel(name, 0)
-            
-            # find the indices of x corresponding to the readout index
-            readout_s, readout_b = torch.where(readout_x['x'] == readout_index)
-            
-            name_x = x[readout_s, readout_b]
-            name_x = self.decoders[name](name_x)
-            if isinstance(name_x, dict):
-                decoder_x.update(name_x)
-            else:
-                decoder_x[name] = name_x
-        
-        #print('==============')
-        #for name in decoder_x:
-        #    print(name, ':', decoder_x[name].shape)
-        
-        ts = torch.max(seq_pad)
-        tb = seq_pad.shape[0]
-        out_x = torch.zeros(ts*tb, self.action_space.n, device=device)
-        self.action_space.ravel_vector(decoder_x, out=out_x, dim=1)
-        out_x = out_x.view(ts, tb, self.action_space.n)
-        
-        return out_x
+    def forward(self, x):
+        return self.stack(x).view(-1)
+
+class AutoActorCriticDecoder(nn.Module):
+    def __init__(self, config, space):
+        super().__init__()
+        self.actor = AutoDecoder(config, space)
+        self.critic = CriticDecoder(config)
     
-    def tensor_to_distribution(self, x):
-        s, b, a = x.shape
-        assert s == 1
-        distribution = Categorical(logits=x).probs.detach().cpu().numpy()
-        distribution = distribution.reshape(b, a)
-        
-        return distribution
+    def forward(self, x, actor_kwargs):
+        a, _ = self.actor(x, **actor_kwargs)
+        c = self.critic(x)
+        return {'actor' : a, 'critic' : c}
+    
+    def sample_action(self, output, observation, info):
+        return self.actor.sample_action(output['actor'], observation, info)
+    
+    def log_prob(self, output, action):
+        return self.actor.log_prob(output['actor'], action)
+    
+    def entropy(self, output):
+        return self.actor.entropy(output['actor'])
+    
+    def value(self, output):
+        return output['critic']
+    
+    def observation_to_kwargs(self, observation, info, done, output):
+        return {
+            'actor_kwargs' : self.actor.observation_to_kwargs(
+                observation, info, done, output)
+        }

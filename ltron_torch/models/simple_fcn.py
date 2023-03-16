@@ -85,7 +85,7 @@ def named_resnet_fcn(
     fcn_layers = ('layer4', 'layer3', 'layer2', 'layer1')
     encoder = resnet.named_backbone(
         name,
-        *fcn_layers,
+        output_layers=fcn_layers,
         pretrained=pretrained,
         frozen_batchnorm=frozen_batchnorm)
     encoder_channels = resnet.named_encoder_channels(name)

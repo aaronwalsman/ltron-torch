@@ -1,257 +1,186 @@
+import sys
+
+import numpy
+
 import torch
-from torch.nn import Module, ModuleDict, Dropout
+import torch.nn as nn
 
-from gym.spaces import Discrete, MultiDiscrete, Dict
+import torchvision.transforms.functional as tF
 
-from ltron.config import Config
-from ltron.hierarchy import hierarchy_branch
-from ltron.gym.spaces import (
-    MaskedTiledImageSpace,
-    AssemblySpace,
-    PhaseSpace,
-    TimeStepSpace,
-    MultiScreenPixelSpace,
-    MultiScreenInstanceSnapSpace,
-    SymbolicSnapSpace,
-)
+from gymnasium.spaces import Discrete
 
-from ltron_torch.models.embedding import (
-    TemporalEmbedding,
-    build_shared_assembly_embeddings,
-    build_shared_masked_tiled_image_embeddings,
-    DiscreteTemporalEmbedding,
-    MultiDiscreteTemporalEmbedding,
-)
+from steadfast.config import Config
+
+from ltron.constants import NUM_SHAPE_CLASSES, NUM_COLOR_CLASSES
+
+#default_image_mean = [0.485, 0.456, 0.406]
+#default_image_std = [0.229, 0.224, 0.225]
 
 class AutoEmbeddingConfig(Config):
     channels = 768
-    embedding_dropout = 0.1
-    skip_embeddings = None
-    
-    share_temporal_embedding = False
+    tile_height = 16
+    tile_width = 16
 
-class AutoEmbedding(Module):
-    def __init__(self,
-        config,
-        observation_space,
-        readout_layout,
-    ):
-        # Module super
+class DictEmbedding(nn.ModuleDict):
+    def __init__(self, config, observation_space):
+        super().__init__({
+            name : AutoEmbedding(config, subspace)
+            for name, subspace in observation_space.items()
+            if 'equivalence' not in name
+        })
+    
+    def forward(self, x):
+        return {name : module(**x[name]) for name, module in self.items()}
+    
+    def observation_to_kwargs(self, obs, info, done, model_output):
+        if not isinstance(info, dict):
+            breakpoint()
+        return {'x' : {
+            name : module.observation_to_kwargs(
+                obs[name], info.get(name, {}), done, None)
+            for name, module in self.items()
+        }}
+
+class TupleEmbedding(nn.ModuleList):
+    def __init__(self, config, observation_space):
+        super().__init__([
+            AutoEmbedding(config, subspace)
+            for i, subspace in enumerate(observation_space)
+        ])
+       
+    def forward(self, x):
+        return [module(**x[i]) for i, module in enumerate(self)]
+    
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        model_kwargs = []
+        for i, module in enumerate(self):
+            try:
+                module_info = info[i]
+            except (KeyError, IndexError):
+                module_info = {}
+            model_kwargs.append(module.observation_to_kwargs(
+                observation[i], module_info, done, None))
+        return {'x' : model_kwargs}
+
+class DiscreteEmbedding(nn.Embedding):
+    def __init__(self, config, observation_space):
+        super().__init__(observation_space.n, config.channels)
+    
+    def observation_to_kwargs(self, o, i, d, model_output):
+        return {'x' : torch.LongTensor(o).to(self.weight.device)}
+    
+    def forward(self, x):
+        return super().forward(x)
+
+class ImageSpaceEmbedding(nn.Module):
+    def __init__(self, config, observation_space):
         super().__init__()
+        self.config = config
+        assert observation_space.height % config.tile_height == 0
+        assert observation_space.width % config.tile_width == 0
+        self.y_tiles = observation_space.height // config.tile_height
+        self.x_tiles = observation_space.width // config.tile_width
+        self.total_tiles = self.y_tiles * self.x_tiles
+        self.tile_pixels = config.tile_height * config.tile_width
         
-        # store observation space and readout layout
-        self.observation_space = observation_space
-        self.readout_layout = readout_layout
-        if config.skip_embeddings is None:
-            self.skip_embeddings = set()
-        else:
-            self.skip_embeddings = set(config.skip_embeddings.split(','))
+        self.in_channels = observation_space.channels * self.tile_pixels
+        self.pre_norm = nn.LayerNorm(self.in_channels)
+        self.linear = nn.Linear(self.in_channels, config.channels)
+        self.post_norm = nn.LayerNorm(config.channels)
+        #self.dropout = nn.Dropout(config.embedding_dropout)
         
-        # find token generating elements of the observation space
-        tile_shapes = set()
-        embeddings = {}
+        self.positional_encoding = nn.Parameter(
+            torch.randn(self.total_tiles, 1, config.channels))
         
-        self.time_step_name = None
-        self.time_step_space = None
-        
-        # build the temporal embedding
-        for name, space in observation_space.items():
-            if isinstance(space, TimeStepSpace):
-                assert self.time_step_space is None
-                self.time_step_name = name
-                self.time_step_space = space
-        
-        assert self.time_step_space is not None
-        if config.share_temporal_embedding:
-            self.temporal_embedding = TemporalEmbedding(
-                self.time_step_space, config.channels)
-        else:
-            self.temporal_embedding = None
-        
-        # build the readout embedding
-        self.readout_embedding = DiscreteTemporalEmbedding(
-            readout_layout.total,
-            config.channels,
-            temporal_embedding=self.temporal_embedding or TemporalEmbedding(
-                self.time_step_space, config.channels)
+        #self.tile_conv = nn.Conv2d(
+        #    in_channels=in_channels,
+        #    out_channels=config.channels,
+        #    kernel_size=(1,1),
+        #    #kernel_size=(config.tile_height, config.tile_width),
+        #    #stride=(config.tile_height, config.tile_width)
+        #)
+        #self.tile_embedding = nn.Embedding(self.total_tiles, config.channels)
+        #self.embedding_norm = nn.LayerNorm(config.channels)
+
+    def forward(self, x):
+        b, h, w, c = x.shape
+        x = x.view(
+            b,
+            self.y_tiles,
+            self.config.tile_height,
+            self.x_tiles,
+            self.config.tile_width,
+            c,
         )
+        x = x.permute(1,3,0,2,4,5)
+        x = x.reshape(self.total_tiles, b, self.tile_pixels*c)
         
-        # build the tile embeddings
-        tile_subspaces = {
-            name:subspace for name, subspace in observation_space.items()
-            if isinstance(subspace, MaskedTiledImageSpace)
-            and name not in self.skip_embeddings
-        }
-        if len(tile_subspaces):
-            tile_embeddings = build_shared_masked_tiled_image_embeddings(
-                tile_subspaces,
-                config.channels,
-                temporal_embedding=self.temporal_embedding or TemporalEmbedding(
-                    self.time_step_space, config.channels)
-            )
-            embeddings.update(tile_embeddings)
+        x = self.pre_norm(x)
+        x = self.linear(x)
+        x = self.post_norm(x)
+        x = x + self.positional_encoding
         
-        # build assembly embeddings
-        assembly_subspaces = {
-            name:subspace for name, subspace in observation_space.items()
-            if isinstance(subspace, AssemblySpace)
-            and name not in self.skip_embeddings
-        }
-        if len(assembly_subspaces):
-            assembly_embeddings = build_shared_assembly_embeddings(
-                assembly_subspaces,
-                config.channels,
-                temporal_embedding=self.temporal_embedding or TemporalEmbedding(
-                    self.time_step_space, config.channels)
-            )
-            embeddings.update(assembly_embeddings)
-        
-        def build_embedding(name, space):
-            if name in self.skip_embeddings:
-                return
-            
-            if isinstance(space, MultiScreenInstanceSnapSpace):
-                embeddings[name] = MultiDiscreteTemporalEmbedding(
-                    space,
-                    config.channels,
-                    temporal_embedding=(
-                        self.temporal_embedding or TemporalEmbedding(
-                            self.time_step_space, config.channels))
-                )
-            
-            elif isinstance(space, TimeStepSpace):
-                # do not generate a second embedding for the time step
-                pass
-            
-            elif isinstance(space, Discrete):
-                embeddings[name] = DiscreteTemporalEmbedding(
-                    space.n,
-                    config.channels,
-                    temporal_embedding=(
-                        self.temporal_embedding or TemporalEmbedding(
-                            self.time_step_space, config.channels))
-                )
-            #elif isinstance(space, Box) and space.dtype == numpy.int64:
-            #    embeddings[name] = IntegerBoxTemporalEmbedding(
-            #        space,
-            #        config.channels,
-            #        #self.temporal_embedding
-            #        TemporalEmbedding(self.time_step_space, config.channels),
-            #    )
-            elif isinstance(space, MultiDiscrete):
-                embeddings[name] = MultiDiscreteTemporalEmbedding(
-                    space,
-                    config.channels,
-                    temporal_embedding=(
-                        self.temporal_embedding or TemporalEmbedding(
-                            self.time_step_space, config.channels))
-                )
-            
-            elif isinstance(space, Dict) and name not in embeddings:
-                for key, value in space.items():
-                    build_embedding('%s__%s'%(name, key), value)
-        
-        # build other embeddings
-        for name, space in observation_space.items():
-            #if name == 'expert':
-            #    continue
-            build_embedding(name, space)
-        
-        # build the final dropout layer
-        self.dropout = Dropout(config.embedding_dropout)
-        
-        # auto
-        self.embeddings = ModuleDict(embeddings)
+        return x
     
-    def observation_to_tensors(self, batch, seq_pad):
-        device = next(iter(self.parameters())).device
-        observation = batch['observation']
-        
-        # move the time_step to torch/device
-        time_step = torch.LongTensor(
-            observation[self.time_step_name]).to(device)
-        s, b = time_step.shape[:2]
-        
-        # generate the tensors for each embedding
-        auto_x = {}
-        auto_t = {}
-        auto_pad = {}
-        for name, embedding in self.embeddings.items():
-            #sub_names = name.split('__')
-            #name_obs = observation
-            #for sub_name in sub_names:
-            #    name_obs = name_obs[sub_name]
-            name_obs = hierarchy_branch(observation, name.split('__'))
-            try:
-                a_x, a_t, a_pad = embedding.observation_to_tensors(
-                    name_obs,
-                    observation[self.time_step_name],
-                    seq_pad,
-                    device,
-                )
-            except:
-                print('observation_to_tensors failed for: %s'%name)
-                raise
-            
-            auto_x[name] = a_x
-            auto_t[name] = a_t
-            auto_pad[name] = a_pad
-        
-        # make the readout tokens
-        readout_x = []
-        readout_t = []
-        readout_pad = []
-        for name in self.readout_layout.keys():
-            if name == 'PAD':
-                continue
-            index = self.readout_layout.ravel(name, 0)
-            readout_x.append(torch.full_like(time_step, index))
-            readout_t.append(time_step)
-            readout_pad.append(torch.full((b,), s).cuda())
-        
-        # concatenate the readout tokens
-        readout_x = torch.cat(readout_x, dim=0)
-        readout_t = torch.cat(readout_t, dim=0)
-        readout_pad = sum(readout_pad)
-        assert 'readout' not in auto_x
-        auto_x['readout'] = {'x':readout_x}
-        auto_t['readout'] = readout_t
-        auto_pad['readout'] = readout_pad
-        
-        debug = False
-        if debug:
-            print('======================')
-            print('observation_to_tensors')
-            for i in range(b):
-                print('----------------------')
-                print('trajectory: %i'%i)
-                for name, p in auto_pad.items():
-                    print('component %s contributed %i tokens'%(name, p[i]))
-                    print('   ', auto_t[name][:,i].cpu().numpy())
-        
-        return {'x':auto_x, 't':auto_t, 'pad':auto_pad}
+    def observation_to_kwargs(self, o, i, d, model_output):
+        x = torch.FloatTensor((o / 255.)).to(self.linear.weight.device)
+        return {'x' : x}
+
+class AssemblySpaceEmbedding(nn.Module):
+    def __init__(self, config, observation_space):
+        super().__init__()
+        self.config = config
+        self.shape_embedding = nn.Embedding(NUM_SHAPE_CLASSES, config.channels)
+        self.color_embedding = nn.Embedding(NUM_COLOR_CLASSES, config.channels)
+        self.pose_embedding = MultiSE3SpaceEmbedding(
+            config, observation_space['pose'])
     
-    def forward(self, x, t, pad):
-        out_x = {}
-        out_t = {}
-        out_pad = {}
+    def forward(self, shape, color, pose):
+        shape = self.shape_embedding(shape)
+        color = self.color_embedding(color)
+        pose = self.pose_embedding(pose)
+        x = shape + color + pose
+        x = x.permute(1,0,2)
         
-        # observation-based embeddings
-        for name, embedding in self.embeddings.items():
-            try:
-                x_n, t_n, pad_n = embedding(**x[name], t=t[name], pad=pad[name])
-                x_n = self.dropout(x_n)
-                out_x[name] = x_n
-                out_t[name] = t_n
-                out_pad[name] = pad_n
-            except:
-                print('forward failed while embedding: %s'%name)
-                raise
+        return x
+    
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        batch_indices, shape_indices = numpy.where(observation['shape'])
+        num_bricks = numpy.max(shape_indices)
+        device = self.shape_embedding.weight.device
+        shape = torch.LongTensor(
+            observation['shape'][:,:num_bricks+1]).to(device)
+        color = torch.LongTensor(
+            observation['color'][:,:num_bricks+1]).to(device)
+        pose = self.pose_embedding.observation_to_kwargs(
+            observation['pose'], info.get('pose', {}), done, None)
+        pose = pose[:,:num_bricks+1]
         
-        # readout tokens
-        name = 'readout'
-        out_x[name], out_t[name], out_pad[name] = self.readout_embedding(
-            **x[name], t=t[name], pad=pad[name])
-        
-        # return
-        return out_x, t, pad
+        return {'shape':shape, 'color':color, 'pose':pose}
+
+class SE3SpaceEmbedding(nn.Module):
+    def __init__(self, config, observation_space):
+        super().__init__()
+        self.pose_embedding = torch.nn.Linear(16, config.channels)
+        bbox = numpy.array(observation_space.world_bbox)
+        #self.position_scale = 1. / (bbox[1] - bbox[0])
+        self.position_scale = 1./20.
+    
+    def forward(self, pose):
+        return self.pose_embedding(pose)
+    
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        pose = torch.FloatTensor(observation)
+        pose[...,:3,3] *= self.position_scale
+        *s, h, w = pose.shape
+        pose = pose.view(*s,16)
+        device = self.pose_embedding.weight.device
+        return pose.to(device)
+
+MultiSE3SpaceEmbedding = SE3SpaceEmbedding
+
+def AutoEmbedding(config, observation_space):
+    this_module = sys.modules[__name__]
+    auto_embedding_name = type(observation_space).__name__ + 'Embedding'
+    EmbeddingClass = getattr(this_module, auto_embedding_name)
+    return EmbeddingClass(config, observation_space)

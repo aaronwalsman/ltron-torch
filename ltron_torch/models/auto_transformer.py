@@ -4,49 +4,44 @@ import json
 import numpy
 
 import torch
-from torch.nn import Module
+import torch.nn as nn
 
 import tqdm
 
 from splendor.image import save_image
 from splendor.json_numpy import NumpyEncoder
 
-from ltron.hierarchy import index_hierarchy
+from steadfast.hierarchy import flatten_hierarchy, hierarchy_getitem
+
 from ltron.bricks.brick_scene import BrickScene
-from ltron.gym.spaces import (
-    MultiScreenPixelSpace, MaskedTiledImageSpace, AssemblySpace,
-)
+
 from ltron.visualization.drawing import (
     draw_crosshairs, draw_box, write_text, stack_images_horizontal,
 )
 
-from ltron_torch.models.transformer import (
-    TransformerConfig,
-    Transformer,
-    init_weights,
-)
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
+from ltron_torch.models.transformer import (
+    TransformerConfig, Transformer, init_weights)
 from ltron_torch.models.auto_decoder import (
-    AutoDecoderConfig, AutoDecoder)
-from ltron_torch.models.padding import (
-    cat_multi_padded_seqs, decat_padded_seq, get_seq_batch_indices)
+    AutoDecoderConfig, AutoActorDecoder, AutoActorCriticDecoder)
 
 class AutoTransformerConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
     AutoDecoderConfig,
 ):
-    action_decoder_dropout = 0.1
+    channels = 768
+    embedding_dropout = 0.1
     strict_load = True
 
-class AutoTransformer(Module):
+class AutoTransformer(nn.Module):
     def __init__(self,
         config,
         observation_space,
         action_space,
-        no_op_action,
-        checkpoint=None
+        checkpoint=None,
+        decode_mode='actor',
     ):
         # Module super
         super().__init__()
@@ -55,18 +50,22 @@ class AutoTransformer(Module):
         self.config = config
         self.observation_space = observation_space
         self.action_space = action_space
-        self.no_op_action = no_op_action
-        
-        # build the decoder
-        # (do this before the encoder because we need the readout_layout)
-        self.decoder = AutoDecoder(config, action_space)
         
         # build the token embedding
-        self.embedding = AutoEmbedding(
-            config, observation_space, self.decoder.readout_layout)
+        self.embedding = AutoEmbedding(config, observation_space)
+        self.embedding_dropout = nn.Dropout(config.embedding_dropout)
+        
+        # build the decoder token
+        self.decoder_token = nn.Embedding(1, config.channels)
         
         # build the transformer
         self.encoder = Transformer(config)
+        
+        # build the decoder
+        if decode_mode == 'actor':
+            self.decoder = AutoActorDecoder(config, action_space)
+        elif decode_mode == 'actor_critic':
+            self.decoder = AutoActorCriticDecoder(config, action_space)
         
         # load checkpoint or initialize weights
         if checkpoint is not None:
@@ -76,108 +75,55 @@ class AutoTransformer(Module):
         elif config.init_weights:
             self.apply(init_weights)
     
-    def zero_all_memory(self):
-        self.encoder.zero_all_memory()
+    def observation_to_kwargs(self, observation, info, done, model_output):
+        embedding_kwargs = self.embedding.observation_to_kwargs(
+            observation, info, done, model_output)
+        decoder_kwargs = self.decoder.observation_to_kwargs(
+            observation, info, done, model_output)
+        return {
+            'embedding_kwargs' : embedding_kwargs,
+            'decoder_kwargs' : decoder_kwargs,
+        }
     
-    def observation_to_tensors(self, batch, seq_pad):
-        # get the auto_embedding's tensors
-        x = self.embedding.observation_to_tensors(batch, seq_pad)
+    def sample_action(self, output, observation, info):
+        return self.decoder.sample_action(output, observation, info)
+    
+    def log_prob(self, output, action):
+        return self.decoder.log_prob(output, action)
+    
+    def entropy(self, output):
+        return self.decoder.entropy(output)
+    
+    def value(self, output):
+        return self.decoder.value(output)
+    
+    def forward(self, embedding_kwargs, decoder_kwargs):
         
-        # add seq_pad
-        device = next(iter(self.parameters())).device
-        x['seq_pad'] = torch.LongTensor(seq_pad).to(device)
+        # use the embedding to compute the tokens
+        x = self.embedding(**embedding_kwargs)
+        
+        # extract and concatenate all tokens
+        all_tokens = flatten_hierarchy(x)
+        s, b, c = all_tokens[0].shape
+        decoder_token = self.decoder_token.weight.view(1,1,c).expand(1,b,c)
+        all_tokens.append(decoder_token)
+        x = torch.cat(all_tokens, dim=0)
+        
+        # embedding dropout
+        x = self.embedding_dropout(x)
+        
+        # push the concatenated tokens through the transformer
+        x = self.encoder(x)[-1]
+        
+        # strip off the decoder tokens
+        x = x[-1]
+        
+        # push the decoder tokens through the auto decoder
+        x = self.decoder(x, **decoder_kwargs)
         
         return x
     
-    def forward(self, x, t, pad, seq_pad, use_memory=None):
-        
-        # use the embedding to compute the tokens, time steps and padding
-        emb_x, emb_t, emb_pad = self.embedding(x, t, pad)
-        
-        # concatenate all tokens
-        # readout tokens go first so we can pull them out easier
-        order_x = [emb_x['readout']]
-        order_t = [emb_t['readout']]
-        order_pad = [emb_pad['readout']]
-        name_seq = ['readout']
-        
-        # everything else goes after the readout tokens
-        non_readout_pad = torch.zeros_like(emb_pad['readout'])
-        for name in emb_x:
-            if name == 'readout':
-                continue
-            order_x.append(emb_x[name])
-            order_t.append(emb_t[name])
-            order_pad.append(emb_pad[name])
-            non_readout_pad = non_readout_pad + emb_pad[name]
-            name_seq.append(name)
-        
-        # do the concatenation
-        cat_x, cat_pad = cat_multi_padded_seqs(order_x, order_pad)
-        cat_t, _ = cat_multi_padded_seqs(order_t, order_pad)
-        
-        # push the concatenated sequence through the transformer
-        trans_x = self.encoder(cat_x, cat_t, cat_pad, use_memory=use_memory)
-        enc_x = trans_x[-1]
-        
-        # strip off the decoder tokens
-        decat_x, _ = decat_padded_seq(
-            enc_x, emb_pad['readout'], non_readout_pad
-        )
-        
-        # push the decoder tokens through the auto decoder
-        head_x = self.decoder(decat_x, x['readout'], t['readout'], seq_pad)
-        
-        #print('==================')
-        #b = head_x.shape[1]
-        #for i in range(b):
-        #    print('------------------')
-        #    print('seq %i'%i)
-        #    for name, name_pad in zip(name_seq, order_pad):
-        #        print('  %s contributed %i tokens'%(name, name_pad[i].cpu()))
-        #        print('   ', t[name][:,i])
-        
-        return head_x
-    
-    def forward_rollout(self, terminal, *args, **kwargs):
-        device = next(self.parameters()).device
-        use_memory = torch.BoolTensor(~terminal).to(device)
-        return self(*args, **kwargs, use_memory=use_memory)
-    
     '''
-    def tensor_to_actions(self, x, mode='sample'):
-        s, b, a = x.shape
-        assert s == 1
-        if mode == 'sample':
-            distribution = self.tensor_to_distribution(x)
-            actions = distribution.sample().cpu().view(b).numpy()
-        elif mode == 'max':
-            actions = torch.argmax(x, dim=-1).cpu().view(b).numpy()
-
-        return actions
-    '''
-    
-    def empty_distribution(self):
-        return numpy.zeros((self.action_space.n,))
-    
-    def tensor_to_distribution(self, x):
-        return self.decoder.tensor_to_distribution(x)
-    
-    def expert_distribution(self, expert_actions):
-        expert_actions = list(set([
-            a for a in expert_actions
-            if a != self.no_op_action
-        ]))
-        ## TMP
-        #if not len(expert_actions):
-        #    expert_actions = [self.no_op_action]
-        #expert_action = random.choice(expert_actions)
-        #actions[i] = expert_action
-        d = numpy.zeros(self.action_space.n)
-        d[expert_actions] = 1. / len(expert_actions)
-        
-        return d
-    
     def observation_to_label(self, batch, pad, supervision_mode):
         device = next(self.parameters()).device
         
@@ -222,6 +168,7 @@ class AutoTransformer(Module):
             y[ss,bb,ll.view(-1)] = 1
         
         return y
+    '''
     
     def loss(self, x, y, seq_pad):
         #if True:
@@ -415,3 +362,5 @@ class AutoTransformer(Module):
                     continue
                 
                 break
+
+
