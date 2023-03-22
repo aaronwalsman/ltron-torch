@@ -29,6 +29,9 @@ class LtronInteractiveTrainerConfig(
     TeacherDistillConfig,
 ):
     algorithm = 'teacher_distill'
+    
+    # change default
+    grad_norm_clipping = 1.
 
 def train_ltron_teacher_distill(config=None):
     if config is None:
@@ -41,3 +44,15 @@ def train_ltron_teacher_distill(config=None):
             eval_env_kwargs={'config':config, 'train':False},
         )
     trainer.train()
+
+def eval_ltron_teacher_distill(config=None):
+    if config is None:
+        config = LtronInteractiveTrainerConfig.from_commandline()
+    if config.algorithm == 'teacher_distill':
+        trainer = TeacherDistillTrainer(
+            config=config,
+            ModelClass=LtronVisualTransformer,
+            train_env_kwargs={'config':config, 'train':True},
+            eval_env_kwargs={'config':config, 'train':False},
+        )
+    trainer.evaluate(0,0)
