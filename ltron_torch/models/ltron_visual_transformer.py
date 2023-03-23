@@ -426,7 +426,11 @@ class LtronVisualTransformer(nn.Module):
         
         for i, m in enumerate(mode):
             image = images[i]
-
+            current_image = image.copy()
+            current_image = write_text(current_image, 'Current Image')
+            
+            action_image = image.copy()
+            
             click_heatmap_background = images[i].copy()
             click_heatmap = click_heatmaps[i].cpu().numpy()
             click_heatmap = heatmap_overlay(
@@ -509,17 +513,17 @@ class LtronVisualTransformer(nn.Module):
             '''
             
             action_str += '\nReward: %.04f'%reward[i]
-            image = write_text(image, action_str)
+            action_image = write_text(action_image, action_str)
 
             if mode_name in ('remove', 'pick_and_place', 'rotate'):
                 click_polarity = action['cursor']['button'][i]
                 click_yx = action['cursor']['click'][i]
                 if click_polarity:
-                    draw_crosshairs(image, *click_yx, 3, (255,0,0))
+                    draw_crosshairs(action_image, *click_yx, 3, (255,0,0))
                     draw_crosshairs(click_heatmap, *click_yx, 3, (255,0,0))
                     draw_crosshairs(click_p_map, *click_yx, 3, (255,0,0))
                 else:
-                    draw_square(image, *click_yx, 3, (255,0,0))
+                    draw_square(action_image, *click_yx, 3, (255,0,0))
                     draw_square(click_heatmap, *click_yx, 3, (255,0,0))
                     draw_square(click_p_map, *click_yx, 3, (255,0,0))
 
@@ -527,24 +531,25 @@ class LtronVisualTransformer(nn.Module):
                 release_polarity = ~bool(click_polarity)
                 release_yx = action['cursor']['release'][i]
                 if release_polarity:
-                    draw_crosshairs(image, *release_yx, 3, (0,0,255))
+                    draw_crosshairs(action_image, *release_yx, 3, (0,0,255))
                     draw_crosshairs(release_heatmap, *release_yx, 3, (0,0,255))
                     draw_crosshairs(release_p_map, *release_yx, 3, (0,0,255))
                 else:
-                    draw_square(image, *release_yx, 3, (0,0,255))
+                    draw_square(action_image, *release_yx, 3, (0,0,255))
                     draw_square(release_heatmap, *release_yx, 3, (0,0,255))
                     draw_square(release_p_map, *release_yx, 3, (0,0,255))
-                draw_line(image, *click_yx, *release_yx, (255,0,255))
+                draw_line(action_image, *click_yx, *release_yx, (255,0,255))
             
-            image_row = [image]
-            if next_image is not None:
-                result_image = next_image[i]
-                result_image = write_text(result_image, 'Result Image')
-                image_row.append(result_image)
+            image_row = [current_image]
             if 'target_image' in observation:
                 target_image = observation['target_image'][i]
                 target_image = write_text(target_image, 'Target Image')
                 image_row.append(target_image)
+            image_row.append(action_image)
+            if next_image is not None:
+                result_image = next_image[i]
+                result_image = write_text(result_image, 'Result Image')
+                image_row.append(result_image)
             image_row.extend([
                 click_heatmap,
                 release_heatmap,
