@@ -559,7 +559,7 @@ class LtronVisualTransformer(nn.Module):
                     draw_square(click_p_map, *click_yx, 3, (255,0,0))
 
             if mode_name in ('pick_and_place',):
-                release_polarity = ~bool(click_polarity)
+                release_polarity = not bool(click_polarity)
                 release_yx = action['cursor']['release'][i]
                 if release_polarity:
                     draw_crosshairs(action_image, *release_yx, 3, (0,0,255))
