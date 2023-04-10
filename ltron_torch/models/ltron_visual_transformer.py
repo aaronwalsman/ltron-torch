@@ -60,6 +60,10 @@ class LtronVisualTransformerConfig(
     strict_load = True
     
     overlay_target_image = False
+    
+    use_dpt_decoder = False
+    dpt_blocks = [2,5,8,11]
+    dpt_channels = 256
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -282,9 +286,16 @@ class LtronVisualTransformer(nn.Module):
         x = self.embedding_dropout(x)
         
         # push the concatenated tokens through the transformer
-        x = self.encoder(x)[-1]
-        decode_x = self.predecoder_norm(x[0])
-        image_x = x[1:hw+1]
+        if self.config.use_dpt_decoder:
+            output_layers = self.config.dpt_blocks
+        else:
+            output_layers = None
+        x = self.encoder(x, output_layers=output_layers)
+        decode_x = self.predecoder_norm(x[-1][0])
+        if self.config.use_dpt_decoder:
+            image_x = [x[i][1:hw+1] for i in self.config.dpt_blocks]
+        else:
+            image_x = x[1:hw+1]
         
         value = self.critic_decoder(decode_x)
         
@@ -344,11 +355,20 @@ class LtronVisualTransformer(nn.Module):
         if image_x is not None:
             cursor_sample = None if sample is None else (
                 sample['cursor'])
-            _, b, c = image_x.shape
-            #image_x = self.image_norm(image_x)
-            h = self.config.image_height // self.config.tile_height
-            w = self.config.image_width // self.config.tile_width
-            image_x = image_x.permute(1,2,0).reshape(b,c,h,w)
+            
+            if self.config.use_dpt_decoder:
+                _, b, c = image_x[0].shape
+                h = self.config.image_height // self.config.tile_height
+                w = self.config.image_width // self.config.tile_width
+                image_x = [
+                    ix.permute(1,2,0).reshape(b,c,h,w)
+                    for ix in image_x]
+            else:
+                _, b, c = image_x.shape
+                #image_x = self.image_norm(image_x)
+                h = self.config.image_height // self.config.tile_height
+                w = self.config.image_width // self.config.tile_width
+                image_x = image_x.permute(1,2,0).reshape(b,c,h,w)
             s, lp, e, cx, cursor_logits = self.cursor_decoder(
                 x,
                 image_x,
@@ -397,6 +417,9 @@ class LtronVisualTransformer(nn.Module):
     
     def value(self, output):
         return output['value']
+    
+    def save_observation(self, observation, path, index):
+        breakpoint()
     
     def visualize(self,
         observation,
