@@ -10,13 +10,18 @@ from ltron_torch.models.equivalence import (
     equivalent_outcome_categorical,
 )
 from ltron_torch.models.decoder import DiscreteDecoder
+from ltron_torch.models.dense_decoder import DenseDecoder
 
 class CursorDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.button_decoder = DiscreteDecoder(config, 2)
-        self.click_decoder = ScreenDecoder(config)
-        self.release_decoder = ScreenDecoder(config)
+        if config.use_dpt_decoder:
+            self.click_decoder = DPTScreenDecoder(config)
+            self.release_decoder = DPTScreenDecoder(config)
+        else:
+            self.click_decoder = ScreenDecoder(config)
+            self.release_decoder = ScreenDecoder(config)
         self.forward_passes = 0
     
     def forward(self,
@@ -72,12 +77,115 @@ class CursorDecoder(nn.Module):
         
         return out_sample, log_prob, entropy, x, logits
 
+class DPTScreenDecoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.k_head = DenseDecoder(config)
+        self.q_head = linear_stack(
+            self.config.decoder_layers,
+            self.config.channels,
+            out_channels=config.image_attention_channels,
+            first_norm=True,
+            nonlinearity=config.nonlinearity,
+            Norm=nn.LayerNorm,
+        )
+        self.content_linear = nn.Linear(
+            config.image_attention_channels, config.channels)
+    
+    def forward(self,
+        x,
+        image_x,
+        equivalence,
+        sample=None,
+    ):
+        
+        # get dimension sizes
+        b,c,h,w = image_x[0].shape
+        th = self.config.tile_height 
+        tw = self.config.tile_width
+        ac = self.config.image_attention_channels
+        ih = self.config.image_height
+        iw = self.config.image_width
+        
+        # compute q and k
+        q = self.q_head(x)
+        k = self.k_head(*image_x)
+        #k = k.view(b,ac,th,tw,h,w).permute(0,1,4,2,5,3).reshape(b,ac,ih,iw)
+        
+        # compute the attention weights
+        qk = torch.einsum('bc,bchw->bhw', q, k)
+        temperature = 1. / ac ** 0.5
+        a = qk * temperature
+        
+        if self.config.sigmoid_screen_attention:
+            p = torch.sigmoid(a)
+            click_distribution = Categorical(probs=p.view(b,ih*iw))
+        else:
+            click_distribution = Categorical(logits=a.view(b,ih*iw))
+        screen_logits = click_distribution.logits.view(b, ih, iw)
+        
+        # get the sample
+        if sample is None:
+            flat_sample = click_distribution.sample()
+            sample_y = torch.div(flat_sample, iw, rounding_mode='floor')
+            sample_x = flat_sample % iw
+            sample = torch.stack((sample_y, sample_x), dim=-1)
+        else:
+            sample_y = sample[:,0]
+            sample_x = sample[:,1]
+            flat_sample = sample_y * iw + sample_x
+        
+        if equivalence is None:
+            raise Exception('NOPE NOPE NOPE, NEED EQUIVALENCE FOR PPO')
+            log_prob = click_distribution.log_prob(flat_sample)
+            entropy = click_distribution.entropy()
+        else:
+            if self.config.screen_equivalence:
+                if self.config.sigmoid_screen_attention:
+                    eq_distribution = equivalent_probs_categorical(
+                        p, equivalence)
+                
+                else:
+                    if self.training:
+                        eq_dropout = 0.5
+                    else:
+                        eq_dropout = 0.0
+                    eq_distribution = equivalent_outcome_categorical(
+                        a, equivalence, dropout=eq_dropout)
+                
+                eq_sample = equivalence[range(b),sample_y,sample_x]
+                log_prob = eq_distribution.log_prob(eq_sample)
+                entropy = eq_distribution.entropy()
+            else:
+                log_prob = click_distribution.log_prob(flat_sample)
+                entropy = click_distribution.entropy()
+        
+        # we used to have separate embeddings for the x,y locations
+        #x_pe = self.x_embedding(sample_x)
+        #y_pe = self.y_embedding(sample_y)
+        content_x = self.content_linear(k[range(b),:,sample_y,sample_x])
+        
+        #x = x + self.norm(content_x + x_pe + y_pe)
+        #x = self.norm(content_x)
+        x = x + content_x
+        
+        return sample, log_prob, entropy, x, screen_logits
+    
+    #def log_prob(self, output, action):
+    #    b = output['equivalence'].shape[0]
+    #    eq_index = output['equivalence'][range(b),action[:,0],action[:,1]]
+    #    return output['distribution'].log_prob(eq_index)
+    #
+    #def entropy(self, output):
+    #    return output['distribution'].entropy()
+
 class ScreenDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         th = config.tile_height
         tw = config.tile_width
-        self.config = config
         
         c = self.config.channels
         c_out = config.image_attention_channels
