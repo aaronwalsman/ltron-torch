@@ -13,6 +13,8 @@ from steadfast.config import Config
 
 from ltron.constants import NUM_SHAPE_CLASSES, NUM_COLOR_CLASSES
 
+from avarice.model.parameter import NoWeightDecayParameter
+
 #default_image_mean = [0.485, 0.456, 0.406]
 #default_image_std = [0.229, 0.224, 0.225]
 
@@ -89,7 +91,7 @@ class ImageSpaceEmbedding(nn.Module):
         self.post_norm = nn.LayerNorm(config.channels)
         #self.dropout = nn.Dropout(config.embedding_dropout)
         
-        self.positional_encoding = nn.Parameter(
+        self.positional_encoding = NoWeightDecayParameter(
             torch.randn(self.total_tiles, 1, config.channels))
         
         #self.tile_conv = nn.Conv2d(

@@ -31,6 +31,7 @@ class LtronInteractiveTrainerConfig(
     algorithm = 'teacher_distill'
     
     # change default
+    optimizer = 'adamw'
     grad_norm_clipping = 1.
 
 def train_ltron_teacher_distill(config=None):

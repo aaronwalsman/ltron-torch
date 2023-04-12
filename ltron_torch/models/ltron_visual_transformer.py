@@ -50,6 +50,7 @@ from ltron_torch.models.equivalence import (
     equivalent_probs_categorical,
     equivalent_outcome_categorical
 )
+from avarice.model.parameter import NoWeightDecayParameter
 
 class LtronVisualTransformerConfig(
     AutoEmbeddingConfig,
@@ -96,7 +97,7 @@ class LtronVisualTransformer(nn.Module):
         # build the decoder token
         # adding two randns here to simulate the embedding itself plus
         # a learned positional encoding
-        self.decoder_token = nn.Parameter(
+        self.decoder_token = NoWeightDecayParameter(
             torch.randn(1, 1, config.channels) +
             torch.randn(1, 1, config.channels))
         
@@ -504,7 +505,13 @@ class LtronVisualTransformer(nn.Module):
                     prefix = '> '
                 else:
                     prefix = ''
-                mode_lines.append('%s%s: %.02f'%(prefix, name, mode_prob[j]))
+                if name == 'rotate':
+                    r = action['action_primitives']['rotate'][i]
+                    mode_lines.append(
+                        '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
+                else:
+                    mode_lines.append(
+                        '%s%s: %.02f'%(prefix, name, mode_prob[j]))
             action_str = 'Action:\n' + '\n'.join(mode_lines)
             
             '''

@@ -1,7 +1,6 @@
 import torch
-from torch.nn import Module, Linear, Dropout, ParameterList, ModuleList
+from torch.nn import Module, Linear, Dropout
 
-from ltron_torch.models.parameter import NoWeightDecayParameter
 from ltron_torch.models.padding import cat_padded_seqs, make_padding_mask
 
 class Attention(Module):
