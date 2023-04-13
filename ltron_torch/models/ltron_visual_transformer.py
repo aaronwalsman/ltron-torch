@@ -265,7 +265,7 @@ class LtronVisualTransformer(nn.Module):
         if self.config.use_dpt_decoder:
             image_x = [x[i][1:hw+1] for i in self.config.dpt_blocks]
         else:
-            image_x = x[1:hw+1]
+            image_x = x[-1][1:hw+1]
         
         value = self.critic_decoder(decode_x)
         
