@@ -86,23 +86,14 @@ class ImageSpaceEmbedding(nn.Module):
         self.tile_pixels = config.tile_height * config.tile_width
         
         self.in_channels = observation_space.channels * self.tile_pixels
-        self.pre_norm = nn.LayerNorm(self.in_channels)
+        # RECENT UPDATE
+        #self.pre_norm = nn.LayerNorm(self.in_channels)
         self.linear = nn.Linear(self.in_channels, config.channels)
-        self.post_norm = nn.LayerNorm(config.channels)
-        #self.dropout = nn.Dropout(config.embedding_dropout)
+        # RECENT UPDATE
+        #self.post_norm = nn.LayerNorm(config.channels)
         
         self.positional_encoding = NoWeightDecayParameter(
             torch.randn(self.total_tiles, 1, config.channels))
-        
-        #self.tile_conv = nn.Conv2d(
-        #    in_channels=in_channels,
-        #    out_channels=config.channels,
-        #    kernel_size=(1,1),
-        #    #kernel_size=(config.tile_height, config.tile_width),
-        #    #stride=(config.tile_height, config.tile_width)
-        #)
-        #self.tile_embedding = nn.Embedding(self.total_tiles, config.channels)
-        #self.embedding_norm = nn.LayerNorm(config.channels)
 
     def forward(self, x):
         b, h, w, c = x.shape
@@ -117,9 +108,9 @@ class ImageSpaceEmbedding(nn.Module):
         x = x.permute(1,3,0,2,4,5)
         x = x.reshape(self.total_tiles, b, self.tile_pixels*c)
         
-        x = self.pre_norm(x)
+        #x = self.pre_norm(x)
         x = self.linear(x)
-        x = self.post_norm(x)
+        #x = self.post_norm(x)
         x = x + self.positional_encoding
         
         return x

@@ -90,8 +90,11 @@ class DPTScreenDecoder(nn.Module):
             nonlinearity=config.nonlinearity,
             Norm=nn.LayerNorm,
         )
+        #self.q_norm = nn.LayerNorm(64)
         self.content_linear = nn.Linear(
             config.image_attention_channels, config.channels)
+        
+        
     
     def forward(self,
         x,
@@ -110,11 +113,13 @@ class DPTScreenDecoder(nn.Module):
         
         # compute q and k
         q = self.q_head(x)
+        #q = self.q_norm(q)
         k = self.k_head(*image_x)
         #k = k.view(b,ac,th,tw,h,w).permute(0,1,4,2,5,3).reshape(b,ac,ih,iw)
         
         # compute the attention weights
         qk = torch.einsum('bc,bchw->bhw', q, k)
+        #temperature = 100*(1. / ac ** 0.5)
         temperature = 1. / ac ** 0.5
         a = qk * temperature
         

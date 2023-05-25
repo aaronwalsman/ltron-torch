@@ -58,6 +58,20 @@ def ReassemblyBlock4(in_channels, out_channels):
             out_channels, out_channels, kernel_size=3, stride=2, padding=1),
     )
 
+class LayerNorm2d(nn.Module):
+    '''
+    Bro this suuuuuuucks
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.ln = nn.LayerNorm(*args, **kwargs)
+    
+    def forward(self, x):
+        x = x.permute(0,2,3,1)
+        x = self.ln(x)
+        x = x.permute(0,3,1,2)
+        return x
+
 class Head(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -67,14 +81,18 @@ class Head(nn.Module):
         c = config.dpt_channels
         c2 = config.dpt_channels // 2
         c4 = config.dpt_channels // 4
+        #self.norm1 = LayerNorm2d(c)
         self.conv1 = nn.Conv2d(c, c2, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(c2, c4, kernel_size=3, padding=1)
+        #self.norm2 = LayerNorm2d(c4)
     
     def forward(self, x):
+        #x = self.norm1(x)
         x = self.conv1(x)
         x = F.interpolate(
             x, scale_factor=2, mode='bilinear', align_corners=True)
         x = self.conv2(x)
+        #x = self.norm2(x)
         #x = F.relu(x)
         
         return x

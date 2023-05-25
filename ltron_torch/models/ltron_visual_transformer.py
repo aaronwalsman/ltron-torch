@@ -94,6 +94,8 @@ class LtronVisualTransformer(nn.Module):
                     config, observation_space['target_assembly'])
         self.embedding_dropout = nn.Dropout(config.embedding_dropout)
         
+        self.pre_encoder_norm = nn.LayerNorm(config.channels)
+        
         # build the decoder token
         # adding two randns here to simulate the embedding itself plus
         # a learned positional encoding
@@ -251,6 +253,9 @@ class LtronVisualTransformer(nn.Module):
         # concat tokens together here
         decoder_token = self.decoder_token.expand(1,b,c)
         x = torch.cat((decoder_token, x), dim=0)
+        
+        # normalize the embedding
+        x = self.pre_encoder_norm(x)
         
         # embedding dropout
         x = self.embedding_dropout(x)
