@@ -28,7 +28,9 @@ class InsertDecoder(nn.Module):
         self.shape_decoder = AutoDecoder(config, Discrete(num_shape_classes))
         self.color_decoder = AutoDecoder(config, Discrete(num_color_classes))
     
-    def forward(self, x, sample=None, shape_eq=None, color_eq=None):
+    def forward(self,
+        x, sample=None, sample_max=False, shape_eq=None, color_eq=None
+    ):
         out_sample = []
         log_prob = 0.
         entropy = 0.
@@ -38,6 +40,7 @@ class InsertDecoder(nn.Module):
         s,lp,e,x = self.shape_decoder(
             x,
             sample=shape_sample,
+            sample_max=sample_max,
             equivalence=shape_eq,
             equivalence_dropout=0.,
         )
@@ -49,6 +52,7 @@ class InsertDecoder(nn.Module):
         s,lp,e,x = self.color_decoder(
             x,
             sample=color_sample,
+            sample_max=sample_max,
             equivalence=color_eq,
             equivalence_dropout=0.,
         )

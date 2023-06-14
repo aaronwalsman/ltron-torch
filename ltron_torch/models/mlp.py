@@ -6,15 +6,50 @@ def make_nonlinearity(nonlinearity):
         nonlinearity = ReLU
     elif nonlinearity == 'gelu':
         nonlinearity = GELU
+    elif nonlinearity == 'none':
+        nonlinearity = torch.nn.Identity
     return nonlinearity()
 
 class ResidualBlock(Module):
-    def __init__(self, mlp, Norm=None):
+    def __init__(self, mlp):
         super().__init__()
         self.mlp = mlp
     
     def forward(self, x):
-        x = x + self.mlp(x)
+        return x + self.mlp(x)
+
+def residual_linear_block(
+    in_channels,
+    out_channels,
+    upscaling=4,
+    nonlinearity='gelu',
+    Norm=None,
+):
+    seq = torch.nn.Sequential()
+    if Norm is not None:
+        seq.append(Norm(in_channels))
+    seq.append(torch.nn.Linear(in_channels, in_channels*upscaling))
+    seq.append(make_nonlinearity(nonlinearity))
+    seq.append(torch.nn.Linear(in_channels*upscaling, out_channels))
+    return ResidualBlock(seq)
+
+def residual_conv2d_block(
+    in_channels,
+    out_channels,
+    kernel_size=1,
+    upscaling=4,
+    nonlinearity='gelu',
+    Norm=None,
+):
+    seq = torch.nn.Sequential()
+    if Norm is not None:
+        seq.append(Norm(in_channels))
+    seq.append(torch.nn.Conv2d(
+        in_channels, in_channels*upscaling, kernel_size=kernel_size))
+    seq.append(make_nonlinearity(nonlinearity))
+    seq.append(torch.nn.Conv2d(
+        in_channels*upscaling, out_channels, kernel_size=kernel_size))
+    return ResidualBlock(seq)
 
 def stack(
     Layer,
@@ -70,8 +105,20 @@ def stack(
 def linear_stack(*args, **kwargs):
     return stack(torch.nn.Linear, *args, **kwargs)
 
+def residual_linear_stack(*args, **kwargs):
+    return stack(residual_linear_block, *args, **kwargs)
+
 def conv2d_stack(*args, kernel_size=1, **kwargs):
     return stack(torch.nn.Conv2d, *args, kernel_size=kernel_size, **kwargs)
+
+def residual_conv2d_stack(*args, kernel_size=1, **kwargs):
+    return stack(
+        residual_conv2d_block,
+        *args,
+        kernel_size=kernel_size,
+        nonlinearity='none',
+        **kwargs,
+    )
 
 def cross_product_concat(xa, xb):
     sa, ba, ca = xa.shape

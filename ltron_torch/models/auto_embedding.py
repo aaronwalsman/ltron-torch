@@ -87,10 +87,10 @@ class ImageSpaceEmbedding(nn.Module):
         
         self.in_channels = observation_space.channels * self.tile_pixels
         # RECENT UPDATE
-        #self.pre_norm = nn.LayerNorm(self.in_channels)
+        self.pre_norm = nn.LayerNorm(self.in_channels)
         self.linear = nn.Linear(self.in_channels, config.channels)
         # RECENT UPDATE
-        #self.post_norm = nn.LayerNorm(config.channels)
+        self.post_norm = nn.LayerNorm(config.channels)
         
         self.positional_encoding = NoWeightDecayParameter(
             torch.randn(self.total_tiles, 1, config.channels))
@@ -108,9 +108,9 @@ class ImageSpaceEmbedding(nn.Module):
         x = x.permute(1,3,0,2,4,5)
         x = x.reshape(self.total_tiles, b, self.tile_pixels*c)
         
-        #x = self.pre_norm(x)
+        x = self.pre_norm(x)
         x = self.linear(x)
-        #x = self.post_norm(x)
+        x = self.post_norm(x)
         x = x + self.positional_encoding
         
         return x

@@ -60,7 +60,7 @@ class LtronVisualTransformerConfig(
     embedding_dropout = 0.1
     strict_load = True
     
-    use_dpt_decoder = False
+    dense_decoder_mode = 'dpt'
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
 
@@ -94,7 +94,7 @@ class LtronVisualTransformer(nn.Module):
                     config, observation_space['target_assembly'])
         self.embedding_dropout = nn.Dropout(config.embedding_dropout)
         
-        self.pre_encoder_norm = nn.LayerNorm(config.channels)
+        #self.pre_encoder_norm = nn.LayerNorm(config.channels)
         
         # build the decoder token
         # adding two randns here to simulate the embedding itself plus
@@ -179,14 +179,14 @@ class LtronVisualTransformer(nn.Module):
                 cursor_islands(neg_snaps)).to(device)
         
         # shape and color equivalence
-        if self.config.shape_class_labels is None:
-            num_shape_classes = NUM_SHAPE_CLASSES
-        else:
-            num_shape_classes = len(self.config.shape_class_labels)+1
-        if self.config.color_class_labels is None:
-            num_color_classes = NUM_COLOR_CLASSES
-        else:
-            num_color_classes = len(self.config.color_class_labels)+1
+        #if self.config.shape_class_labels is None:
+        #num_shape_classes = NUM_SHAPE_CLASSES
+        #else:
+        #    num_shape_classes = len(self.config.shape_class_labels)+1
+        #if self.config.color_class_labels is None:
+        #num_color_classes = NUM_COLOR_CLASSES
+        #else:
+        #    num_color_classes = len(self.config.color_class_labels)+1
         
         if ('target_assembly' in observation and 
             'insert' in self.primitive_decoders
@@ -200,7 +200,7 @@ class LtronVisualTransformer(nn.Module):
                 compact_shapes, return_inverse=True)
             zero_index = numpy.max(compact_shapes_unique) + 2
             shape_islands = numpy.zeros(
-                (b, num_shape_classes), dtype=numpy.int64)
+                (b, NUM_SHAPE_CLASSES), dtype=numpy.int64)
             shape_islands[active_b, compact_shapes] = compact_shapes_unique + 1
             shape_islands[:,0] = zero_index
             kwargs['shape_eq'] = torch.LongTensor(shape_islands).to(device)
@@ -210,7 +210,7 @@ class LtronVisualTransformer(nn.Module):
                 compact_colors, return_inverse=True)
             zero_index = numpy.max(compact_colors_unique) + 2
             color_islands = numpy.zeros(
-                (b, num_color_classes), dtype=numpy.int64)
+                (b, NUM_COLOR_CLASSES), dtype=numpy.int64)
             color_islands[active_b, compact_colors] = compact_colors_unique + 1
             color_islands[:,0] = zero_index
             kwargs['color_eq'] = torch.LongTensor(color_islands).to(device)
@@ -228,7 +228,8 @@ class LtronVisualTransformer(nn.Module):
         neg_snap_eq=None,
         shape_eq=None,
         color_eq=None,
-        sample=None
+        sample=None,
+        sample_max=False,
     ):
         
         # use the embedding to compute the tokens
@@ -255,21 +256,26 @@ class LtronVisualTransformer(nn.Module):
         x = torch.cat((decoder_token, x), dim=0)
         
         # normalize the embedding
-        x = self.pre_encoder_norm(x)
+        # doing this in each embedding now in order to normalize
+        # similar populations together
+        #x = self.pre_encoder_norm(x)
         
         # embedding dropout
         x = self.embedding_dropout(x)
         
         # push the concatenated tokens through the transformer
-        if self.config.use_dpt_decoder:
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             output_layers = self.config.dpt_blocks
-        else:
+        elif self.config.dense_decoder_mode == 'simple':
             output_layers = None
+        else:
+            raise ValueError(
+                'config.dense_decoder_mode "%s" should be (dpt,dpt_sum,simple)')
         x = self.encoder(x, output_layers=output_layers)
         decode_x = self.predecoder_norm(x[-1][0])
-        if self.config.use_dpt_decoder:
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             image_x = [x[i][1:hw+1] for i in self.config.dpt_blocks]
-        else:
+        elif self.config.dense_decoder_mode == 'simple':
             image_x = x[-1][1:hw+1]
         
         value = self.critic_decoder(decode_x)
@@ -286,7 +292,7 @@ class LtronVisualTransformer(nn.Module):
         mode_sample = None if sample is None else (
             sample['action_primitives']['mode'])
         mode_sample, lp, e, x, m_logits = self.mode_decoder(
-            decode_x, sample=mode_sample)
+            decode_x, sample=mode_sample, sample_max=sample_max)
         out_sample['action_primitives'] = {'mode':mode_sample}
         log_prob = log_prob + lp
         entropy = entropy + e
@@ -304,6 +310,7 @@ class LtronVisualTransformer(nn.Module):
                 s, lp, e, px, name_logits = decoder(
                     x,
                     sample=primitive_sample,
+                    sample_max=sample_max,
                     shape_eq=shape_eq,
                     color_eq=color_eq,
                 )
@@ -331,14 +338,14 @@ class LtronVisualTransformer(nn.Module):
             cursor_sample = None if sample is None else (
                 sample['cursor'])
             
-            if self.config.use_dpt_decoder:
+            if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
                 _, b, c = image_x[0].shape
                 h = self.config.image_height // self.config.tile_height
                 w = self.config.image_width // self.config.tile_width
                 image_x = [
                     ix.permute(1,2,0).reshape(b,c,h,w)
                     for ix in image_x]
-            else:
+            elif self.config.dense_decoder_mode == 'simple':
                 _, b, c = image_x.shape
                 #image_x = self.image_norm(image_x)
                 h = self.config.image_height // self.config.tile_height

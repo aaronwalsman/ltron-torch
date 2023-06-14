@@ -17,7 +17,7 @@ def equivalent_probs_categorical(unnormed_probs, equivalence):
     return Categorical(probs=eq_unnormed_probs)
 
 def equivalent_outcome_categorical(
-    logits, equivalence, temperature=1., dropout=0.
+    logits, equivalence, temperature=1., dropout=0., blend_to_avg=None,
 ):
     b, *c = logits.shape
     device = logits.device
@@ -37,14 +37,52 @@ def equivalent_outcome_categorical(
     else:
         eq_unnormed_prob = torch.full((b, eq_classes), 1e-9, device=device)
         eq_unnormed_prob.scatter_add_(1, equivalence.view(b,-1), unnormed_prob)
+        
+        if blend_to_avg is not None:
+            one_everywhere = torch.ones_like(unnormed_prob)
+            eq_total = torch.full((b, eq_classes), 1e-9, device=device)
+            eq_total.scatter_add_(1, equivalence.view(b,-1), one_everywhere)
+            eq_total = eq_total ** blend_to_avg
+            eq_unnormed_prob = eq_unnormed_prob / eq_total
+        
         eq_logits = torch.log(eq_unnormed_prob) + max_logits.view(b,1)
     
     return Categorical(logits=eq_logits)
 
-def avg_equivalent_logits(logits, equivalence):
+def min_max(logits, equivalence, index):
+    
+    from torch_scatter import scatter_min, scatter_max
+    
+    b, *c = logits.shape
+    logits = logits.view(b,-1)
+    equivalence = equivalence.view(b,-1)
+    
+    #eq_max_logits = torch.zeros((b,eq_classes), device=device)
+    #eq_min_loigts = torch.zeros((b,eq_classes), device=device)
+    eq_logits, _ = scatter_max(logits, equivalence)
+    eq_min_logits, _ = scatter_min(logits, equivalence)
+    
+    eq_logits[range(b), index] = eq_min_logits[range(b), index]
+    
+    return Categorical(logits=eq_logits)
+
+def equivalent_mean(logits, equivalence, index):
+    from torch_scatter import scatter_mean
+    
+    b, *c = logits.shape
+    logits = logits.view(b,-1)
+    equivalence = equivalence.view(b,-1)
+    
+    #unnormed_probs = torch.exp(logits)
+    mean_logits = scatter_mean(logits, equivalence)
+    return Categorical(logits=mean_logits)
+
+def avg_equivalent_logits(
+    logits, equivalence, temperature=1., dropout=0.,
+):
     b, *c = logits.shape
     device = logits.device
-    logits = logits.view(b,-1)
+    logits = logits.view(b,-1) * (1./temperature)
     equivalence = equivalence.view(b,-1)
     
     total = torch.ones(logits.shape)

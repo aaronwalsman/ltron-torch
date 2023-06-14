@@ -88,7 +88,13 @@ def replace_conv1(resnet, input_channels):
             bias=False).to(conv1.weight.device)
 
 def named_backbone(name, *output_layers, pretrained=False, **kwargs):
-    resnet = getattr(torchvision.models.resnet, name)(pretrained=pretrained)
+    #resnet = getattr(torchvision.models.resnet, name)(pretrained=pretrained)
+    resnet_fn = getattr(torchvision.models.resnet, name)
+    if pretrained:
+        weights='DEFAULT'
+    else:
+        weights=None
+    resnet = resnet_fn(weights=weights)
     return ResnetBackbone(resnet, *output_layers, **kwargs)
 
 def named_encoder_channels(name):

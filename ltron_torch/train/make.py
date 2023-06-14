@@ -1,9 +1,5 @@
 from avarice.trainers import PPOTrainerConfig, PPOTrainer, env_fn_wrapper
 
-from ltron.gym.wrappers.break_vector_reward import (
-    BreakVectorEnvAssemblyRewardWrapper,
-)
-
 from ltron_torch.models.ltron_visual_transformer import LtronVisualTransformer
 from ltron_torch.models.ltron_resnet import LtronResNet
 from ltron_torch.train.ltron_ppo_trainer import (
