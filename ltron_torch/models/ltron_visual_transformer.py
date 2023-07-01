@@ -7,21 +7,8 @@ import numpy
 import torch
 import torch.nn as nn
 
-import tqdm
-
-from gymnasium.spaces import Discrete
-
-from splendor.image import save_image
-from splendor.json_numpy import NumpyEncoder
-
-from steadfast.hierarchy import flatten_hierarchy, hierarchy_getitem
-
 from avarice.data.numpy_torch import torch_to_numpy
 
-from ltron.bricks.brick_scene import BrickScene
-from ltron.visualization.drawing import (
-    draw_crosshairs, draw_box, write_text, stack_images_horizontal,
-)
 from ltron.constants import (
     MAX_SNAPS_PER_BRICK, NUM_SHAPE_CLASSES, NUM_COLOR_CLASSES)
 from ltron.visualization.drawing import (

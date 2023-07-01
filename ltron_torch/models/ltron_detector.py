@@ -1,3 +1,5 @@
+import torch.nn as nn
+
 class LtronDetectorConfig(
     AutoEmbeddingConfig,
     TransformerConfig,
@@ -11,7 +13,7 @@ class LtronDetectorConfig(
     include_dpt_upsample_head = False
 
 class LtronDetector(nn.Module):
-    def __init__(self, observation_space, checkpoint=None):
+    def __init__(self, config, observation_space, checkpoint=None):
         super().__init__()
         
         # save config and observation space
