@@ -109,11 +109,14 @@ class LtronVisualTransformer(nn.Module):
                 continue
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
-            elif name in ('pick_and_place', 'remove', 'done'):
+            elif name in (
+                'pick_and_place', 'remove', 'done', 'assemble_step', 'phase',
+            ):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
             elif name in ('viewpoint', 'rotate'):
                 primitive_decoders[name] = DiscreteDecoder(config, subspace.n)
                     #config, subspace.n-1, sample_offset=1)
+        
         self.primitive_decoders = nn.ModuleDict(primitive_decoders)
         
         # build the cursor decoders
@@ -178,6 +181,7 @@ class LtronVisualTransformer(nn.Module):
         if ('target_assembly' in observation and 
             'insert' in self.primitive_decoders
         ):
+            '''
             shapes = observation['target_assembly']['shape']
             colors = observation['target_assembly']['color']
             b, s = shapes.shape
@@ -201,8 +205,7 @@ class LtronVisualTransformer(nn.Module):
             color_islands[active_b, compact_colors] = compact_colors_unique + 1
             color_islands[:,0] = zero_index
             kwargs['color_eq'] = torch.LongTensor(color_islands).to(device)
-        
-        #breakpoint()
+            '''
         
         return kwargs
        
@@ -297,7 +300,7 @@ class LtronVisualTransformer(nn.Module):
                 s, lp, e, px, name_logits = decoder(
                     x,
                     sample=primitive_sample,
-                    sample_max=sample_max,
+                    #sample_max=sample_max,
                     shape_eq=shape_eq,
                     color_eq=color_eq,
                 )
