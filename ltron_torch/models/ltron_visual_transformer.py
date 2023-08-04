@@ -81,6 +81,11 @@ class LtronVisualTransformer(nn.Module):
                     config, observation_space['target_assembly'])
         self.embedding_dropout = nn.Dropout(config.embedding_dropout)
         
+        if 'action_primitives' in set(observation_space.keys()):
+            if 'phase' in set(observation_space['action_primitives'].keys()):
+                self.phase_embedding = AutoEmbedding(
+                    config, observation_space['action_primitives']['phase'])
+        
         #self.pre_encoder_norm = nn.LayerNorm(config.channels)
         
         # build the decoder token
@@ -178,6 +183,14 @@ class LtronVisualTransformer(nn.Module):
         #else:
         #    num_color_classes = len(self.config.color_class_labels)+1
         
+        if 'action_primitives' in observation:
+            if 'phase' in observation['action_primitives']:
+                phase = observation['action_primitives']['phase']
+                kwargs['phase_kwargs'] = (
+                    self.phase_embedding.observation_to_kwargs(
+                        phase, info, done, model_output)
+                )
+        
         if ('target_assembly' in observation and 
             'insert' in self.primitive_decoders
         ):
@@ -214,6 +227,7 @@ class LtronVisualTransformer(nn.Module):
         target_image_kwargs=None,
         assembly_kwargs=None,
         target_assembly_kwargs=None,
+        phase_kwargs=None,
         pos_snap_eq=None,
         neg_snap_eq=None,
         shape_eq=None,
@@ -241,7 +255,14 @@ class LtronVisualTransformer(nn.Module):
                 **target_assembly_kwargs)
             x = torch.cat((x, target_assembly_x), dim=0)
         
-        # concat tokens together here
+        # phase token
+        if phase_kwargs is not None:
+            print('DOING PHASE')
+            phase_x = self.phase_embedding(**phase_kwargs)
+            b,c = phase_x.shape
+            x = torch.cat((x, phase_x.view(1,b,c)), dim=0)
+        
+        # decoder token
         decoder_token = self.decoder_token.expand(1,b,c)
         x = torch.cat((decoder_token, x), dim=0)
         
