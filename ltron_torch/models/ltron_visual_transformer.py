@@ -257,7 +257,6 @@ class LtronVisualTransformer(nn.Module):
         
         # phase token
         if phase_kwargs is not None:
-            print('DOING PHASE')
             phase_x = self.phase_embedding(**phase_kwargs)
             b,c = phase_x.shape
             x = torch.cat((x, phase_x.view(1,b,c)), dim=0)
