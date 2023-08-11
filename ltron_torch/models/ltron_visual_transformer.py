@@ -500,8 +500,10 @@ class LtronVisualTransformer(nn.Module):
             click_p_map = click_eq_dist.probs[i][click_islands[i]].detach()
             click_min = torch.min(click_p_map)
             click_max = torch.max(click_p_map)
-            click_p_map = (click_p_map - click_min) / (click_max - click_min)
-            click_p_map = (click_p_map.cpu().numpy() * 255).astype(numpy.uint8)
+            click_p_map = (click_p_map - click_min) / (
+                click_max - click_min + 1e-9)
+            click_p_map = (click_p_map.cpu().numpy() * 255).round().astype(
+                numpy.uint8)
             h, w = click_p_map.shape
             click_p_map = click_p_map.reshape(h,w,1).repeat(3, axis=2)
             
@@ -511,9 +513,9 @@ class LtronVisualTransformer(nn.Module):
             release_max = torch.max(release_p_map)
             release_p_map = (
                 (release_p_map - release_min) /
-                (release_max - release_min)
+                (release_max - release_min + 1e-9)
             )
-            release_p_map = (release_p_map.cpu().numpy() * 255).astype(
+            release_p_map = (release_p_map.cpu().numpy() * 255).round().astype(
                 numpy.uint8)
             h, w = release_p_map.shape
             release_p_map = release_p_map.reshape(h,w,1).repeat(3, axis=2)
