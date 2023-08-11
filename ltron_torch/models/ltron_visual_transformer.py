@@ -118,7 +118,7 @@ class LtronVisualTransformer(nn.Module):
                 'pick_and_place', 'remove', 'done', 'assemble_step', 'phase',
             ):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
-            elif name in ('viewpoint', 'rotate'):
+            elif name in ('viewpoint', 'rotate', 'translate'):
                 primitive_decoders[name] = DiscreteDecoder(config, subspace.n)
                     #config, subspace.n-1, sample_offset=1)
         
@@ -333,7 +333,7 @@ class LtronVisualTransformer(nn.Module):
             out_sample['action_primitives'][name] = s
             
             mode_mask = mode_sample == i
-            if name in ('remove', 'pick_and_place', 'rotate'):
+            if name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 cursor_mask |= mode_mask
             if name == 'pick_and_place':
                 do_release |= mode_mask
@@ -531,6 +531,10 @@ class LtronVisualTransformer(nn.Module):
                     r = action['action_primitives']['rotate'][i]
                     mode_lines.append(
                         '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
+                elif name == 'translate':
+                    t = action['action_primitives']['translate'][i]
+                    mode_lines.append(
+                        '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
                 else:
                     mode_lines.append(
                         '%s%s: %.02f'%(prefix, name, mode_prob[j]))
@@ -567,7 +571,7 @@ class LtronVisualTransformer(nn.Module):
             action_str += '\nReward: %.04f'%reward[i]
             action_image = write_text(action_image, action_str)
 
-            if mode_name in ('remove', 'pick_and_place', 'rotate'):
+            if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 click_polarity = action['cursor']['button'][i]
                 click_yx = action['cursor']['click'][i]
                 if click_polarity:
