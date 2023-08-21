@@ -58,29 +58,49 @@ def ReassemblyBlock4(in_channels, out_channels):
             out_channels, out_channels, kernel_size=3, stride=2, padding=1),
     )
 
-class Head(nn.Module):
-    def __init__(self, config):
+class LayerNorm2d(nn.Module):
+    '''
+    Bro this suuuuuuucks
+    '''
+    def __init__(self, *args, **kwargs):
         super().__init__()
+        self.ln = nn.LayerNorm(*args, **kwargs)
+    
+    def forward(self, x):
+        x = x.permute(0,2,3,1)
+        x = self.ln(x)
+        x = x.permute(0,3,1,2)
+        return x
+
+class Head(nn.Module):
+    def __init__(self, config, upscale=True):
+        super().__init__()
+        self.upscale=upscale
         #c4 = config.channels//4
         #c8 = config.channels//8
         #c16 = config.channels // 16
         c = config.dpt_channels
         c2 = config.dpt_channels // 2
         c4 = config.dpt_channels // 4
+        #self.norm1 = LayerNorm2d(c)
         self.conv1 = nn.Conv2d(c, c2, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(c2, c4, kernel_size=3, padding=1)
+        #self.norm2 = LayerNorm2d(c4)
     
     def forward(self, x):
+        #x = self.norm1(x)
         x = self.conv1(x)
-        x = F.interpolate(
-            x, scale_factor=2, mode='bilinear', align_corners=True)
+        if self.upscale:
+            x = F.interpolate(
+                x, scale_factor=2, mode='bilinear', align_corners=True)
         x = self.conv2(x)
+        #x = self.norm2(x)
         #x = F.relu(x)
         
         return x
 
 class DenseDecoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, upscale=True, include_head=True):
         super().__init__()
         
         '''
@@ -113,7 +133,10 @@ class DenseDecoder(nn.Module):
         #c3 = config.channels // 4
         #c4 = config.channels // 2
         
-        self.head = Head(config)
+        if include_head:
+            self.head = Head(config, upscale)
+        else:
+            self.head = nn.Identity()
     
     def forward(self, x1, x2, x3, x4):
         r1 = self.reassembly1(x1)

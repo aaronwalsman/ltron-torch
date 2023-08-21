@@ -35,6 +35,7 @@ class DiscreteDecoder(nn.Module):
         sample=None,
         equivalence=None,
         equivalence_dropout=0.5,
+        sample_max=False,
     ):
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
@@ -42,8 +43,12 @@ class DiscreteDecoder(nn.Module):
 
         distribution = Categorical(logits=logits)
         if sample is None:
-            physical_index = distribution.sample()
-            sample = physical_index # + self.sample_offset
+            if sample_max:
+                physical_index = torch.argmax(distribution.probs, dim=-1)
+                sample = physical_index
+            else:
+                physical_index = distribution.sample()
+                sample = physical_index # + self.sample_offset
         else:
             physical_index = sample # - self.sample_offset
 

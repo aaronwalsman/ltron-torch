@@ -7,21 +7,8 @@ import numpy
 import torch
 import torch.nn as nn
 
-import tqdm
-
-from gymnasium.spaces import Discrete
-
-from splendor.image import save_image
-from splendor.json_numpy import NumpyEncoder
-
-from steadfast.hierarchy import flatten_hierarchy, hierarchy_getitem
-
 from avarice.data.numpy_torch import torch_to_numpy
 
-from ltron.bricks.brick_scene import BrickScene
-from ltron.visualization.drawing import (
-    draw_crosshairs, draw_box, write_text, stack_images_horizontal,
-)
 from ltron.constants import (
     MAX_SNAPS_PER_BRICK, NUM_SHAPE_CLASSES, NUM_COLOR_CLASSES)
 from ltron.visualization.drawing import (
@@ -60,9 +47,13 @@ class LtronVisualTransformerConfig(
     embedding_dropout = 0.1
     strict_load = True
     
+<<<<<<< HEAD
     overlay_target_image = False
     
     use_dpt_decoder = False
+=======
+    dense_decoder_mode = 'dpt'
+>>>>>>> 90a71487996d910a305519ed12f3f48420aad1d3
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
 
@@ -105,6 +96,13 @@ class LtronVisualTransformer(nn.Module):
                     config, observation_space['target_assembly'])
         self.embedding_dropout = nn.Dropout(config.embedding_dropout)
         
+        if 'action_primitives' in set(observation_space.keys()):
+            if 'phase' in set(observation_space['action_primitives'].keys()):
+                self.phase_embedding = AutoEmbedding(
+                    config, observation_space['action_primitives']['phase'])
+        
+        #self.pre_encoder_norm = nn.LayerNorm(config.channels)
+        
         # build the decoder token
         # adding two randns here to simulate the embedding itself plus
         # a learned positional encoding
@@ -131,11 +129,14 @@ class LtronVisualTransformer(nn.Module):
                 continue
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
-            elif name in ('pick_and_place', 'remove', 'done'):
+            elif name in (
+                'pick_and_place', 'remove', 'done', 'assemble_step', 'phase',
+            ):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
-            elif name in ('viewpoint', 'rotate'):
+            elif name in ('viewpoint', 'rotate', 'translate'):
                 primitive_decoders[name] = DiscreteDecoder(config, subspace.n)
                     #config, subspace.n-1, sample_offset=1)
+        
         self.primitive_decoders = nn.ModuleDict(primitive_decoders)
         
         # build the cursor decoders
@@ -193,18 +194,27 @@ class LtronVisualTransformer(nn.Module):
                 cursor_islands(neg_snaps)).to(device)
         
         # shape and color equivalence
-        if self.config.shape_class_labels is None:
-            num_shape_classes = NUM_SHAPE_CLASSES
-        else:
-            num_shape_classes = len(self.config.shape_class_labels)+1
-        if self.config.color_class_labels is None:
-            num_color_classes = NUM_COLOR_CLASSES
-        else:
-            num_color_classes = len(self.config.color_class_labels)+1
+        #if self.config.shape_class_labels is None:
+        #num_shape_classes = NUM_SHAPE_CLASSES
+        #else:
+        #    num_shape_classes = len(self.config.shape_class_labels)+1
+        #if self.config.color_class_labels is None:
+        #num_color_classes = NUM_COLOR_CLASSES
+        #else:
+        #    num_color_classes = len(self.config.color_class_labels)+1
+        
+        if 'action_primitives' in observation:
+            if 'phase' in observation['action_primitives']:
+                phase = observation['action_primitives']['phase']
+                kwargs['phase_kwargs'] = (
+                    self.phase_embedding.observation_to_kwargs(
+                        phase, info, done, model_output)
+                )
         
         if ('target_assembly' in observation and 
             'insert' in self.primitive_decoders
         ):
+            '''
             shapes = observation['target_assembly']['shape']
             colors = observation['target_assembly']['color']
             b, s = shapes.shape
@@ -214,7 +224,7 @@ class LtronVisualTransformer(nn.Module):
                 compact_shapes, return_inverse=True)
             zero_index = numpy.max(compact_shapes_unique) + 2
             shape_islands = numpy.zeros(
-                (b, num_shape_classes), dtype=numpy.int64)
+                (b, NUM_SHAPE_CLASSES), dtype=numpy.int64)
             shape_islands[active_b, compact_shapes] = compact_shapes_unique + 1
             shape_islands[:,0] = zero_index
             kwargs['shape_eq'] = torch.LongTensor(shape_islands).to(device)
@@ -224,12 +234,11 @@ class LtronVisualTransformer(nn.Module):
                 compact_colors, return_inverse=True)
             zero_index = numpy.max(compact_colors_unique) + 2
             color_islands = numpy.zeros(
-                (b, num_color_classes), dtype=numpy.int64)
+                (b, NUM_COLOR_CLASSES), dtype=numpy.int64)
             color_islands[active_b, compact_colors] = compact_colors_unique + 1
             color_islands[:,0] = zero_index
             kwargs['color_eq'] = torch.LongTensor(color_islands).to(device)
-        
-        #breakpoint()
+            '''
         
         return kwargs
        
@@ -238,11 +247,13 @@ class LtronVisualTransformer(nn.Module):
         target_image_kwargs=None,
         assembly_kwargs=None,
         target_assembly_kwargs=None,
+        phase_kwargs=None,
         pos_snap_eq=None,
         neg_snap_eq=None,
         shape_eq=None,
         color_eq=None,
-        sample=None
+        sample=None,
+        sample_max=False,
     ):
         
         # use the embedding to compute the tokens
@@ -279,23 +290,37 @@ class LtronVisualTransformer(nn.Module):
                 **target_assembly_kwargs)
             x = torch.cat((x, target_assembly_x), dim=0)
         
-        # concat tokens together here
+        # phase token
+        if phase_kwargs is not None:
+            phase_x = self.phase_embedding(**phase_kwargs)
+            b,c = phase_x.shape
+            x = torch.cat((x, phase_x.view(1,b,c)), dim=0)
+        
+        # decoder token
         decoder_token = self.decoder_token.expand(1,b,c)
         x = torch.cat((decoder_token, x), dim=0)
+        
+        # normalize the embedding
+        # doing this in each embedding now in order to normalize
+        # similar populations together
+        #x = self.pre_encoder_norm(x)
         
         # embedding dropout
         x = self.embedding_dropout(x)
         
         # push the concatenated tokens through the transformer
-        if self.config.use_dpt_decoder:
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             output_layers = self.config.dpt_blocks
-        else:
+        elif self.config.dense_decoder_mode == 'simple':
             output_layers = None
+        else:
+            raise ValueError(
+                'config.dense_decoder_mode "%s" should be (dpt,dpt_sum,simple)')
         x = self.encoder(x, output_layers=output_layers)
         decode_x = self.predecoder_norm(x[-1][0])
-        if self.config.use_dpt_decoder:
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             image_x = [x[i][1:hw+1] for i in self.config.dpt_blocks]
-        else:
+        elif self.config.dense_decoder_mode == 'simple':
             image_x = x[-1][1:hw+1]
         
         value = self.critic_decoder(decode_x)
@@ -312,7 +337,7 @@ class LtronVisualTransformer(nn.Module):
         mode_sample = None if sample is None else (
             sample['action_primitives']['mode'])
         mode_sample, lp, e, x, m_logits = self.mode_decoder(
-            decode_x, sample=mode_sample)
+            decode_x, sample=mode_sample, sample_max=sample_max)
         out_sample['action_primitives'] = {'mode':mode_sample}
         log_prob = log_prob + lp
         entropy = entropy + e
@@ -330,6 +355,7 @@ class LtronVisualTransformer(nn.Module):
                 s, lp, e, px, name_logits = decoder(
                     x,
                     sample=primitive_sample,
+                    #sample_max=sample_max,
                     shape_eq=shape_eq,
                     color_eq=color_eq,
                 )
@@ -342,7 +368,7 @@ class LtronVisualTransformer(nn.Module):
             out_sample['action_primitives'][name] = s
             
             mode_mask = mode_sample == i
-            if name in ('remove', 'pick_and_place', 'rotate'):
+            if name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 cursor_mask |= mode_mask
             if name == 'pick_and_place':
                 do_release |= mode_mask
@@ -357,14 +383,14 @@ class LtronVisualTransformer(nn.Module):
             cursor_sample = None if sample is None else (
                 sample['cursor'])
             
-            if self.config.use_dpt_decoder:
+            if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
                 _, b, c = image_x[0].shape
                 h = self.config.image_height // self.config.tile_height
                 w = self.config.image_width // self.config.tile_width
                 image_x = [
                     ix.permute(1,2,0).reshape(b,c,h,w)
                     for ix in image_x]
-            else:
+            elif self.config.dense_decoder_mode == 'simple':
                 _, b, c = image_x.shape
                 #image_x = self.image_norm(image_x)
                 h = self.config.image_height // self.config.tile_height
@@ -509,8 +535,10 @@ class LtronVisualTransformer(nn.Module):
             click_p_map = click_eq_dist.probs[i][click_islands[i]].detach()
             click_min = torch.min(click_p_map)
             click_max = torch.max(click_p_map)
-            click_p_map = (click_p_map - click_min) / (click_max - click_min)
-            click_p_map = (click_p_map.cpu().numpy() * 255).astype(numpy.uint8)
+            click_p_map = (click_p_map - click_min) / (
+                click_max - click_min + 1e-9)
+            click_p_map = (click_p_map.cpu().numpy() * 255).round().astype(
+                numpy.uint8)
             h, w = click_p_map.shape
             click_p_map = click_p_map.reshape(h,w,1).repeat(3, axis=2)
             
@@ -520,9 +548,9 @@ class LtronVisualTransformer(nn.Module):
             release_max = torch.max(release_p_map)
             release_p_map = (
                 (release_p_map - release_min) /
-                (release_max - release_min)
+                (release_max - release_min + 1e-9)
             )
-            release_p_map = (release_p_map.cpu().numpy() * 255).astype(
+            release_p_map = (release_p_map.cpu().numpy() * 255).round().astype(
                 numpy.uint8)
             h, w = release_p_map.shape
             release_p_map = release_p_map.reshape(h,w,1).repeat(3, axis=2)
@@ -538,6 +566,10 @@ class LtronVisualTransformer(nn.Module):
                     prefix = ''
                 if name == 'rotate':
                     r = action['action_primitives']['rotate'][i]
+                    mode_lines.append(
+                        '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
+                elif name == 'translate':
+                    t = action['action_primitives']['translate'][i]
                     mode_lines.append(
                         '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
                 else:
@@ -576,7 +608,7 @@ class LtronVisualTransformer(nn.Module):
             action_str += '\nReward: %.04f'%reward[i]
             action_image = write_text(action_image, action_str)
 
-            if mode_name in ('remove', 'pick_and_place', 'rotate'):
+            if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 click_polarity = action['cursor']['button'][i]
                 click_yx = action['cursor']['click'][i]
                 if click_polarity:
