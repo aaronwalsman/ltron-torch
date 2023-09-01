@@ -49,6 +49,29 @@ def equivalent_outcome_categorical(
     
     return Categorical(logits=eq_logits)
 
+def equivalent_outcome_sigmoid(logits, equivalence, temperature=1.):
+    b, *c = logits.shape
+    device = logits.device
+    logits = logits.view(b,-1) * (1./temperature)
+    equivalence = equivalence.view(b,-1)
+    log_pi = F.logsigmoid(logits)
+    
+    max_log_pi, _ = torch.max(log_pi, dim=1)
+    log_pi = log_pi - max_log_pi.view(b,1)
+    unnormed_prob = torch.exp(log_pi)
+    
+    eq_classes = torch.max(equivalence)+1
+    if eq_classes == 1:
+        # this turns off gradients
+        eq_logits = torch.zeros((b,1), device=device)
+    else:
+        eq_unnormed_prob = torch.full((b, eq_classes), 1e-9, device=device)
+        eq_unnormed_prob.scatter_add_(1, equivalence.view(b,-1), unnormed_prob)
+        
+        eq_logits = torch.log(eq_unnormed_prob) + max_log_pi.view(b,1)
+    
+    return Categorical(logits=eq_logits)
+
 def min_max(logits, equivalence, index):
     
     from torch_scatter import scatter_min, scatter_max

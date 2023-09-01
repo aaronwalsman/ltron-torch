@@ -100,6 +100,11 @@ class ImageSpaceEmbedding(nn.Module):
             torch.randn(self.total_tiles, 1, config.channels))
 
     def forward(self, x):
+        
+        # NEW
+        x = (x.float()/255.).to(self.linear.weight.device)
+        # END NEW
+        
         b, h, w, c = x.shape
         x = x.view(
             b,
@@ -120,8 +125,9 @@ class ImageSpaceEmbedding(nn.Module):
         return x
     
     def observation_to_kwargs(self, o, i, d, model_output):
-        x = torch.FloatTensor((o / 255.)).to(self.linear.weight.device)
-        return {'x' : x}
+        #x = torch.FloatTensor((o / 255.)).to(self.linear.weight.device)
+        #return {'x' : x}
+        return {'x' : torch.from_numpy(o)}
 
 class AssemblySpaceEmbedding(nn.Module):
     def __init__(self, config, observation_space):

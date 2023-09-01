@@ -12,6 +12,7 @@ class DecoderConfig(Config):
     nonlinearity = 'gelu'
     image_attention_channels = 16
     sigmoid_screen_attention = False
+    log_sigmoid_screen_attention = False
     screen_equivalence = True
 
 class DiscreteDecoder(nn.Module):

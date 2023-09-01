@@ -12,6 +12,7 @@ from ltron_torch.models.mlp import (
 from ltron_torch.models.equivalence import (
     equivalent_probs_categorical,
     equivalent_outcome_categorical,
+    equivalent_outcome_sigmoid,
 )
 from ltron_torch.models.decoder import DiscreteDecoder
 from ltron_torch.models.dense_decoder import DenseDecoder
@@ -135,9 +136,15 @@ class DPTScreenDecoder(nn.Module):
         temperature = 1. / ac ** 0.5
         a = qk * temperature
         
-        if self.config.sigmoid_screen_attention:
+        if (self.config.sigmoid_screen_attention or
+            self.config.log_sigmoid_screen_attention
+        ):
             p = torch.sigmoid(a)
-            click_distribution = Categorical(probs=p.view(b,ih*iw))
+            print('A')
+            try:
+                click_distribution = Categorical(probs=p.view(b,ih*iw))
+            except:
+                breakpoint()
         else:
             click_distribution = Categorical(logits=a.view(b,ih*iw))
         screen_logits = click_distribution.logits.view(b, ih, iw)
@@ -171,8 +178,12 @@ class DPTScreenDecoder(nn.Module):
                         eq_dropout = 0.5
                     else:
                         eq_dropout = 0.0
-                    eq_distribution = equivalent_outcome_categorical(
-                        a, equivalence, dropout=eq_dropout)
+                    if self.config.log_sigmoid_screen_attention:
+                        eq_distribution = equivalent_outcome_sigmoid(
+                            a, equivalence)
+                    else:
+                        eq_distribution = equivalent_outcome_categorical(
+                            a, equivalence, dropout=eq_dropout)
                 
                 eq_sample = equivalence[range(b),sample_y,sample_x]
                 log_prob = eq_distribution.log_prob(eq_sample)
@@ -259,7 +270,9 @@ class DPTSumScreenDecoder(nn.Module):
         qk = q.view(b,c,1,1) + k
         a = self.dense_convs(qk)
         
-        if self.config.sigmoid_screen_attention:
+        if (self.config.sigmoid_screen_attention or
+            self.config.log_sigmoid_screen_attention
+        ):
             p = torch.sigmoid(a)
             click_distribution = Categorical(probs=p.view(b,ih*iw))
         else:
@@ -295,8 +308,12 @@ class DPTSumScreenDecoder(nn.Module):
                         eq_dropout = 0.5
                     else:
                         eq_dropout = 0.0
-                    eq_distribution = equivalent_outcome_categorical(
-                        a, equivalence, dropout=eq_dropout)
+                    if self.config.log_sigmoid_screen_attention:
+                        eq_distribution = equivalent_outcome_sigmoid(
+                            a, equivalence)
+                    else:
+                        eq_distribution = equivalent_outcome_categorical(
+                            a, equivalence, dropout=eq_dropout)
                 
                 eq_sample = equivalence[range(b),sample_y,sample_x]
                 log_prob = eq_distribution.log_prob(eq_sample)
@@ -429,7 +446,8 @@ class ScreenDecoder(nn.Module):
         temperature = 1. / ac ** 0.5
         a = qk * temperature
         
-        if self.config.sigmoid_screen_attention:
+        if (self.config.sigmoid_screen_attention or
+            self.config.log_sigmoid_screen_attention):
             p = torch.sigmoid(a)
             click_distribution = Categorical(probs=p.view(b,ih*iw))
         else:
@@ -465,8 +483,12 @@ class ScreenDecoder(nn.Module):
                         eq_dropout = 0.5
                     else:
                         eq_dropout = 0.0
-                    eq_distribution = equivalent_outcome_categorical(
-                        a, equivalence, dropout=eq_dropout)
+                    if self.config.log_sigmoid_screen_attention:
+                        eq_distribution = equivalent_outcome_sigmoid(
+                            a, equivalence)
+                    else:
+                        eq_distribution = equivalent_outcome_categorical(
+                            a, equivalence, dropout=eq_dropout)
                 
                 eq_sample = equivalence[range(b),sample_y,sample_x]
                 log_prob = eq_distribution.log_prob(eq_sample)
