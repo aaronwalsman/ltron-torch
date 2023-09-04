@@ -47,13 +47,9 @@ class LtronVisualTransformerConfig(
     embedding_dropout = 0.1
     strict_load = True
     
-<<<<<<< HEAD
     overlay_target_image = False
     
-    use_dpt_decoder = False
-=======
     dense_decoder_mode = 'dpt'
->>>>>>> 90a71487996d910a305519ed12f3f48420aad1d3
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
 
