@@ -295,7 +295,7 @@ class LtronVisualTransformer(nn.Module):
         # decoder token
         decoder_token = self.decoder_token.expand(1,b,c)
         x = torch.cat((decoder_token, x), dim=0)
-        
+
         # normalize the embedding
         # doing this in each embedding now in order to normalize
         # similar populations together
@@ -504,7 +504,7 @@ class LtronVisualTransformer(nn.Module):
         for i, m in enumerate(mode):
             image = images[i]
             current_image = image.copy()
-            current_image = write_text(current_image, 'Current Image')
+            current_image = write_text(current_image, 'Current Image', size=8)
             
             action_image = image.copy()
             
@@ -602,7 +602,7 @@ class LtronVisualTransformer(nn.Module):
             '''
             
             action_str += '\nReward: %.04f'%reward[i]
-            action_image = write_text(action_image, action_str)
+            action_image = write_text(action_image, action_str, size=8)
 
             if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 click_polarity = action['cursor']['button'][i]
@@ -632,12 +632,12 @@ class LtronVisualTransformer(nn.Module):
             image_row = [current_image]
             if 'target_image' in observation:
                 target_image = observation['target_image'][i]
-                target_image = write_text(target_image, 'Target Image')
+                target_image = write_text(target_image, 'Target Image', size=8)
                 image_row.append(target_image)
             image_row.append(action_image)
             if next_image is not None:
                 result_image = next_image[i]
-                result_image = write_text(result_image, 'Result Image')
+                result_image = write_text(result_image, 'Result Image', size=8)
                 image_row.append(result_image)
             image_row.extend([
                 click_heatmap,
