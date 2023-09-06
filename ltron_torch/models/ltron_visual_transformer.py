@@ -38,6 +38,7 @@ from ltron_torch.models.equivalence import (
     equivalent_outcome_categorical
 )
 from avarice.model.parameter import NoWeightDecayParameter
+from steadfast.hierarchy import hierarchy_getitem
 
 class LtronVisualTransformerConfig(
     AutoEmbeddingConfig,
@@ -417,6 +418,8 @@ class LtronVisualTransformer(nn.Module):
         observation,
         action,
         reward,
+        terminal,
+        truncated,
         model_output,
         next_image=None,
     ):
@@ -571,6 +574,8 @@ class LtronVisualTransformer(nn.Module):
             '''
             
             action_str += '\nReward: %.04f'%reward[i]
+            action_str += '\nTerminal: %i'%terminal[i]
+            action_str += '\nTruncated: %i'%truncated[i]
             action_image = write_text(action_image, action_str, size=8)
 
             if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
@@ -604,8 +609,53 @@ class LtronVisualTransformer(nn.Module):
                 target_image = write_text(target_image, 'Target Image', size=8)
                 image_row.append(target_image)
             image_row.append(action_image)
+            if 'expert' in observation:
+                expert_image = image.copy()
+                num_expert_actions = observation['num_expert_actions'][i]
+                expert = hierarchy_getitem(observation['expert'], i)
+                expert_mode_lines = []
+                for j in range(num_expert_actions):
+                    expert_action = hierarchy_getitem(expert, j)
+                    em = expert_action['action_primitives']['mode']
+                    mode_name = mode_space.names[em]
+                    if mode_name in (
+                        'remove', 'pick_and_place', 'rotate', 'translate'
+                    ):
+                        click_polarity = expert_action['cursor']['button']
+                        click_yx = expert_action['cursor']['click']
+                        if click_polarity:
+                            draw_crosshairs(
+                                expert_image, *click_yx, 3, (255,0,0))
+                        else:
+                            draw_square(
+                                expert_image, *click_yx, 3, (255,0,0))
+                    
+                    if mode_name in ('pick_and_place',):
+                        release_polarity = not bool(click_polarity)
+                        release_yx = expert_action['cursor']['release']
+                        if release_polarity:
+                            draw_crosshairs(
+                                expert_image, *release_yx, 3, (0,0,255))
+                        else:
+                            draw_square(
+                                expert_image, *release_yx, 3, (0,0,255))
+                        draw_line(
+                            expert_image, *click_yx, *release_yx, (255,0,255))
+                    
+                    if mode_name == 'insert':
+                        s,c = expert_action['action_primitives']['insert']
+                        expert_mode_lines.append('insert: %i, %i'%(s,c))
+                    else:
+                        expert_mode_lines.append(mode_name)
+                expert_str = 'Expert Actions:\n' + '\n'.join(expert_mode_lines)
+                expert_image = write_text(expert_image, expert_str, size=8)
+                image_row.append(expert_image)
+            
             if next_image is not None:
-                result_image = next_image[i]
+                if truncated[i] or terminal[i]:
+                    result_image = numpy.zeros_like(next_image[i])
+                else:
+                    result_image = next_image[i]
                 result_image = write_text(result_image, 'Result Image', size=8)
                 image_row.append(result_image)
             image_row.extend([
