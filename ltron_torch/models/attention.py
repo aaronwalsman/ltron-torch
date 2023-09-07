@@ -19,11 +19,18 @@ class Attention(Module):
         self.h = heads
         self.hc = self.c // self.h
         
+        #self.flash = hasattr(
+        #    torch.nn.functional, 'scaled_dot_product_attention')
+        self.flash = False
+        
         # build qkv layers
         self.q_linear = Linear(self.c, self.c)
         self.k_linear = Linear(self.c, self.c)
         self.v_linear = Linear(self.c, self.c)
-        self.attention_dropout = Dropout(attention_dropout)
+        if self.flash:
+            self.attention_dropout = attention_dropout
+        else:
+            self.attention_dropout = Dropout(attention_dropout)
         
         # build forward projection
         self.content_linear = Linear(self.c, self.c)
@@ -47,16 +54,24 @@ class Attention(Module):
         v = self.v_linear(xv).view(ks, b, self.h, self.hc)
         
         # compute attention
-        qk = torch.einsum('sbhc,tbhc->stbh', q, k)
-        temperature = 1. / self.hc ** 0.5
-        a = qk * temperature
-        
-        p = torch.softmax(a, dim=1)
-        #p = torch.nan_to_num(p)
-        p = self.attention_dropout(p)
-        
-        # compute forward projection
-        x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(qs,b,self.c)
+        if self.flash:
+            x = torch.nn.functional.scaled_dot_product_attention(
+                q.transpose(0,1),k.transpose(0,1),v.transpose(0,1),
+                attn_mask=None,
+                dropout_p = self.attention_dropout if self.training else 0,
+                is_causal=False,
+            ).transpose(0,1).reshape(qs,b,self.c)
+        else:
+            qk = torch.einsum('sbhc,tbhc->stbh', q, k)
+            temperature = 1. / self.hc ** 0.5
+            a = qk * temperature
+            
+            p = torch.softmax(a, dim=1)
+            #p = torch.nan_to_num(p)
+            p = self.attention_dropout(p)
+            
+            # compute forward projection
+            x = torch.einsum('stbh,tbhc->sbhc', p, v).reshape(qs,b,self.c)
         x = self.content_linear(x)
         x = self.content_dropout(x)
         
