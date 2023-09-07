@@ -51,6 +51,13 @@ class LtronVisualTransformerConfig(
     dense_decoder_mode = 'dpt'
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
+    
+    mode_loss_scale = 1.
+    insert_loss_scale = 1.
+    cursor_loss_scale = 1.
+    viewpoint_loss_scale = 1.
+    rotate_loss_scale = 1.
+    translate_loss_scale = 1.
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -298,6 +305,7 @@ class LtronVisualTransformer(nn.Module):
         log_prob = 0.
         entropy = 0.
         logits = {}
+        losses = {}
         
         # mode
         mode_sample = None if sample is None else (
@@ -306,6 +314,7 @@ class LtronVisualTransformer(nn.Module):
             decode_x, sample=mode_sample, sample_max=sample_max)
         out_sample['action_primitives'] = {'mode':mode_sample}
         log_prob = log_prob + lp
+        losses['mode'] = (lp * self.config.mode_loss_scale).mean()
         entropy = entropy + e
         logits['action_primitives'] = {'mode':m_logits}
         
@@ -340,7 +349,9 @@ class LtronVisualTransformer(nn.Module):
                 do_release |= mode_mask
             
             x = x * ~mode_mask.view(-1,1) + px * mode_mask.view(-1,1)
+            decoder_scale = getattr(self.config, '%s_loss_scale'%name, 1.0)
             log_prob = log_prob + lp * mode_mask
+            losses[name] = (lp * mode_mask * decoder_scale).mean()
             entropy = entropy + e * mode_mask
             logits['action_primitives'][name] = name_logits
         
@@ -374,6 +385,8 @@ class LtronVisualTransformer(nn.Module):
             
             x = x + cx * cursor_mask.view(-1,1)
             log_prob = log_prob + lp * cursor_mask
+            losses['cursor'] = (
+                lp * cursor_mask * self.config.cursor_loss_scale).mean()
             entropy = entropy + e * cursor_mask
             logits['cursor'] = cursor_logits
         else:
@@ -391,6 +404,7 @@ class LtronVisualTransformer(nn.Module):
             'log_prob' : log_prob,
             'entropy' : entropy,
             'logits' : logits,
+            'losses' : losses,
         }
     
     def expert(self, observation, info):
@@ -398,6 +412,9 @@ class LtronVisualTransformer(nn.Module):
     
     def log_prob(self, model_output):
         return model_output['log_prob']
+    
+    def losses(self, model_output):
+        return model_output['losses']
     
     def entropy(self, model_output):
         return model_output['entropy']
