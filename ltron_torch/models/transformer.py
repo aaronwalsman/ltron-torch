@@ -94,10 +94,18 @@ class Transformer(Module):
         
         x_out = {}
         
+        #print('Transformer Input Max:', torch.max(torch.norm(x, dim=-1)))
+        #print('Transformer Input Mean:', torch.mean(torch.norm(x, dim=-1)))
+        #print('Transformer Input Min:', torch.min(torch.norm(x, dim=-1)))
+        
         for i, block in enumerate(self.blocks):
             x = block(x, **kwargs)
             if i in output_layers:
                 x_out[i] = x
+            
+            #print('Block %i Input Max:'%i, torch.max(torch.norm(x, dim=-1)))
+            #print('Block %i Input Mean:'%i, torch.mean(torch.norm(x, dim=-1)))
+            #print('Block %i Input Min:'%i, torch.min(torch.norm(x, dim=-1)))
         
         x_out[-1] = x
         
