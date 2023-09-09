@@ -88,7 +88,7 @@ class ConstantDecoder(nn.Module):
         self.config = config
         self.index = index
 
-    def forward(self, x, sample=None):
+    def forward(self, x, sample=None, sample_max=False):
         b = x.shape[0]
         device = x.device
         if sample is None:
