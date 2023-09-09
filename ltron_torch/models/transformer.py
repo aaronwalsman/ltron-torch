@@ -92,12 +92,22 @@ class Transformer(Module):
         if output_layers is None:
             output_layers = set()
         
+        #x_norm = torch.norm(x, dim=-1)
+        #print('Transformer input min norm: %.04f'%(x_norm.min()))
+        #print('Transformer input mean norm: %.04f'%(x_norm.mean()))
+        #print('Transformer input max norm: %.04f'%(x_norm.max()))
+        
         x_out = {}
         
         for i, block in enumerate(self.blocks):
             x = block(x, **kwargs)
             if i in output_layers:
                 x_out[i] = x
+            
+            #x_norm = torch.norm(x, dim=-1)
+            #print('Transformer block %i min norm: %.04f'%(i, x_norm.min()))
+            #print('Transformer block %i mean norm: %.04f'%(i, x_norm.mean()))
+            #print('Transformer block %i max norm: %.04f'%(i, x_norm.max()))
         
         x_out[-1] = x
         
