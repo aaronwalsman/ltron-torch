@@ -26,10 +26,10 @@ class InsertDecoder(nn.Module):
         num_color_classes = NUM_COLOR_CLASSES
         #else:
         #    num_color_classes = len(config.color_class_labels) + 1
-        self.shape_decoder = AutoDecoder(config, Discrete(num_shape_classes))
-        self.color_decoder = AutoDecoder(config, Discrete(num_color_classes))
-        #self.shape_decoder = DiscreteDecoder(config, num_shape_classes)
-        #self.color_decoder = DiscreteDecoder(config, num_color_classes)
+        #self.shape_decoder = AutoDecoder(config, Discrete(num_shape_classes))
+        #self.color_decoder = AutoDecoder(config, Discrete(num_color_classes))
+        self.shape_decoder = DiscreteDecoder(config, num_shape_classes)
+        self.color_decoder = DiscreteDecoder(config, num_color_classes)
     
     def forward(self,
         x,
