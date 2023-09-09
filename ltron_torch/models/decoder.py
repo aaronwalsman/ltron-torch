@@ -38,6 +38,11 @@ class DiscreteDecoder(nn.Module):
         equivalence_dropout=0.5,
         sample_max=False,
     ):
+        #n = torch.norm(x, dim=-1)
+        #print('Discrete Min:', n.min())
+        #print('Discrete Mean:', n.mean())
+        #print('Discrete Max:', n.max())
+        
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()
@@ -88,7 +93,7 @@ class ConstantDecoder(nn.Module):
         self.config = config
         self.index = index
 
-    def forward(self, x, sample=None):
+    def forward(self, x, sample=None, sample_max=False):
         b = x.shape[0]
         device = x.device
         if sample is None:
