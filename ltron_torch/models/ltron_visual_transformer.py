@@ -106,6 +106,13 @@ class LtronVisualTransformer(nn.Module):
         # build the transformer
         self.encoder = Transformer(config)
         
+        # build the dpt layernorm
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
+            self.dpt_norms = nn.ModuleList([
+                nn.LayerNorm(config.channels)
+                for _ in config.dpt_blocks
+            ])
+        
         # pre decoder layernorm
         self.predecoder_norm = nn.LayerNorm(config.channels)
         
@@ -292,7 +299,11 @@ class LtronVisualTransformer(nn.Module):
         x = self.encoder(x, output_layers=output_layers)
         decode_x = self.predecoder_norm(x[-1][0])
         if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
-            image_x = [x[i][1:hw+1] for i in self.config.dpt_blocks]
+            image_x = [
+                #self.dpt_norms[j](x[i][1:hw+1])
+                x[i][1:hw+1]
+                for j,i in enumerate(self.config.dpt_blocks)
+            ]
         elif self.config.dense_decoder_mode == 'simple':
             image_x = x[-1][1:hw+1]
         
@@ -314,7 +325,7 @@ class LtronVisualTransformer(nn.Module):
             decode_x, sample=mode_sample, sample_max=sample_max)
         out_sample['action_primitives'] = {'mode':mode_sample}
         log_prob = log_prob + lp
-        losses['mode'] = (lp * self.config.mode_loss_scale).mean()
+        losses['mode_loss'] = -(lp * self.config.mode_loss_scale)
         entropy = entropy + e
         logits['action_primitives'] = {'mode':m_logits}
         
@@ -330,7 +341,7 @@ class LtronVisualTransformer(nn.Module):
                 s, lp, e, px, name_logits = decoder(
                     x,
                     sample=primitive_sample,
-                    #sample_max=sample_max,
+                    sample_max=sample_max,
                     shape_eq=shape_eq,
                     color_eq=color_eq,
                 )
@@ -338,6 +349,7 @@ class LtronVisualTransformer(nn.Module):
                 s, lp, e, px, name_logits = decoder(
                     x,
                     sample=primitive_sample,
+                    sample_max=sample_max,
                 )
             
             out_sample['action_primitives'][name] = s
@@ -351,7 +363,8 @@ class LtronVisualTransformer(nn.Module):
             x = x * ~mode_mask.view(-1,1) + px * mode_mask.view(-1,1)
             decoder_scale = getattr(self.config, '%s_loss_scale'%name, 1.0)
             log_prob = log_prob + lp * mode_mask
-            losses[name] = (lp * mode_mask * decoder_scale).mean()
+            if '%s_loss'%name in self.loss_names:
+                losses['%s_loss'%name] = -(lp * mode_mask * decoder_scale)
             entropy = entropy + e * mode_mask
             logits['action_primitives'][name] = name_logits
         
@@ -380,13 +393,14 @@ class LtronVisualTransformer(nn.Module):
                 neg_snap_eq=neg_snap_eq,
                 do_release=do_release,
                 sample=cursor_sample,
+                sample_max=sample_max,
             )
             out_sample['cursor'] = s
             
             x = x + cx * cursor_mask.view(-1,1)
             log_prob = log_prob + lp * cursor_mask
-            losses['cursor'] = (
-                lp * cursor_mask * self.config.cursor_loss_scale).mean()
+            losses['cursor_loss'] = -(
+                lp * cursor_mask * self.config.cursor_loss_scale)
             entropy = entropy + e * cursor_mask
             logits['cursor'] = cursor_logits
         else:
@@ -415,6 +429,13 @@ class LtronVisualTransformer(nn.Module):
     
     def losses(self, model_output):
         return model_output['losses']
+    
+    @property
+    def loss_names(self):
+        return ['mode_loss', 'cursor_loss'] + [
+            '%s_loss'%name for name, decoder in self.primitive_decoders.items()
+            if not isinstance(decoder, ConstantDecoder)
+        ]
     
     def entropy(self, model_output):
         return model_output['entropy']
@@ -683,7 +704,7 @@ class LtronVisualTransformer(nn.Module):
             ])
             #breakpoint()
             visualization = stack_images_horizontal(image_row)
-            visualizations.append(visualization)
+            visualizations.append((visualization, {}))
         
         return visualizations
 
