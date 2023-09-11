@@ -14,6 +14,7 @@ class DecoderConfig(Config):
     sigmoid_screen_attention = False
     log_sigmoid_screen_attention = False
     screen_equivalence = True
+    old_insert = False
 
 class DiscreteDecoder(nn.Module):
     def __init__(self, config, num_classes): #, sample_offset=0):

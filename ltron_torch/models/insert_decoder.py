@@ -18,10 +18,14 @@ from ltron_torch.models.decoder import DiscreteDecoder
 class InsertDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        #self.shape_decoder = AutoDecoder(config, Discrete(num_shape_classes))
-        #self.color_decoder = AutoDecoder(config, Discrete(num_color_classes))
-        self.shape_decoder = DiscreteDecoder(config, NUM_SHAPE_CLASSES)
-        self.color_decoder = DiscreteDecoder(config, NUM_COLOR_CLASSES)
+        if config.old_insert:
+            self.shape_decoder = AutoDecoder(
+                config, Discrete(NUM_SHAPE_CLASSES))
+            self.color_decoder = AutoDecoder(
+                config, Discrete(NUM_COLOR_CLASSES))
+        else:
+            self.shape_decoder = DiscreteDecoder(config, NUM_SHAPE_CLASSES)
+            self.color_decoder = DiscreteDecoder(config, NUM_COLOR_CLASSES)
     
     def forward(self,
         x,
