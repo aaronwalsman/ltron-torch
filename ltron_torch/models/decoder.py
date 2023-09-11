@@ -14,6 +14,7 @@ class DecoderConfig(Config):
     sigmoid_screen_attention = False
     log_sigmoid_screen_attention = False
     screen_equivalence = True
+    old_insert = False
 
 class DiscreteDecoder(nn.Module):
     def __init__(self, config, num_classes): #, sample_offset=0):
@@ -38,6 +39,11 @@ class DiscreteDecoder(nn.Module):
         equivalence_dropout=0.5,
         sample_max=False,
     ):
+        #n = torch.norm(x, dim=-1)
+        #print('Discrete Min:', n.min())
+        #print('Discrete Mean:', n.mean())
+        #print('Discrete Max:', n.max())
+        
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()

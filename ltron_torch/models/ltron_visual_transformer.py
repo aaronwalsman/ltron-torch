@@ -486,6 +486,7 @@ class LtronVisualTransformer(nn.Module):
         # get the mode component of the action space
         mode_space = self.action_space['action_primitives']['mode']
         
+        # get the click and release islands
         button_sample = model_output['sample']['cursor']['button'].view(-1,1,1)
         device = button_sample.device
         #pos_islands = torch.LongTensor(
@@ -501,6 +502,7 @@ class LtronVisualTransformer(nn.Module):
         sample_valid, sample_expert, click_islands, release_islands = (
             observation['expert'])
         
+        # make the cursor distributions
         if 'cursor' in model_output['logits']:
             click_logits = model_output['logits']['cursor']['click']
             release_logits = model_output['logits']['cursor']['release']

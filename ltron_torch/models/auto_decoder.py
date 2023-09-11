@@ -108,6 +108,10 @@ class DiscreteAutoDecoder(nn.Module):
         equivalence=None,
         equivalence_dropout=0.5,
     ):
+        n = torch.norm(x, dim=-1)
+        #print('Discrete Auto Min:', n.min())
+        #print('Discrete Auto Mean:', n.mean())
+        #print('Discrete Auto Max:', n.max())
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()
