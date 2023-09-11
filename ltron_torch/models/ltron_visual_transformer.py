@@ -318,9 +318,17 @@ class LtronVisualTransformer(nn.Module):
         logits = {}
         losses = {}
         
+        if sample is not None:
+            sample_valid, sample_expert, c_islands, r_islands = sample
+        else:
+            c_islands = None
+            r_islands = None
+        
         # mode
-        mode_sample = None if sample is None else (
-            sample['action_primitives']['mode'])
+        #mode_sample = None if sample is None else (
+        #    sample['action_primitives']['mode'])
+        mode_sample = None if (sample is None) else (
+            sample_expert['action_primitives']['mode'])
         mode_sample, lp, e, x, m_logits = self.mode_decoder(
             decode_x, sample=mode_sample, sample_max=sample_max)
         out_sample['action_primitives'] = {'mode':mode_sample}
@@ -334,8 +342,12 @@ class LtronVisualTransformer(nn.Module):
             mode_sample.shape, dtype=torch.bool, device=mode_sample.device)
         do_release = torch.zeros_like(cursor_mask)
         for i, (name, decoder) in enumerate(self.primitive_decoders.items()):
-            primitive_sample = None if sample is None else (
-                sample['action_primitives'][name])
+            #primitive_sample = None if sample is None else (
+            #    sample['action_primitives'][name])
+            primitive_sample = (
+                None if (sample is None) else
+                sample_expert['action_primitives'][name]
+            )
             
             if name == 'insert':
                 s, lp, e, px, name_logits = decoder(
@@ -370,8 +382,12 @@ class LtronVisualTransformer(nn.Module):
         
         # sample cursor
         if image_x is not None:
-            cursor_sample = None if sample is None else (
-                sample['cursor'])
+            #cursor_sample = None if sample is None else (
+            #    sample['cursor'])
+            cursor_sample = (
+                None if (sample is None) else
+                sample_expert['cursor']
+            )
             
             if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
                 _, b, c = image_x[0].shape
@@ -389,8 +405,10 @@ class LtronVisualTransformer(nn.Module):
             s, lp, e, cx, cursor_logits = self.cursor_decoder(
                 x,
                 image_x,
-                pos_snap_eq=pos_snap_eq,
-                neg_snap_eq=neg_snap_eq,
+                #pos_snap_eq=pos_snap_eq,
+                #neg_snap_eq=neg_snap_eq,
+                click_eq=c_islands,
+                release_eq=r_islands,
                 do_release=do_release,
                 sample=cursor_sample,
                 sample_max=sample_max,
@@ -422,7 +440,7 @@ class LtronVisualTransformer(nn.Module):
         }
     
     def expert(self, observation, info):
-        return observation['expert'], observation['num_expert_actions']
+        return observation['expert'] #, observation['num_expert_actions']
     
     def log_prob(self, model_output):
         return model_output['log_prob']
@@ -461,21 +479,27 @@ class LtronVisualTransformer(nn.Module):
         model_output,
         next_image=None,
     ):
+        # get the images and mode
         images = observation['image']
-        
         mode = action['action_primitives']['mode']
+        
+        # get the mode component of the action space
         mode_space = self.action_space['action_primitives']['mode']
         
         button_sample = model_output['sample']['cursor']['button'].view(-1,1,1)
         device = button_sample.device
-        pos_islands = torch.LongTensor(
-            cursor_islands(observation['pos_snap_render'])).to(device)
-        neg_islands = torch.LongTensor(
-            cursor_islands(observation['neg_snap_render'])).to(device)
-        click_islands = (
-            pos_islands * button_sample + neg_islands * (1-button_sample))
-        release_islands = (
-            pos_islands * (1-button_sample) + neg_islands * button_sample)
+        #pos_islands = torch.LongTensor(
+        #    cursor_islands(observation['pos_snap_render'])).to(device)
+        #neg_islands = torch.LongTensor(
+        #    cursor_islands(observation['neg_snap_render'])).to(device)
+        #click_islands = (
+        #    pos_islands * button_sample + neg_islands * (1-button_sample))
+        #release_islands = (
+        #    pos_islands * (1-button_sample) + neg_islands * button_sample)
+        
+        # make the cursor distributions
+        sample_valid, sample_expert, click_islands, release_islands = (
+            observation['expert'])
         
         if 'cursor' in model_output['logits']:
             click_logits = model_output['logits']['cursor']['click']
@@ -484,23 +508,23 @@ class LtronVisualTransformer(nn.Module):
             if self.config.sigmoid_screen_attention:
                 click_heatmaps = torch.sigmoid(click_logits).view(b,h,w,1)
                 release_heatmaps = torch.sigmoid(release_logits).view(b,h,w,1)
-                click_eq_dist = equivalent_probs_categorical(
-                    click_heatmaps, click_islands)
-                release_eq_dist = equivalent_probs_categorical(
-                    release_heatmaps, release_islands)
+                #click_eq_dist = equivalent_probs_categorical(
+                #    click_heatmaps, click_islands)
+                #release_eq_dist = equivalent_probs_categorical(
+                #    release_heatmaps, release_islands)
             else:
                 click_heatmaps = torch.softmax(
                     click_logits.view(b,h*w), dim=-1).view(b,h,w,1)
                 release_heatmaps = torch.softmax(
                     release_logits.view(b,h*w), dim=-1).view(b,h,w,1)
-                click_eq_dist = equivalent_outcome_categorical(
-                    click_logits,
-                    click_islands,
-                )
-                release_eq_dist = equivalent_outcome_categorical(
-                    release_logits,
-                    release_islands,
-                )
+                #click_eq_dist = equivalent_outcome_categorical(
+                #    click_logits,
+                #    click_islands,
+                #)
+                #release_eq_dist = equivalent_outcome_categorical(
+                #    release_logits,
+                #    release_islands,
+                #)
         else:
             b = action['action_primitives']['mode'].shape[0]
             h, w = 256,256
@@ -509,59 +533,27 @@ class LtronVisualTransformer(nn.Module):
             click_eq_dist = TODO
             release_eq_dist = TODO
         
+        # make the visualizations
         visualizations = []
         
-        for i, m in enumerate(mode):
-            image = images[i]
+        for i, image in enumerate(images):
+            # build the step data
+            step_data = {}
+            
+            # make the current image
             current_image = image.copy()
             current_image = write_text(current_image, 'Current Image', size=8)
             
+            # make the target image
+            if 'target_image' in observation:
+                target_image = observation['target_image'][i]
+                target_image = write_text(target_image, 'Target Image', size=8)
+            
+            # make the action image and update step_data
             action_image = image.copy()
-            
-            click_heatmap_background = images[i].copy()
-            click_heatmap = click_heatmaps[i].cpu().numpy()
-            click_heatmap = heatmap_overlay(
-                click_heatmap_background,
-                click_heatmap,
-                [255,255,255],
-                background_scale=0.25,
-                max_normalize=True,
-            )
-
-            release_heatmap_background = images[i].copy()
-            release_heatmap = release_heatmaps[i].cpu().numpy()
-            release_heatmap = heatmap_overlay(
-                release_heatmap_background,
-                release_heatmap,
-                [255,255,255],
-                background_scale=0.25,
-                max_normalize=True,
-            )
-            
-            click_p_map = click_eq_dist.probs[i][click_islands[i]].detach()
-            click_min = torch.min(click_p_map)
-            click_max = torch.max(click_p_map)
-            click_p_map = (click_p_map - click_min) / (
-                click_max - click_min + 1e-9)
-            click_p_map = (click_p_map.cpu().numpy() * 255).round().astype(
-                numpy.uint8)
-            h, w = click_p_map.shape
-            click_p_map = click_p_map.reshape(h,w,1).repeat(3, axis=2)
-            
-            release_p_map = release_eq_dist.probs[i][
-                release_islands[i]].detach()
-            release_min = torch.min(release_p_map)
-            release_max = torch.max(release_p_map)
-            release_p_map = (
-                (release_p_map - release_min) /
-                (release_max - release_min + 1e-9)
-            )
-            release_p_map = (release_p_map.cpu().numpy() * 255).round().astype(
-                numpy.uint8)
-            h, w = release_p_map.shape
-            release_p_map = release_p_map.reshape(h,w,1).repeat(3, axis=2)
-            
-            mode_name = mode_space.names[m]
+            mode_name = mode_space.names[mode[i]]
+            step_data['mode'] = mode_name
+            step_data['mode_p'] = {}
             mode_logits = model_output['logits']['action_primitives']['mode'][i]
             mode_prob = torch.softmax(mode_logits, dim=0).cpu()
             mode_lines = []
@@ -581,82 +573,114 @@ class LtronVisualTransformer(nn.Module):
                 else:
                     mode_lines.append(
                         '%s%s: %.02f'%(prefix, name, mode_prob[j]))
+                step_data['mode_p'][name] = float(mode_prob[j])
+            
             action_str = 'Action:\n' + '\n'.join(mode_lines)
-            
-            '''
-            if mode_name == 'viewpoint':
-                v = action['action_primitives']['viewpoint'][i]
-                action_str = '%s.%s'%(mode_name, ViewpointActions(value=v).name)
-            elif mode_name == 'remove':
-                r = action['action_primitives']['remove'][i]
-                ci, cs = observation['cursor']['click_snap'][i]
-                cy, cx = action['cursor']['click'][i]
-                action_str = (
-                    '%s.%i\n'
-                    'Click x/y: %i,%i\n'
-                    'Click instance/snap: %i,%i\n'%(
-                        mode_name, r, cx, cy, ci, cs)
-                )
-            elif mode_name == 'insert':
-                SHAPE_NAMES = {
-                    value:key for key, value in SHAPE_CLASS_LABELS.items()}
-                s, c = action['action_primitives']['insert'][i]
-                shape_name = SHAPE_NAMES.get(s, 'NONE')
-                action_str = (
-                    '%s.%i/%i\n'
-                    'Shape: %s\n'
-                    'Color: %i\n'%(
-                        mode_name, s, c, shape_name, c))
-            else:
-                action_str = mode_name
-            '''
-            
             action_str += '\nReward: %.04f'%reward[i]
             action_str += '\nTerminal: %i'%terminal[i]
             action_str += '\nTruncated: %i'%truncated[i]
             action_image = write_text(action_image, action_str, size=8)
-
+            
+            # make the result image
+            if next_image is not None:
+                if truncated[i] or terminal[i]:
+                    result_image = numpy.zeros_like(next_image[i])
+                else:
+                    result_image = next_image[i]
+                result_image = write_text(result_image, 'Result Image', size=8)
+            
+            # make the click heatmap image
+            click_heatmap_background = image.copy()
+            click_heatmap = click_heatmaps[i].cpu().numpy()
+            click_heatmap = heatmap_overlay(
+                click_heatmap_background,
+                click_heatmap,
+                [255,255,255],
+                background_scale=0.25,
+                max_normalize=True,
+            )
+            
+            # make the release heatmap image
+            release_heatmap_background = image.copy()
+            release_heatmap = release_heatmaps[i].cpu().numpy()
+            release_heatmap = heatmap_overlay(
+                release_heatmap_background,
+                release_heatmap,
+                [255,255,255],
+                background_scale=0.25,
+                max_normalize=True,
+            )
+            
+            # make the click p map image
+            '''
+            click_p_map = click_eq_dist.probs[i][click_islands[i]].detach()
+            click_min = torch.min(click_p_map)
+            click_max = torch.max(click_p_map)
+            click_p_map = (click_p_map - click_min) / (
+                click_max - click_min + 1e-9)
+            click_p_map = (click_p_map.cpu().numpy() * 255).round().astype(
+                numpy.uint8)
+            h, w = click_p_map.shape
+            click_p_map = click_p_map.reshape(h,w,1).repeat(3, axis=2)
+            
+            # make the release p map image
+            release_p_map = release_eq_dist.probs[i][
+                release_islands[i]].detach()
+            release_min = torch.min(release_p_map)
+            release_max = torch.max(release_p_map)
+            release_p_map = (
+                (release_p_map - release_min) /
+                (release_max - release_min + 1e-9)
+            )
+            release_p_map = (release_p_map.cpu().numpy() * 255).round().astype(
+                numpy.uint8)
+            h, w = release_p_map.shape
+            release_p_map = release_p_map.reshape(h,w,1).repeat(3, axis=2)
+            '''
+            
+            # add the visualized click actions to the action image,
+            # click heatmap and click p map
             if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 click_polarity = action['cursor']['button'][i]
                 click_yx = action['cursor']['click'][i]
                 if click_polarity:
                     draw_crosshairs(action_image, *click_yx, 3, (255,0,0))
                     draw_crosshairs(click_heatmap, *click_yx, 3, (255,0,0))
-                    draw_crosshairs(click_p_map, *click_yx, 3, (255,0,0))
+                    #draw_crosshairs(click_p_map, *click_yx, 3, (255,0,0))
                 else:
                     draw_square(action_image, *click_yx, 3, (255,0,0))
                     draw_square(click_heatmap, *click_yx, 3, (255,0,0))
-                    draw_square(click_p_map, *click_yx, 3, (255,0,0))
-
+                    #draw_square(click_p_map, *click_yx, 3, (255,0,0))
+            
+            # add the visualized release actions to the action image
+            # and release heatmap
             if mode_name in ('pick_and_place',):
                 release_polarity = not bool(click_polarity)
                 release_yx = action['cursor']['release'][i]
                 if release_polarity:
                     draw_crosshairs(action_image, *release_yx, 3, (0,0,255))
                     draw_crosshairs(release_heatmap, *release_yx, 3, (0,0,255))
-                    draw_crosshairs(release_p_map, *release_yx, 3, (0,0,255))
+                    #draw_crosshairs(release_p_map, *release_yx, 3, (0,0,255))
                 else:
                     draw_square(action_image, *release_yx, 3, (0,0,255))
                     draw_square(release_heatmap, *release_yx, 3, (0,0,255))
-                    draw_square(release_p_map, *release_yx, 3, (0,0,255))
+                    #draw_square(release_p_map, *release_yx, 3, (0,0,255))
                 draw_line(action_image, *click_yx, *release_yx, (255,0,255))
             
-            image_row = [current_image]
-            if 'target_image' in observation:
-                target_image = observation['target_image'][i]
-                target_image = write_text(target_image, 'Target Image', size=8)
-                image_row.append(target_image)
-            image_row.append(action_image)
+            # build the expert image
             if 'expert' in observation:
                 expert_image = image.copy()
-                num_expert_actions = observation['num_expert_actions'][i]
+                #num_expert_actions = observation['num_expert_actions'][i]
                 expert = hierarchy_getitem(observation['expert'], i)
                 expert_mode_lines = []
-                for j in range(num_expert_actions):
-                    expert_action = hierarchy_getitem(expert, j)
+                #for j in range(num_expert_actions):
+                #expert_action = hierarchy_getitem(expert, j)
+                expert_valid = expert[0]
+                if expert_valid:
+                    expert_action = expert[1]
                     em = expert_action['action_primitives']['mode']
-                    mode_name = mode_space.names[em]
-                    if mode_name in (
+                    expert_mode_name = mode_space.names[em]
+                    if expert_mode_name in (
                         'remove', 'pick_and_place', 'rotate', 'translate'
                     ):
                         click_polarity = expert_action['cursor']['button']
@@ -667,8 +691,21 @@ class LtronVisualTransformer(nn.Module):
                         else:
                             draw_square(
                                 expert_image, *click_yx, 3, (255,0,0))
+                
+                        expert_click_islands = expert[2]
+                        expert_click_image = image.copy()
+                        expert_click_image = heatmap_overlay(
+                            expert_click_image,
+                            expert_click_islands.astype(float).reshape(
+                                128,128,1),
+                            [255,0,0],
+                            background_scale=0.25,
+                            max_normalize=True,
+                        )
+                    else:
+                        expert_click_image = numpy.zeros_like(expert_image)
                     
-                    if mode_name in ('pick_and_place',):
+                    if expert_mode_name in ('pick_and_place',):
                         release_polarity = not bool(click_polarity)
                         release_yx = expert_action['cursor']['release']
                         if release_polarity:
@@ -679,15 +716,73 @@ class LtronVisualTransformer(nn.Module):
                                 expert_image, *release_yx, 3, (0,0,255))
                         draw_line(
                             expert_image, *click_yx, *release_yx, (255,0,255))
+                        
+                        expert_release_islands = expert[3]
+                        expert_release_image = image.copy()
+                        expert_release_image = heatmap_overlay(
+                            expert_release_image,
+                            expert_release_islands.astype(float).reshape(
+                                128,128,1),
+                            [0,0,255],
+                            background_scale=0.25,
+                            max_normalize=True,
+                        )
+                    else:
+                        expert_release_image = numpy.zeros_like(expert_image)
                     
-                    if mode_name == 'insert':
+                    if expert_mode_name == 'insert':
                         s,c = expert_action['action_primitives']['insert']
                         expert_mode_lines.append('insert: %i, %i'%(s,c))
                     else:
-                        expert_mode_lines.append(mode_name)
-                expert_str = 'Expert Actions:\n' + '\n'.join(expert_mode_lines)
-                expert_image = write_text(expert_image, expert_str, size=8)
-                image_row.append(expert_image)
+                        expert_mode_lines.append(expert_mode_name)
+                    step_data['too_hard'] = False
+                    step_data['mode_correct'] = (mode_name == expert_mode_name)
+                    step_data['expert_mode'] = expert_mode_name
+                    step_data['p_mode_correct'] = sum(
+                        step_data['mode_p'][m] for m in expert_modes)
+                    
+                    step_data['button'] = bool(action['cursor']['button'][i])
+                    step_data['click'] = tuple(action['cursor']['click'][i])
+                    step_data['release'] = tuple(action['cursor']['release'][i])
+                    
+                    if mode_name == expert_mode_name and mode_name in (
+                        'remove', 'pick_and_place', 'rotate', 'translate'
+                    ):
+                        clickable_locations = []
+                        #for j in range(num_expert_actions):
+                        #    expert_action = hierarchy_getitem(expert, j)
+                        #    em = expert_action['action_primitives']['mode']
+                        #    expert_mode_name = mode_space.names[em]
+                        #    if expert_mode_name != mode_name:
+                        #        continue
+                        #    expert_button = expert_action['cursor']['button']
+                        #    if expert_button != step_data['button']:
+                        #        continue
+                        #    expert_click = expert_action['cursor']['click']
+                        #    if expert_button:
+                        #        click_island = pos_islands[i]
+                        #    else:
+                        #        click_island = neg_islands[i]
+                        #    expert_island = click_island[tuple(expert_click)]
+                        #    y,x = torch.where(click_island == expert_island)
+                        #    clickable_locations.extend(
+                        #        zip(y.cpu().numpy(), x.cpu().numpy()))
+                        # 
+                        step_data['misclick'] = (
+                            step_data['click'] not in clickable_locations)
+                else:
+                    step_data['too_hard'] = True
+                    expert_click_image = numpy.zeros_like(expert_image)
+                    expert_release_image = numpy.zeros_like(expert_image)
+            else:
+                expert_image = numpy.zeros_like(image)
+                expert_click_image = numpy.zeros_like(expert_image)
+                expert_release_image = numpy.zeros_like(expert_image)
+            expert_str = 'Expert Actions:\n' + '\n'.join(expert_mode_lines)
+            expert_image = write_text(expert_image, expert_str, size=8)
+            image_row.append(expert_image)
+            image_row.append(expert_click_image)
+            image_row.append(expert_release_image)
             
             if next_image is not None:
                 if truncated[i] or terminal[i]:
@@ -696,15 +791,24 @@ class LtronVisualTransformer(nn.Module):
                     result_image = next_image[i]
                 result_image = write_text(result_image, 'Result Image', size=8)
                 image_row.append(result_image)
-            image_row.extend([
+            # stitch images together
+            image_row = [
+                current_image,
+                target_image,
+                action_image,
                 click_heatmap,
                 release_heatmap,
-                click_p_map,
-                release_p_map,
-            ])
-            #breakpoint()
+                expert_image,
+                expert_click_image,
+                expert_release_image,
+                #click_p_map,
+                #release_p_map,
+                result_image,
+            ]
             visualization = stack_images_horizontal(image_row)
-            visualizations.append((visualization, {}))
+            
+            # append data
+            visualizations.append((visualization, step_data))
         
         return visualizations
 
