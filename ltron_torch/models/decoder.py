@@ -14,6 +14,7 @@ class DecoderConfig(Config):
     sigmoid_screen_attention = False
     log_sigmoid_screen_attention = False
     screen_equivalence = True
+    old_insert = False
 
 class DiscreteDecoder(nn.Module):
     def __init__(self, config, num_classes): #, sample_offset=0):
@@ -38,6 +39,11 @@ class DiscreteDecoder(nn.Module):
         equivalence_dropout=0.5,
         sample_max=False,
     ):
+        #n = torch.norm(x, dim=-1)
+        #print('Discrete Input Min:', n.min())
+        #print('Discrete Input Mean:', n.mean())
+        #print('Discrete Input Max:', n.max())
+        
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()
@@ -65,6 +71,11 @@ class DiscreteDecoder(nn.Module):
             entropy = distribution.entropy()
 
         embedding = self.embedding(physical_index)
+        
+        #embedding_norm = torch.norm(embedding, dim=-1)
+        #print('Discrete Embedding Norm min: %f'%float(embedding_norm.min()))
+        #print('Discrete Embedding Norm mean: %f'%float(embedding_norm.mean()))
+        #print('Discrete Embedding Norm max: %f'%float(embedding_norm.max()))
         #x = x + self.embedding_norm(embedding)
         x = x + embedding
         return sample, log_prob, entropy, x, logits
@@ -88,7 +99,7 @@ class ConstantDecoder(nn.Module):
         self.config = config
         self.index = index
 
-    def forward(self, x, sample=None):
+    def forward(self, x, sample=None, sample_max=False):
         b = x.shape[0]
         device = x.device
         if sample is None:

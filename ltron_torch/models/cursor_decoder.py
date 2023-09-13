@@ -38,8 +38,10 @@ class CursorDecoder(nn.Module):
     def forward(self,
         x,
         image_x,
-        pos_snap_eq,
-        neg_snap_eq,
+        #pos_snap_eq,
+        #neg_snap_eq,
+        click_eq,
+        release_eq,
         do_release,
         sample=None,
         sample_max=False,
@@ -49,7 +51,8 @@ class CursorDecoder(nn.Module):
         entropy = 0.
         logits = {}
         
-        button_sample = None if sample is None else sample['button']
+        button_sample = (
+            None if sample is None else sample['button'])
         s,lp,e,x,b_logits = self.button_decoder(
             x, sample=button_sample, sample_max=sample_max)
         out_sample['button'] = s
@@ -57,15 +60,15 @@ class CursorDecoder(nn.Module):
         entropy = entropy + e
         logits['button'] = b_logits
         
-        if pos_snap_eq is None:
-            raise Exception('Turns out this is bad!')
-            click_eq = None
-            release_eq = None
-        else:
-            both_eq = torch.stack((neg_snap_eq, pos_snap_eq), dim=-1)
-            b = out_sample['button'].shape[0]
-            click_eq = both_eq[range(b), ..., out_sample['button']]
-            release_eq = both_eq[range(b), ..., ~out_sample['button']]
+        #if pos_snap_eq is None:
+        #    raise Exception('Turns out this is bad!')
+        #    click_eq = None
+        #    release_eq = None
+        #else:
+        #    both_eq = torch.stack((neg_snap_eq, pos_snap_eq), dim=-1)
+        #    b = out_sample['button'].shape[0]
+        #    click_eq = both_eq[range(b), ..., out_sample['button']]
+        #    release_eq = both_eq[range(b), ..., ~out_sample['button']]
         
         click_sample = None if sample is None else sample['click']
         s,lp,e,x,c_logits = self.click_decoder(
@@ -164,7 +167,8 @@ class DPTScreenDecoder(nn.Module):
             flat_sample = sample_y * iw + sample_x
         
         if equivalence is None:
-            raise Exception('NOPE NOPE NOPE, NEED EQUIVALENCE FOR PPO')
+            #raise Exception('NOPE NOPE NOPE, NEED EQUIVALENCE FOR PPO')
+            # NOPE NOPE NOPE, WE'RE NOT USING PPO
             log_prob = click_distribution.log_prob(flat_sample)
             entropy = click_distribution.entropy()
         else:

@@ -104,16 +104,24 @@ class DiscreteAutoDecoder(nn.Module):
     def forward(self,
         x,
         sample=None,
+        sample_max=False,
         equivalence=None,
         equivalence_dropout=0.5,
     ):
+        n = torch.norm(x, dim=-1)
+        #print('Discrete Auto Min:', n.min())
+        #print('Discrete Auto Mean:', n.mean())
+        #print('Discrete Auto Max:', n.max())
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
             breakpoint()
         
         distribution = Categorical(logits=logits)
         if sample is None:
-            sample = distribution.sample()
+            if sample_max:
+                sample = torch.argmax(distribution.probs, dim=-1)
+            else:
+                sample = distribution.sample()
         
         if equivalence is not None:
             eq_distribution = equivalent_outcome_categorical(
@@ -136,7 +144,7 @@ class ConstantDecoder(nn.Module):
         self.config = config
         self.index = index
     
-    def forward(self, x, sample=None):
+    def forward(self, x, sample=None, sample_max=False):
         b = x.shape[0]
         device = x.device
         if sample is None:
