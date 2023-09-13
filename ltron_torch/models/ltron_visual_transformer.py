@@ -1,11 +1,11 @@
 import os
 import json
 
-
 import numpy
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from avarice.data.numpy_torch import torch_to_numpy
 
@@ -298,6 +298,12 @@ class LtronVisualTransformer(nn.Module):
                 'config.dense_decoder_mode "%s" should be (dpt,dpt_sum,simple)')
         x = self.encoder(x, output_layers=output_layers)
         decode_x = self.predecoder_norm(x[-1][0])
+        
+        #decode_norm = torch.norm(decode_x, dim=-1)
+        #print('Decoder Norm Min: %f'%float(decode_norm.min()))
+        #print('Decoder Norm Mean: %f'%float(decode_norm.mean()))
+        #print('Decoder Norm Max: %f'%float(decode_norm.max()))
+        
         if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             image_x = [
                 #self.dpt_norms[j](x[i][1:hw+1])
@@ -419,6 +425,28 @@ class LtronVisualTransformer(nn.Module):
             log_prob = log_prob + lp * cursor_mask
             losses['cursor_loss'] = -(
                 lp * cursor_mask * self.config.cursor_loss_scale)
+            '''
+            if sample is None:
+                losses['cursor_loss'] = 0.
+            else:
+                button_loss = F.cross_entropy(
+                    cursor_logits['button'], sample[1]['cursor']['button'],
+                    reduction='none',
+                ) * cursor_mask.view(-1,1)
+                click_loss = F.binary_cross_entropy_with_logits(
+                    cursor_logits['click'], sample[2].float(),
+                    reduction='none',
+                ).view(b,-1) * cursor_mask.view(-1,1)
+                release_loss = F.binary_cross_entropy_with_logits(
+                    cursor_logits['release'], sample[3].float(),
+                    reduction='none',
+                ).view(b,-1) * cursor_mask.view(-1,1)
+                losses['cursor_loss'] = (
+                    button_loss.mean() +
+                    click_loss.mean() +
+                    release_loss.mean()
+                )
+            '''
             entropy = entropy + e * cursor_mask
             logits['cursor'] = cursor_logits
         else:
@@ -682,6 +710,21 @@ class LtronVisualTransformer(nn.Module):
                     expert_action = expert[1]
                     em = expert_action['action_primitives']['mode']
                     expert_mode_name = mode_space.names[em]
+                    if expert_mode_name == 'insert' and mode_name == 'insert':
+                        expert_shape, expert_color = (
+                            expert_action['action_primitives']['insert'])
+                        action_shape, action_color = (
+                            action['action_primitives']['insert'][i])
+                        step_data['insert_shape_correct'] = (
+                            expert_shape == action_shape)
+                        step_data['insert_color_correct'] = (
+                            expert_color == action_color)
+                    elif mode_name == 'insert':
+                        step_data['extra_insert'] = True
+                    elif expert_mode_name == 'insert':
+                        step_data['missed_insert'] = True
+                        
+                    
                     if expert_mode_name in (
                         'remove', 'pick_and_place', 'rotate', 'translate'
                     ):
@@ -740,8 +783,8 @@ class LtronVisualTransformer(nn.Module):
                     step_data['too_hard'] = False
                     step_data['mode_correct'] = (mode_name == expert_mode_name)
                     step_data['expert_mode'] = expert_mode_name
-                    step_data['p_mode_correct'] = sum(
-                        step_data['mode_p'][m] for m in expert_modes)
+                    step_data['p_mode_correct'] = (
+                        step_data['mode_p'][expert_mode_name])
                     
                     step_data['button'] = bool(action['cursor']['button'][i])
                     step_data['click'] = tuple(action['cursor']['click'][i])
@@ -770,8 +813,9 @@ class LtronVisualTransformer(nn.Module):
                         #    clickable_locations.extend(
                         #        zip(y.cpu().numpy(), x.cpu().numpy()))
                         # 
-                        step_data['misclick'] = (
-                            step_data['click'] not in clickable_locations)
+                        #step_data['misclick'] = (
+                        #    step_data['click'] not in clickable_locations)
+                        pass
                 else:
                     step_data['too_hard'] = True
                     expert_click_image = numpy.zeros_like(expert_image)
@@ -782,9 +826,6 @@ class LtronVisualTransformer(nn.Module):
                 expert_release_image = numpy.zeros_like(expert_image)
             expert_str = 'Expert Actions:\n' + '\n'.join(expert_mode_lines)
             expert_image = write_text(expert_image, expert_str, size=8)
-            image_row.append(expert_image)
-            image_row.append(expert_click_image)
-            image_row.append(expert_release_image)
             
             if next_image is not None:
                 if truncated[i] or terminal[i]:
@@ -792,7 +833,6 @@ class LtronVisualTransformer(nn.Module):
                 else:
                     result_image = next_image[i]
                 result_image = write_text(result_image, 'Result Image', size=8)
-                image_row.append(result_image)
             # stitch images together
             image_row = [
                 current_image,

@@ -40,9 +40,9 @@ class DiscreteDecoder(nn.Module):
         sample_max=False,
     ):
         #n = torch.norm(x, dim=-1)
-        #print('Discrete Min:', n.min())
-        #print('Discrete Mean:', n.mean())
-        #print('Discrete Max:', n.max())
+        #print('Discrete Input Min:', n.min())
+        #print('Discrete Input Mean:', n.mean())
+        #print('Discrete Input Max:', n.max())
         
         logits = self.mlp(x)
         if torch.any(~torch.isfinite(logits)):
@@ -71,6 +71,11 @@ class DiscreteDecoder(nn.Module):
             entropy = distribution.entropy()
 
         embedding = self.embedding(physical_index)
+        
+        #embedding_norm = torch.norm(embedding, dim=-1)
+        #print('Discrete Embedding Norm min: %f'%float(embedding_norm.min()))
+        #print('Discrete Embedding Norm mean: %f'%float(embedding_norm.mean()))
+        #print('Discrete Embedding Norm max: %f'%float(embedding_norm.max()))
         #x = x + self.embedding_norm(embedding)
         x = x + embedding
         return sample, log_prob, entropy, x, logits
