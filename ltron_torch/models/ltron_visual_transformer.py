@@ -419,6 +419,8 @@ class LtronVisualTransformer(nn.Module):
                     sample_expert['cursor']['button'], range(b)]
                 r_islands_new = snap_eq[
                     ~sample_expert['cursor']['button'], range(b)]
+            else:
+                pass
             
             s, lp, e, cx, cursor_logits = self.cursor_decoder(
                 x,
@@ -470,8 +472,10 @@ class LtronVisualTransformer(nn.Module):
                 'release' : torch.zeros((b,2), dtype=torch.long).to(device),
             }
         
-        if config.log_prob_losses:
+        if self.config.log_prob_losses:
             losses = {'logp':-log_prob}
+        else:
+            pass
         
         return {
             'value' : value,
