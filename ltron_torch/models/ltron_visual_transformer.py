@@ -58,6 +58,8 @@ class LtronVisualTransformerConfig(
     viewpoint_loss_scale = 1.
     rotate_loss_scale = 1.
     translate_loss_scale = 1.
+    
+    log_prob_losses = False
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -107,11 +109,11 @@ class LtronVisualTransformer(nn.Module):
         self.encoder = Transformer(config)
         
         # build the dpt layernorm
-        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
-            self.dpt_norms = nn.ModuleList([
-                nn.LayerNorm(config.channels)
-                for _ in config.dpt_blocks
-            ])
+        #if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
+        #    self.dpt_norms = nn.ModuleList([
+        #        nn.LayerNorm(config.channels)
+        #        for _ in config.dpt_blocks
+        #    ])
         
         # pre decoder layernorm
         self.predecoder_norm = nn.LayerNorm(config.channels)
@@ -408,6 +410,16 @@ class LtronVisualTransformer(nn.Module):
                 h = self.config.image_height // self.config.tile_height
                 w = self.config.image_width // self.config.tile_width
                 image_x = image_x.permute(1,2,0).reshape(b,c,h,w)
+            
+            # recompute islands using old style
+            if sample is not None and self.config.old_island_style:
+                snap_eq = torch.stack((neg_snap_eq, pos_snap_eq), dim=0)
+                b = neg_snap_eq.shape[0]
+                c_islands_new = snap_eq[
+                    sample_expert['cursor']['button'], range(b)]
+                r_islands_new = snap_eq[
+                    ~sample_expert['cursor']['button'], range(b)]
+            
             s, lp, e, cx, cursor_logits = self.cursor_decoder(
                 x,
                 image_x,
@@ -417,7 +429,7 @@ class LtronVisualTransformer(nn.Module):
                 release_eq=r_islands,
                 do_release=do_release,
                 sample=cursor_sample,
-                sample_max=sample_max,
+                sample_max=False, #sample_max,
             )
             out_sample['cursor'] = s
             
@@ -458,6 +470,9 @@ class LtronVisualTransformer(nn.Module):
                 'release' : torch.zeros((b,2), dtype=torch.long).to(device),
             }
         
+        if config.log_prob_losses:
+            losses = {'logp':-log_prob}
+        
         return {
             'value' : value,
             'sample' : out_sample,
@@ -478,10 +493,14 @@ class LtronVisualTransformer(nn.Module):
     
     @property
     def loss_names(self):
-        return ['mode_loss', 'cursor_loss'] + [
-            '%s_loss'%name for name, decoder in self.primitive_decoders.items()
-            if not isinstance(decoder, ConstantDecoder)
-        ]
+        if self.config.log_prob_losses:
+            return ['logp']
+        else:
+            return ['mode_loss', 'cursor_loss'] + [
+                '%s_loss'%name
+                for name, decoder in self.primitive_decoders.items()
+                if not isinstance(decoder, ConstantDecoder)
+            ]
     
     def entropy(self, model_output):
         return model_output['entropy']
@@ -599,7 +618,7 @@ class LtronVisualTransformer(nn.Module):
                 elif name == 'translate':
                     t = action['action_primitives']['translate'][i]
                     mode_lines.append(
-                        '%s%s (%i): %.02f'%(prefix, name, r, mode_prob[j]))
+                        '%s%s (%i): %.02f'%(prefix, name, t, mode_prob[j]))
                 else:
                     mode_lines.append(
                         '%s%s: %.02f'%(prefix, name, mode_prob[j]))
