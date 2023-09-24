@@ -332,6 +332,7 @@ class LtronVisualTransformer(nn.Module):
         # push the concatenated tokens through the transformer
         if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             output_layers = self.config.dpt_blocks
+            assert output_layers[-1] == self.config.blocks - 1
         elif self.config.dense_decoder_mode == 'simple':
             output_layers = None
         else:
