@@ -25,6 +25,8 @@ from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
 from ltron_torch.models.transformer import (
     TransformerConfig, Transformer, init_weights)
+from ltron_torch.models.current_target_transformer import (
+    CurrentTargetTransformer)
 from ltron_torch.models.cursor_decoder import CursorDecoder
 from ltron_torch.models.insert_decoder import InsertDecoder
 from ltron_torch.models.decoder import (
@@ -52,6 +54,8 @@ class LtronVisualTransformerConfig(
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
     
+    cross_attention_transformer = False
+    
     mode_loss_scale = 1.
     insert_loss_scale = 1.
     cursor_loss_scale = 1.
@@ -60,6 +64,7 @@ class LtronVisualTransformerConfig(
     translate_loss_scale = 1.
     
     log_prob_losses = False
+    bce_click_losses = False
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -106,7 +111,10 @@ class LtronVisualTransformer(nn.Module):
             torch.randn(1, 1, config.channels))
         
         # build the transformer
-        self.encoder = Transformer(config)
+        if self.config.cross_attention_transformer:
+            self.encoder = CurrentTargetTransformer(config)
+        else:
+            self.encoder = Transformer(config)
         
         # build the dpt layernorm
         #if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
@@ -293,6 +301,7 @@ class LtronVisualTransformer(nn.Module):
         # push the concatenated tokens through the transformer
         if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
             output_layers = self.config.dpt_blocks
+            assert output_layers[-1] == self.config.blocks - 1
         elif self.config.dense_decoder_mode == 'simple':
             output_layers = None
         else:
@@ -435,32 +444,33 @@ class LtronVisualTransformer(nn.Module):
             )
             out_sample['cursor'] = s
             
-            x = x + cx * cursor_mask.view(-1,1)
-            log_prob = log_prob + lp * cursor_mask
-            losses['cursor_loss'] = -(
-                lp * cursor_mask * self.config.cursor_loss_scale)
-            '''
-            if sample is None:
-                losses['cursor_loss'] = 0.
+            if self.config.bce_click_losses:
+                if sample is None:
+                    losses['cursor_loss'] = 0.
+                else:
+                    button_loss = F.cross_entropy(
+                        cursor_logits['button'], sample[1]['cursor']['button'],
+                        reduction='none',
+                    ) * cursor_mask.view(-1,1)
+                    click_loss = F.binary_cross_entropy_with_logits(
+                        cursor_logits['click'], sample[2].float(),
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    release_loss = F.binary_cross_entropy_with_logits(
+                        cursor_logits['release'], sample[3].float(),
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    losses['cursor_loss'] = (
+                        button_loss.mean() +
+                        click_loss.mean() +
+                        release_loss.mean()
+                    )
             else:
-                button_loss = F.cross_entropy(
-                    cursor_logits['button'], sample[1]['cursor']['button'],
-                    reduction='none',
-                ) * cursor_mask.view(-1,1)
-                click_loss = F.binary_cross_entropy_with_logits(
-                    cursor_logits['click'], sample[2].float(),
-                    reduction='none',
-                ).view(b,-1) * cursor_mask.view(-1,1)
-                release_loss = F.binary_cross_entropy_with_logits(
-                    cursor_logits['release'], sample[3].float(),
-                    reduction='none',
-                ).view(b,-1) * cursor_mask.view(-1,1)
-                losses['cursor_loss'] = (
-                    button_loss.mean() +
-                    click_loss.mean() +
-                    release_loss.mean()
-                )
-            '''
+                x = x + cx * cursor_mask.view(-1,1)
+                log_prob = log_prob + lp * cursor_mask
+                losses['cursor_loss'] = -(
+                    lp * cursor_mask * self.config.cursor_loss_scale)
+            
             entropy = entropy + e * cursor_mask
             logits['cursor'] = cursor_logits
         else:
@@ -513,7 +523,10 @@ class LtronVisualTransformer(nn.Module):
         return sample_output['sample']
     
     def compute_action(self, model_output):
-        return torch_to_numpy(model_output['sample'])
+        return (
+            torch_to_numpy(model_output['sample']),
+            torch_to_numpy(model_output['log_prob']),
+        )
     
     def value(self, output):
         return output['value']
