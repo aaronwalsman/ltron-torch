@@ -94,6 +94,24 @@ class CursorDecoder(nn.Module):
         
         return out_sample, log_prob, entropy, x, logits
 
+class DPTScreenDecoder2(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.k_head = DenseDecoder(config)
+        self.q_head = linear_stack(
+            self.config.decoder_layers,
+            self.config.channels,
+            out_channels=config.image_attention_channels,
+            first_norm=True,
+            nonlinearity=config.nonlinearity,
+            Norm=nn.LayerNorm,
+        )
+        #self.q_norm = nn.LayerNorm(64)
+        self.content_linear = nn.Linear(
+            config.image_attention_channels, config.channels)
+        
+
 class DPTScreenDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
