@@ -57,3 +57,15 @@ def eval_ltron_teacher_distill(config=None):
             eval_env_kwargs={'config':config, 'train':False},
         )
     trainer.evaluate(0,0)
+
+def eval_ltron_teacher_distill_full(config=None):
+    if config is None:
+        config = LtronInteractiveTrainerConfig.from_commandline()
+    if config.algorithm == 'teacher_distill':
+        trainer = TeacherDistillTrainer(
+            config=config,
+            ModelClass=LtronVisualTransformer,
+            train_env_kwargs={'config':config, 'train':True},
+            eval_env_kwargs={'config':config, 'train':False},
+        )
+    trainer.evaluate(0,0)
