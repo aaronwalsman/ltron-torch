@@ -607,6 +607,8 @@ class LtronVisualTransformer(nn.Module):
             mode_name = mode_space.names[mode[i]]
             step_data['mode'] = mode_name
             step_data['mode_p'] = {}
+            step_data['terminal'] = terminal[i]
+            step_data['truncated'] = truncated[i]
             mode_logits = model_output['logits']['action_primitives']['mode'][i]
             mode_prob = torch.softmax(mode_logits, dim=0).cpu()
             mode_lines = []
