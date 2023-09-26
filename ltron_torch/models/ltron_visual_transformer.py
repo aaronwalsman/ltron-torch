@@ -66,7 +66,8 @@ class LtronVisualTransformerConfig(
     translate_loss_scale = 1.
     
     log_prob_losses = False
-    bce_click_losses = False
+    #bce_cursor_losses = False
+    cursor_losses = 'equivalence_cross_entropy'
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -330,14 +331,15 @@ class LtronVisualTransformer(nn.Module):
         x = self.embedding_dropout(x)
         
         # push the concatenated tokens through the transformer
-        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum', 'dpt_film'):
             output_layers = self.config.dpt_blocks
-            assert output_layers[-1] == self.config.blocks - 1
+            #assert output_layers[-1] == self.config.blocks - 1
         elif self.config.dense_decoder_mode == 'simple':
             output_layers = None
         else:
             raise ValueError(
-                'config.dense_decoder_mode "%s" should be (dpt,dpt_sum,simple)')
+                'config.dense_decoder_mode "%s" should be in '
+                '(dpt,dpt_sum,simple,dpt_film)')
         x = self.encoder(x, output_layers=output_layers)
         decode_x = self.predecoder_norm(x[-1][0])
         
@@ -346,7 +348,7 @@ class LtronVisualTransformer(nn.Module):
         #print('Decoder Norm Mean: %f'%float(decode_norm.mean()))
         #print('Decoder Norm Max: %f'%float(decode_norm.max()))
         
-        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
+        if self.config.dense_decoder_mode in ('dpt', 'dpt_sum', 'dpt_film'):
             image_x = [
                 #self.dpt_norms[j](x[i][1:hw+1])
                 x[i][1:hw+1]
@@ -354,6 +356,9 @@ class LtronVisualTransformer(nn.Module):
             ]
         elif self.config.dense_decoder_mode == 'simple':
             image_x = x[-1][1:hw+1]
+        else:
+            raise Exception(
+                'bad dense_decoder_mode: %s'%self.config.dense_decoder_mode)
         
         value = self.critic_decoder(decode_x)
         
@@ -437,7 +442,7 @@ class LtronVisualTransformer(nn.Module):
                 sample_expert['cursor']
             )
             
-            if self.config.dense_decoder_mode in ('dpt', 'dpt_sum'):
+            if self.config.dense_decoder_mode in ('dpt', 'dpt_sum', 'dpt_film'):
                 _, b, c = image_x[0].shape
                 h = self.config.image_height // self.config.tile_height
                 w = self.config.image_width // self.config.tile_width
@@ -450,7 +455,11 @@ class LtronVisualTransformer(nn.Module):
                 h = self.config.image_height // self.config.tile_height
                 w = self.config.image_width // self.config.tile_width
                 image_x = image_x.permute(1,2,0).reshape(b,c,h,w)
+            else:
+                raise Exception(
+                    'Bad dense decoder mode: %s'%self.config.dense_decoder_mode)
             
+            '''
             # recompute islands using old style
             if sample is not None and self.config.old_island_style:
                 snap_eq = torch.stack((neg_snap_eq, pos_snap_eq), dim=0)
@@ -461,6 +470,7 @@ class LtronVisualTransformer(nn.Module):
                     ~sample_expert['cursor']['button'], range(b)]
             else:
                 pass
+            '''
             
             s, lp, e, cx, cursor_logits = self.cursor_decoder(
                 x,
@@ -474,15 +484,17 @@ class LtronVisualTransformer(nn.Module):
                 sample_max=False, #sample_max,
             )
             out_sample['cursor'] = s
+            x = x + cx * cursor_mask.view(-1,1)
             
-            if self.config.bce_click_losses:
+            #if self.config.bce_cursor_losses:
+            if self.config.cursor_losses == 'bce':
                 if sample is None:
                     losses['cursor_loss'] = 0.
                 else:
                     button_loss = F.cross_entropy(
                         cursor_logits['button'], sample[1]['cursor']['button'],
                         reduction='none',
-                    ) * cursor_mask.view(-1,1)
+                    ) * cursor_mask
                     click_loss = F.binary_cross_entropy_with_logits(
                         cursor_logits['click'], sample[2].float(),
                         reduction='none',
@@ -496,11 +508,62 @@ class LtronVisualTransformer(nn.Module):
                         click_loss.mean() +
                         release_loss.mean()
                     )
-            else:
-                x = x + cx * cursor_mask.view(-1,1)
+            elif self.config.cursor_losses == 'gaussian':
+                if sample is None:
+                    losses['cursor_loss'] = 0.
+                else:
+                    '''
+                    button = sample[1]['cursor']['button']
+                    click_map = sample[2]
+                    release_map = sample[3]
+                    
+                    snap_eq = torch.stack((neg_snap_eq, pos_snap_eq), dim=0)
+                    b = neg_snap_eq.shape[0]
+                    c_islands = snap_eq[button, range(b)]
+                    r_islands = snap_eq[~button, range(b)]
+                    
+                    # compute island centroids
+                    b = c_islands.shape[0]
+                    cbb, cyy, cxx = torch.where(c_islands * click_map)
+                    c_values = c_islands[cbb, cyy, cxx]
+                    cbv = cbb + (c_values * b)
+                    unique_cbv = torch.unique(cbv)
+                    #cbu = unique_cbv % 64
+                    #cvu = unique_cbv // 64
+                    all_bv = (
+                        c_islands * b +
+                        torch.arange(b, device=cbv.device).view(-1,1,1)
+                    )
+                    # compute heatmaps
+                    '''
+                    click_heatmap = sample[2].float() / 65536.
+                    release_heatmap = sample[3].float() / 65536.
+                    button_loss = F.cross_entropy(
+                        cursor_logits['button'], sample[1]['cursor']['button'],
+                        reduction='none',
+                    ) * cursor_mask
+                    click_loss = F.smooth_l1_loss(
+                        cursor_logits['click'], click_heatmap,
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    release_loss = F.smooth_l1_loss(
+                        cursor_logits['release'], release_heatmap,
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)*do_release.view(-1,1)
+                    losses['cursor_loss'] = (
+                        button_loss.mean() + 
+                        click_loss.mean() +
+                        release_loss.mean()
+                    ) * self.config.cursor_loss_scale
+            
+            elif self.config.cursor_losses == 'equivalence_cross_entropy':
                 log_prob = log_prob + lp * cursor_mask
                 losses['cursor_loss'] = -(
                     lp * cursor_mask * self.config.cursor_loss_scale)
+            
+            else:
+                raise Exception(
+                    'Unknown cursor losses: %s'%self.config.cursor_losses)
             
             entropy = entropy + e * cursor_mask
             logits['cursor'] = cursor_logits
@@ -609,6 +672,15 @@ class LtronVisualTransformer(nn.Module):
                 #    click_heatmaps, click_islands)
                 #release_eq_dist = equivalent_probs_categorical(
                 #    release_heatmaps, release_islands)
+            elif self.config.cursor_losses == 'gaussian':
+                click_heatmaps = torch.clamp(
+                    click_logits.view(b,h,w,1),
+                    torch.zeros((1,), device=click_logits.device)
+                )
+                release_heatmaps = torch.clamp(
+                    release_logits.view(b,h,w,1),
+                    torch.zeros((1,), device=release_logits.device)
+                )
             else:
                 click_heatmaps = torch.softmax(
                     click_logits.view(b,h*w), dim=-1).view(b,h,w,1)
