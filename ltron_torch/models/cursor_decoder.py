@@ -15,7 +15,7 @@ from ltron_torch.models.equivalence import (
     equivalent_outcome_sigmoid,
 )
 from ltron_torch.models.decoder import DiscreteDecoder
-from ltron_torch.models.dense_decoder import DenseDecoder
+from ltron_torch.models.dense_decoder import DenseDecoder, FILMDenseDecoder
 
 class CursorDecoder(nn.Module):
     def __init__(self, config):
@@ -30,9 +30,13 @@ class CursorDecoder(nn.Module):
         elif config.dense_decoder_mode == 'simple':
             self.click_decoder = ScreenDecoder(config)
             self.release_decoder = ScreenDecoder(config)
+        elif config.dense_decoder_mode == 'dpt_film':
+            self.click_decoder = DPTFilmScreenDecoder(config)
+            self.release_decoder = DPTFilmScreenDecoder(config)
         else:
             raise ValueError(
-                'config.dense_decoder_mode "%s" should in (dpt,dpt_sum,simple)')
+                'config.dense_decoder_mode "%s" should in '
+                '(dpt,dpt_sum,simple,dpt_film)')
         self.forward_passes = 0
     
     def forward(self,
@@ -94,23 +98,81 @@ class CursorDecoder(nn.Module):
         
         return out_sample, log_prob, entropy, x, logits
 
-class DPTScreenDecoder2(nn.Module):
+class DPTFilmScreenDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.k_head = DenseDecoder(config)
-        self.q_head = linear_stack(
+        self.dense_head = FILMDenseDecoder(config)
+        self.film_head = linear_stack(
             self.config.decoder_layers,
             self.config.channels,
-            out_channels=config.image_attention_channels,
+            out_channels=config.channels,
             first_norm=True,
             nonlinearity=config.nonlinearity,
             Norm=nn.LayerNorm,
         )
-        #self.q_norm = nn.LayerNorm(64)
+        self.heatmap_conv = nn.Conv2d(64, 1, kernel_size=1, padding=0)
         self.content_linear = nn.Linear(
             config.image_attention_channels, config.channels)
         
+    def forward(self,
+        x,
+        image_x,
+        equivalence,
+        sample=None,
+        sample_max=False,
+    ):
+        # get dimension sizes
+        b,c,h,w = image_x[0].shape
+        th = self.config.tile_height 
+        tw = self.config.tile_width
+        ih = self.config.image_height
+        iw = self.config.image_width
+        
+        x = self.film_head(x)
+        dense_x = self.dense_head(x, *image_x)
+        map_logits = self.heatmap_conv(dense_x).view(b,ih,iw)
+        
+        if self.config.cursor_losses == 'gaussian':
+            probs = torch.clamp(
+                map_logits, min=torch.zeros((1,), device=x.device))
+            #if torch.max(probs) <= 0.:
+            #    probs = probs + 1e-5
+            try:
+                click_distribution = Categorical(probs=probs.view(b,ih*iw))
+            except ValueError:
+                # this happens sometimes when everything is negative
+                click_distribution = Categorical(
+                    probs=torch.ones_like(probs.view(b,ih*iw)))
+            screen_logits = map_logits
+        else:
+            click_distribution = Categorical(logits=map_logits.view(b,ih*iw))
+            screen_logits = click_distribution.logits.view(b, ih, iw)
+        
+        # get the sample
+        if sample is None:
+            if sample_max:
+                flat_sample = torch.argmax(click_distribution.logits, dim=-1)
+            else:
+                flat_sample = click_distribution.sample()
+            sample_y = torch.div(flat_sample, iw, rounding_mode='floor')
+            sample_x = flat_sample % iw
+            sample = torch.stack((sample_y, sample_x), dim=-1)
+        else:
+            sample_y = sample[:,0]
+            sample_x = sample[:,1]
+            flat_sample = sample_y * iw + sample_x
+        
+        # compute log prob and entropy
+        log_prob = click_distribution.log_prob(flat_sample)
+        entropy = click_distribution.entropy()
+        
+        content_x = self.content_linear(
+            dense_x[range(b),:,sample_y,sample_x])
+
+        x = x + content_x
+
+        return sample, log_prob, entropy, x, screen_logits
 
 class DPTScreenDecoder(nn.Module):
     def __init__(self, config):
@@ -161,14 +223,18 @@ class DPTScreenDecoder(nn.Module):
             self.config.log_sigmoid_screen_attention
         ):
             p = torch.sigmoid(a)
-            print('A')
             try:
                 click_distribution = Categorical(probs=p.view(b,ih*iw))
+                screen_logits = click_distribution.logits.view(b, ih, iw)
             except:
                 breakpoint()
+        elif self.config.cursor_losses == 'gaussian':
+            probs = torch.clamp(a, min=torch.zeros((1,), device=a.device))
+            click_distribution = Categorical(probs=probs.view(b,ih*iw))
+            screen_logits = a
         else:
             click_distribution = Categorical(logits=a.view(b,ih*iw))
-        screen_logits = click_distribution.logits.view(b, ih, iw)
+            screen_logits = click_distribution.logits.view(b, ih, iw)
         
         # get the sample
         if sample is None:
