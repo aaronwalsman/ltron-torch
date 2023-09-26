@@ -1,6 +1,8 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ltron_torch.models.film import FILMLayer
+
 '''
 DPT
 '''
@@ -148,6 +150,53 @@ class DenseDecoder(nn.Module):
         f3 = self.fusion3(f4, r3)
         f2 = self.fusion2(f3, r2)
         f1 = self.fusion1(f2, r1)
+        
+        x = self.head(f1)
+        
+        return x
+
+class FILMDenseDecoder(nn.Module):
+    def __init__(self, config, upscale=True, include_head=True):
+        super().__init__()
+        
+        self.film1 = FILMLayer(config.channels, 256, dim=1)
+        self.film2 = FILMLayer(config.channels, 256, dim=1)
+        self.film3 = FILMLayer(config.channels, 256, dim=1)
+        self.film4 = FILMLayer(config.channels, 256, dim=1)
+        
+        self.reassembly1 = ReassemblyBlock1(
+            config.channels, 256)
+        self.reassembly2 = ReassemblyBlock2(
+            config.channels, 256)
+        self.reassembly3 = ReassemblyBlock3(
+            config.channels, 256)
+        self.reassembly4 = ReassemblyBlock4(
+            config.channels, 256)
+        
+        self.fusion1 = FusionBlock(256)
+        self.fusion2 = FusionBlock(256)
+        self.fusion3 = FusionBlock(256)
+        self.fusion4 = FusionBlock(256)
+        
+        if include_head:
+            self.head = Head(config, upscale)
+        else:
+            self.head = nn.Identity()
+    
+    def forward(self, x, x1, x2, x3, x4):
+        r1 = self.reassembly1(x1)
+        r2 = self.reassembly2(x2)
+        r3 = self.reassembly3(x3)
+        r4 = self.reassembly4(x4)
+        
+        f4 = self.fusion4(r4)
+        f4 = self.film4(x, f4)
+        f3 = self.fusion3(f4, r3)
+        f3 = self.film3(x, f3)
+        f2 = self.fusion2(f3, r2)
+        f2 = self.film2(x, f2)
+        f1 = self.fusion1(f2, r1)
+        f1 = self.film1(x, f1)
         
         x = self.head(f1)
         
