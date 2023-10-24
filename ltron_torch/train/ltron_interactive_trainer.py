@@ -1,7 +1,9 @@
+import os
+
 import numpy
 
 import torch
-import torch.nn.functional as F
+import torch.multiprocessing as mp
 
 from splendor.masks import color_index_to_byte
 
@@ -33,18 +35,37 @@ class LtronInteractiveTrainerConfig(
     # change default
     optimizer = 'adamw'
     grad_norm_clipping = 1.
+    distributed_world_size = None
 
-def train_ltron_teacher_distill(config=None):
-    if config is None:
-        config = LtronInteractiveTrainerConfig.from_commandline()
+def distributed_train(rank, world_size, config):
     if config.algorithm == 'teacher_distill':
         trainer = TeacherDistillTrainer(
             config=config,
             ModelClass=LtronVisualTransformer,
             train_env_kwargs={'config':config, 'train':True},
             eval_env_kwargs={'config':config, 'train':False},
+            distributed_rank=rank,
+            distributed_world_size=world_size,
         )
-    trainer.train()
+    try:
+        trainer.train()
+    finally:
+        trainer.cleanup()
+    
+
+def train_ltron_teacher_distill(config=None):
+    if config is None:
+        config = LtronInteractiveTrainerConfig.from_commandline()
+    if config.distributed_world_size is None:
+        distributed_train(None, None, config)
+    else:
+        os.environ['MKL_THREADING_LAYER'] = 'GNU'
+        mp.spawn(
+            distributed_train,
+            args=(config.distributed_world_size, config,),
+            nprocs=config.distributed_world_size,
+            join=True,
+        )
 
 def eval_ltron_teacher_distill(config=None):
     if config is None:
@@ -55,6 +76,8 @@ def eval_ltron_teacher_distill(config=None):
             ModelClass=LtronVisualTransformer,
             train_env_kwargs={'config':config, 'train':True},
             eval_env_kwargs={'config':config, 'train':False},
+            distributed_rank=0,
+            distributed_world_size=1,
         )
     trainer.evaluate(0,0)
 
