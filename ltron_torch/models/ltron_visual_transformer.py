@@ -530,6 +530,48 @@ class LtronVisualTransformer(nn.Module):
                 losses['cursor_loss'] = -(
                     lp * cursor_mask * self.config.cursor_loss_scale)
             
+            elif self.config.cursor_losses == 'logit_huber' or 'logit_mse':
+                target_p = 0.999
+                n_click = 1
+                n_no_click = h*w
+                k = (n_no_click * target_p) / (n_click * (1. - target_p))
+                logk = math.log(k)
+                target_click = logk/2.
+                target_no_click = -logk/2.
+                click_target = (
+                    (c_islands * target_click) +
+                    ((1. - c_islands) * target_no_click)
+                )
+                release_target = (
+                    (r_islands * target_click) +
+                    ((1. - r_islands) * target_no_click)
+                )
+                
+                if self.config.cursor_losses == 'logit_huber':
+                    loss_fn = F.smooth_l1_loss
+                elif self.config.cursor_losses = 'logit_mse':
+                    loss_fn = F.mse_loss
+                
+                breakpoint()
+                
+                button_loss = F.cross_entropy(
+                    cursor_logits['button'], sample[1]['cursor']['button'],
+                    reduction='none',
+                ) * cursor_mask
+                click_loss = loss_fn(
+                    cursor_logits['click'], click_target,
+                    reduction='none',
+                ).view(b,-1) * cursor_mask.view(-1,1)
+                release_loss = loss_fn(
+                    cursor_logits['release'], release_target,
+                    reduction='none',
+                ).view(b,-1) * cursor_mask.view(-1,1)
+                losses['cursor_loss'] = (
+                    button_loss.mean() +
+                    click_loss.mean() +
+                    release_loss.mean()
+                )
+            
             else:
                 raise Exception(
                     'Unknown cursor losses: %s'%self.config.cursor_losses)
