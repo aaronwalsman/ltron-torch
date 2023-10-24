@@ -141,10 +141,10 @@ class LtronVisualTransformer(nn.Module):
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
             elif name in (
-                'pick_and_place', 'remove', 'done', 'assemble_step', 'phase',
+                'pick_and_place', 'remove', 'done', 'phase',
             ):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
-            elif name in ('viewpoint', 'rotate', 'translate'):
+            elif name in ('viewpoint', 'rotate', 'translate', 'assemble_step'):
                 primitive_decoders[name] = DiscreteDecoder(config, subspace.n)
                     #config, subspace.n-1, sample_offset=1)
         
@@ -153,7 +153,7 @@ class LtronVisualTransformer(nn.Module):
         # build the cursor decoders
         #self.image_norm = nn.LayerNorm(config.channels)
         self.cursor_decoder = CursorDecoder(config)
-        self.critic_decoder = CriticDecoder(config)
+        #self.critic_decoder = CriticDecoder(config)
         
         # load checkpoint or initialize weights
         if checkpoint is not None:
@@ -329,7 +329,7 @@ class LtronVisualTransformer(nn.Module):
             raise Exception(
                 'bad dense_decoder_mode: %s'%self.config.dense_decoder_mode)
         
-        value = self.critic_decoder(decode_x)
+        #value = self.critic_decoder(decode_x)
         
         #decode_x = output['decode_x']
         #image_x = output['image_x']
@@ -593,7 +593,7 @@ class LtronVisualTransformer(nn.Module):
             pass
         
         return {
-            'value' : value,
+            #'value' : value,
             'sample' : out_sample,
             'log_prob' : log_prob,
             'entropy' : entropy,
@@ -633,8 +633,8 @@ class LtronVisualTransformer(nn.Module):
             torch_to_numpy(model_output['log_prob']),
         )
     
-    def value(self, output):
-        return output['value']
+    #def value(self, output):
+    #    return output['value']
     
     def save_observation(self, observation, path, index):
         breakpoint()
@@ -734,6 +734,8 @@ class LtronVisualTransformer(nn.Module):
             mode_name = mode_space.names[mode[i]]
             step_data['mode'] = mode_name
             step_data['mode_p'] = {}
+            step_data['terminal'] = terminal[i]
+            step_data['truncated'] = truncated[i]
             mode_logits = model_output['logits']['action_primitives']['mode'][i]
             mode_prob = torch.softmax(mode_logits, dim=0).cpu()
             mode_lines = []
