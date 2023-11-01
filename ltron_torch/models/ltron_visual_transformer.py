@@ -1,3 +1,4 @@
+import math
 import os
 import json
 
@@ -471,7 +472,7 @@ class LtronVisualTransformer(nn.Module):
                     release_loss = F.binary_cross_entropy_with_logits(
                         cursor_logits['release'], sample[3].float(),
                         reduction='none',
-                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    ).view(b,-1) * cursor_mask.view(-1,1)*do_release.view(-1,1)
                     losses['cursor_loss'] = (
                         button_loss.mean() +
                         click_loss.mean() +
@@ -531,46 +532,48 @@ class LtronVisualTransformer(nn.Module):
                     lp * cursor_mask * self.config.cursor_loss_scale)
             
             elif self.config.cursor_losses == 'logit_huber' or 'logit_mse':
-                target_p = 0.999
-                n_click = 1
-                n_no_click = h*w
-                k = (n_no_click * target_p) / (n_click * (1. - target_p))
-                logk = math.log(k)
-                target_click = logk/2.
-                target_no_click = -logk/2.
-                click_target = (
-                    (c_islands * target_click) +
-                    ((1. - c_islands) * target_no_click)
-                )
-                release_target = (
-                    (r_islands * target_click) +
-                    ((1. - r_islands) * target_no_click)
-                )
-                
-                if self.config.cursor_losses == 'logit_huber':
-                    loss_fn = F.smooth_l1_loss
-                elif self.config.cursor_losses = 'logit_mse':
-                    loss_fn = F.mse_loss
-                
-                breakpoint()
-                
-                button_loss = F.cross_entropy(
-                    cursor_logits['button'], sample[1]['cursor']['button'],
-                    reduction='none',
-                ) * cursor_mask
-                click_loss = loss_fn(
-                    cursor_logits['click'], click_target,
-                    reduction='none',
-                ).view(b,-1) * cursor_mask.view(-1,1)
-                release_loss = loss_fn(
-                    cursor_logits['release'], release_target,
-                    reduction='none',
-                ).view(b,-1) * cursor_mask.view(-1,1)
-                losses['cursor_loss'] = (
-                    button_loss.mean() +
-                    click_loss.mean() +
-                    release_loss.mean()
-                )
+                if sample is None:
+                    losses['cursor_loss'] = 0.
+                else:
+                    target_p = 0.999
+                    n_click = 1
+                    n_no_click = (
+                        self.config.image_height * self.config.image_width)
+                    k = (n_no_click * target_p) / (n_click * (1. - target_p))
+                    logk = math.log(k)
+                    target_click = logk/2.
+                    target_no_click = -logk/2.
+                    click_target = (
+                        (c_islands * target_click) +
+                        ((1. - c_islands) * target_no_click)
+                    )
+                    release_target = (
+                        (r_islands * target_click) +
+                        ((1. - r_islands) * target_no_click)
+                    )
+                    
+                    if self.config.cursor_losses == 'logit_huber':
+                        loss_fn = F.smooth_l1_loss
+                    elif self.config.cursor_losses == 'logit_mse':
+                        loss_fn = F.mse_loss
+                    
+                    button_loss = F.cross_entropy(
+                        cursor_logits['button'], sample[1]['cursor']['button'],
+                        reduction='none',
+                    ) * cursor_mask
+                    click_loss = loss_fn(
+                        cursor_logits['click'], click_target,
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    release_loss = loss_fn(
+                        cursor_logits['release'], release_target,
+                        reduction='none',
+                    ).view(b,-1) * cursor_mask.view(-1,1)*do_release.view(-1,1)
+                    losses['cursor_loss'] = (
+                        button_loss +
+                        click_loss.mean(dim=1) +
+                        release_loss.mean(dim=1)
+                    )
             
             else:
                 raise Exception(
