@@ -560,20 +560,23 @@ class LtronVisualTransformer(nn.Module):
                     button_loss = F.cross_entropy(
                         cursor_logits['button'], sample[1]['cursor']['button'],
                         reduction='none',
-                    ) * cursor_mask
+                    )
                     click_loss = loss_fn(
                         cursor_logits['click'], click_target,
                         reduction='none',
-                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    ).view(b,-1)
                     release_loss = loss_fn(
                         cursor_logits['release'], release_target,
                         reduction='none',
-                    ).view(b,-1) * cursor_mask.view(-1,1)*do_release.view(-1,1)
+                    ).view(b,-1) * do_release.view(-1,1)
                     losses['cursor_loss'] = (
                         button_loss +
                         click_loss.mean(dim=1) +
                         release_loss.mean(dim=1)
-                    )
+                    ) * cursor_mask * self.config.cursor_loss_scale
+                    
+                    #if torch.any(do_release):
+                    #    breakpoint()
             
             else:
                 raise Exception(
