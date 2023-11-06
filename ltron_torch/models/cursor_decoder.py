@@ -239,7 +239,8 @@ class DPTScreenDecoder(nn.Module):
             screen_logits = a
         else:
             click_distribution = Categorical(logits=a.view(b,ih*iw))
-            screen_logits = click_distribution.logits.view(b, ih, iw)
+            #screen_logits = click_distribution.logits.view(b, ih, iw)
+            screen_logits = a.view(b,ih,iw)
         
         # get the sample
         if sample is None:
