@@ -894,13 +894,13 @@ class LtronVisualTransformer(nn.Module):
                         else:
                             draw_square(
                                 expert_image, *click_yx, 3, (255,0,0))
-                
+                        
                         expert_click_islands = expert[2]
                         expert_click_image = image.copy()
                         expert_click_image = heatmap_overlay(
                             expert_click_image,
                             expert_click_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [255,0,0],
                             background_scale=0.25,
                             max_normalize=True,
@@ -925,7 +925,7 @@ class LtronVisualTransformer(nn.Module):
                         expert_release_image = heatmap_overlay(
                             expert_release_image,
                             expert_release_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [0,0,255],
                             background_scale=0.25,
                             max_normalize=True,
