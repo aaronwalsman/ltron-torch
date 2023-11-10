@@ -1,3 +1,4 @@
+import math
 import os
 import json
 
@@ -152,10 +153,10 @@ class LtronVisualTransformer(nn.Module):
             elif name == 'insert':
                 primitive_decoders[name] = InsertDecoder(config)
             elif name in (
-                'pick_and_place', 'remove', 'done', 'assemble_step', 'phase',
+                'pick_and_place', 'remove', 'done', 'phase',
             ):
                 primitive_decoders[name] = ConstantDecoder(config, 1)
-            elif name in ('viewpoint', 'rotate', 'translate'):
+            elif name in ('viewpoint', 'rotate', 'translate', 'assemble_step'):
                 primitive_decoders[name] = DiscreteDecoder(config, subspace.n)
                     #config, subspace.n-1, sample_offset=1)
         
@@ -164,7 +165,7 @@ class LtronVisualTransformer(nn.Module):
         # build the cursor decoders
         #self.image_norm = nn.LayerNorm(config.channels)
         self.cursor_decoder = CursorDecoder(config)
-        self.critic_decoder = CriticDecoder(config)
+        #self.critic_decoder = CriticDecoder(config)
         
         # load checkpoint or initialize weights
         if checkpoint is not None:
@@ -360,7 +361,7 @@ class LtronVisualTransformer(nn.Module):
             raise Exception(
                 'bad dense_decoder_mode: %s'%self.config.dense_decoder_mode)
         
-        value = self.critic_decoder(decode_x)
+        #value = self.critic_decoder(decode_x)
         
         #decode_x = output['decode_x']
         #image_x = output['image_x']
@@ -502,7 +503,7 @@ class LtronVisualTransformer(nn.Module):
                     release_loss = F.binary_cross_entropy_with_logits(
                         cursor_logits['release'], sample[3].float(),
                         reduction='none',
-                    ).view(b,-1) * cursor_mask.view(-1,1)
+                    ).view(b,-1) * cursor_mask.view(-1,1)*do_release.view(-1,1)
                     losses['cursor_loss'] = (
                         button_loss.mean() +
                         click_loss.mean() +
@@ -561,6 +562,53 @@ class LtronVisualTransformer(nn.Module):
                 losses['cursor_loss'] = -(
                     lp * cursor_mask * self.config.cursor_loss_scale)
             
+            elif self.config.cursor_losses == 'logit_huber' or 'logit_mse':
+                if sample is None:
+                    losses['cursor_loss'] = 0.
+                else:
+                    target_p = 0.999
+                    n_click = 1
+                    n_no_click = (
+                        self.config.image_height * self.config.image_width)
+                    k = (n_no_click * target_p) / (n_click * (1. - target_p))
+                    logk = math.log(k)
+                    target_click = logk/2.
+                    target_no_click = -logk/2.
+                    click_target = (
+                        (c_islands * target_click) +
+                        ((1. - c_islands) * target_no_click)
+                    )
+                    release_target = (
+                        (r_islands * target_click) +
+                        ((1. - r_islands) * target_no_click)
+                    )
+                    
+                    if self.config.cursor_losses == 'logit_huber':
+                        loss_fn = F.smooth_l1_loss
+                    elif self.config.cursor_losses == 'logit_mse':
+                        loss_fn = F.mse_loss
+                    
+                    button_loss = F.cross_entropy(
+                        cursor_logits['button'], sample[1]['cursor']['button'],
+                        reduction='none',
+                    )
+                    click_loss = loss_fn(
+                        cursor_logits['click'], click_target,
+                        reduction='none',
+                    ).view(b,-1)
+                    release_loss = loss_fn(
+                        cursor_logits['release'], release_target,
+                        reduction='none',
+                    ).view(b,-1) * do_release.view(-1,1)
+                    losses['cursor_loss'] = (
+                        button_loss +
+                        click_loss.mean(dim=1) +
+                        release_loss.mean(dim=1)
+                    ) * cursor_mask * self.config.cursor_loss_scale
+                    
+                    #if torch.any(do_release):
+                    #    breakpoint()
+            
             else:
                 raise Exception(
                     'Unknown cursor losses: %s'%self.config.cursor_losses)
@@ -582,7 +630,7 @@ class LtronVisualTransformer(nn.Module):
             pass
         
         return {
-            'value' : value,
+            #'value' : value,
             'sample' : out_sample,
             'log_prob' : log_prob,
             'entropy' : entropy,
@@ -622,8 +670,8 @@ class LtronVisualTransformer(nn.Module):
             torch_to_numpy(model_output['log_prob']),
         )
     
-    def value(self, output):
-        return output['value']
+    #def value(self, output):
+    #    return output['value']
     
     def save_observation(self, observation, path, index):
         breakpoint()
@@ -723,6 +771,8 @@ class LtronVisualTransformer(nn.Module):
             mode_name = mode_space.names[mode[i]]
             step_data['mode'] = mode_name
             step_data['mode_p'] = {}
+            step_data['terminal'] = terminal[i]
+            step_data['truncated'] = truncated[i]
             mode_logits = model_output['logits']['action_primitives']['mode'][i]
             mode_prob = torch.softmax(mode_logits, dim=0).cpu()
             mode_lines = []
@@ -875,13 +925,13 @@ class LtronVisualTransformer(nn.Module):
                         else:
                             draw_square(
                                 expert_image, *click_yx, 3, (255,0,0))
-                
+                        
                         expert_click_islands = expert[2]
                         expert_click_image = image.copy()
                         expert_click_image = heatmap_overlay(
                             expert_click_image,
                             expert_click_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [255,0,0],
                             background_scale=0.25,
                             max_normalize=True,
@@ -906,7 +956,7 @@ class LtronVisualTransformer(nn.Module):
                         expert_release_image = heatmap_overlay(
                             expert_release_image,
                             expert_release_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [0,0,255],
                             background_scale=0.25,
                             max_normalize=True,

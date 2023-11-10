@@ -23,16 +23,20 @@ class CursorDecoder(nn.Module):
         self.button_decoder = DiscreteDecoder(config, 2)
         if config.dense_decoder_mode == 'dpt':
             self.click_decoder = DPTScreenDecoder(config)
-            self.release_decoder = DPTScreenDecoder(config)
+            self.release_decoder = DPTScreenDecoder(
+                config, include_content_linear=False)
         elif config.dense_decoder_mode == 'dpt_sum':
             self.click_decoder = DPTSumScreenDecoder(config)
-            self.release_decoder = DPTSumScreenDecoder(config)
+            self.release_decoder = DPTSumScreenDecoder(
+                config, include_content_linear=False)
         elif config.dense_decoder_mode == 'simple':
             self.click_decoder = ScreenDecoder(config)
-            self.release_decoder = ScreenDecoder(config)
+            self.release_decoder = ScreenDecoder(
+                config, include_content_linear=False)
         elif config.dense_decoder_mode == 'dpt_film':
             self.click_decoder = DPTFilmScreenDecoder(config)
-            self.release_decoder = DPTFilmScreenDecoder(config)
+            self.release_decoder = DPTFilmScreenDecoder(
+                config, include_content_linear=False)
         else:
             raise ValueError(
                 'config.dense_decoder_mode "%s" should in '
@@ -175,7 +179,7 @@ class DPTFilmScreenDecoder(nn.Module):
         return sample, log_prob, entropy, x, screen_logits
 
 class DPTScreenDecoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, include_content_linear=True):
         super().__init__()
         self.config = config
         self.k_head = DenseDecoder(config)
@@ -188,8 +192,9 @@ class DPTScreenDecoder(nn.Module):
             Norm=nn.LayerNorm,
         )
         #self.q_norm = nn.LayerNorm(64)
-        self.content_linear = nn.Linear(
-            config.image_attention_channels, config.channels)
+        if include_content_linear:
+            self.content_linear = nn.Linear(
+                config.image_attention_channels, config.channels)
     
     def forward(self,
         x,
@@ -234,7 +239,8 @@ class DPTScreenDecoder(nn.Module):
             screen_logits = a
         else:
             click_distribution = Categorical(logits=a.view(b,ih*iw))
-            screen_logits = click_distribution.logits.view(b, ih, iw)
+            #screen_logits = click_distribution.logits.view(b, ih, iw)
+            screen_logits = a.view(b,ih,iw)
         
         # get the sample
         if sample is None:
@@ -283,11 +289,12 @@ class DPTScreenDecoder(nn.Module):
         # we used to have separate embeddings for the x,y locations
         #x_pe = self.x_embedding(sample_x)
         #y_pe = self.y_embedding(sample_y)
-        content_x = self.content_linear(k[range(b),:,sample_y,sample_x])
-        
-        #x = x + self.norm(content_x + x_pe + y_pe)
-        #x = self.norm(content_x)
-        x = x + content_x
+        if hasattr(self, 'content_linear'):
+            content_x = self.content_linear(k[range(b),:,sample_y,sample_x])
+            
+            #x = x + self.norm(content_x + x_pe + y_pe)
+            #x = self.norm(content_x)
+            x = x + content_x
         
         return sample, log_prob, entropy, x, screen_logits
     

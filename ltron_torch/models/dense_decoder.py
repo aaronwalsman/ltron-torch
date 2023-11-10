@@ -18,7 +18,7 @@ class ResidualConv(nn.Module):
     def forward(self, x):
         out = F.relu(x)
         out = self.conv1(out)
-        out = F.relu(x)
+        out = F.relu(out)
         out = self.conv2(out)
         return out + x
 
@@ -28,15 +28,18 @@ class FusionBlock(nn.Module):
         self.res1 = ResidualConv(channels)
         self.res2 = ResidualConv(channels)
     
-    def forward(self, *xs):
-        output = xs[0]
-        if len(xs) == 2:
-            output = output + self.res1(xs[1])
-        output = self.res2(output)
-        output = F.interpolate(
-            output, scale_factor=2, mode='bilinear', align_corners=True)
+    def forward(self, xf, xr):
+        #output = xs[0]
+        #if len(xs) == 2:
+        #    output = output + self.res1(xs[1])
+        #output = self.res2(output)
+        x = self.res1(xr)
+        x = x + xf
+        x = self.res2(x)
+        x = F.interpolate(
+            x, scale_factor=2, mode='bilinear', align_corners=True)
         
-        return output
+        return x
 
 def ReassemblyBlock1(in_channels, out_channels):
     return nn.Sequential(
@@ -146,7 +149,7 @@ class DenseDecoder(nn.Module):
         r3 = self.reassembly3(x3)
         r4 = self.reassembly4(x4)
         
-        f4 = self.fusion4(r4)
+        f4 = self.fusion4(0., r4)
         f3 = self.fusion3(f4, r3)
         f2 = self.fusion2(f3, r2)
         f1 = self.fusion1(f2, r1)
@@ -189,7 +192,7 @@ class FILMDenseDecoder(nn.Module):
         r3 = self.reassembly3(x3)
         r4 = self.reassembly4(x4)
         
-        f4 = self.fusion4(r4)
+        f4 = self.fusion4(0., r4)
         f4 = self.film4(x, f4)
         f3 = self.fusion3(f4, r3)
         f3 = self.film3(x, f3)
