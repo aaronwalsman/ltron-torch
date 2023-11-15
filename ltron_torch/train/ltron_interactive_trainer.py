@@ -71,14 +71,24 @@ def eval_ltron_teacher_distill(config=None):
     if config is None:
         config = LtronInteractiveTrainerConfig.from_commandline()
     if config.algorithm == 'teacher_distill':
-        trainer = TeacherDistillTrainer(
-            config=config,
-            ModelClass=LtronVisualTransformer,
-            train_env_kwargs={'config':config, 'train':True},
-            eval_env_kwargs={'config':config, 'train':False},
-            distributed_rank=None,
-            distributed_world_size=None,
-        )
+        if config.distributed_world_size is None:
+            trainer = TeacherDistillTrainer(
+                config=config,
+                ModelClass=LtronVisualTransformer,
+                train_env_kwargs={'config':config, 'train':True},
+                eval_env_kwargs={'config':config, 'train':False},
+                distributed_rank=None,
+                distributed_world_size=None,
+            )
+        else:
+            trainer = TeacherDistillTrainer(
+                config=config,
+                ModelClass=LtronVisualTransformer,
+                train_env_kwargs={'config':config, 'train':True},
+                eval_env_kwargs={'config':config, 'train':False},
+                distributed_rank=0,
+                distributed_world_size=1,
+            )
     trainer.evaluate(0,0)
 
 def eval_ltron_teacher_distill_full(config=None):
