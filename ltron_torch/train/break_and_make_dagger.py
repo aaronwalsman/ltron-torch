@@ -45,7 +45,8 @@ class BreakAndMakeDAggerConfig(
     test_split = '2_2_test'
     train_subset = None
     test_subset = None
-
+    test_on_train = False
+    
     parallel_envs = 4
 
     async_ltron = True
@@ -152,19 +153,22 @@ def train_break_and_make_dagger(config=None):
         print_traceback=True,
     )
     
-    print('Building Test Env')
-    test_config = BreakAndMakeDAggerConfig.translate(
-        config,
-        split='test_split',
-        subset='test_subset',
-    )
-    test_config.tile_color_render = ('transformer' in config.model)
-    test_env = vector_ltron(
-        config.parallel_envs,
-        BreakAndMakeEnv,
-        test_config,
-        print_traceback=True,
-    )
+    if config.test_on_train:
+        test_env = train_env
+    else:
+        print('Building Test Env')
+        test_config = BreakAndMakeDAggerConfig.translate(
+            config,
+            split='test_split',
+            subset='test_subset',
+        )
+        test_config.tile_color_render = ('transformer' in config.model)
+        test_env = vector_ltron(
+            config.parallel_envs,
+            BreakAndMakeEnv,
+            test_config,
+            print_traceback=True,
+        )
     
     assert (
         train_env.metadata['action_space'] == test_env.metadata['action_space'])

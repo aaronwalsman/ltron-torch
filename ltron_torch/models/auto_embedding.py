@@ -75,8 +75,9 @@ class DiscreteEmbedding(nn.Embedding):
         return super().forward(x)
 
 class ImageSpaceEmbedding(nn.Module):
-    def __init__(self, config, observation_space):
+    def __init__(self, config, *observation_spaces):
         super().__init__()
+        observation_space = observation_spaces[0]
         self.config = config
         assert observation_space.height % config.tile_height == 0
         assert observation_space.width % config.tile_width == 0
@@ -85,7 +86,10 @@ class ImageSpaceEmbedding(nn.Module):
         self.total_tiles = self.y_tiles * self.x_tiles
         self.tile_pixels = config.tile_height * config.tile_width
         
-        self.in_channels = observation_space.channels * self.tile_pixels
+        self.in_channels = (
+            sum(space.channels for space in observation_spaces) *
+            self.tile_pixels
+        )
         # RECENT UPDATE
         self.pre_norm = nn.LayerNorm(self.in_channels)
         self.linear = nn.Linear(self.in_channels, config.channels)
@@ -178,8 +182,9 @@ class SE3SpaceEmbedding(nn.Module):
 
 MultiSE3SpaceEmbedding = SE3SpaceEmbedding
 
-def AutoEmbedding(config, observation_space):
+def AutoEmbedding(config, *observation_spaces):
     this_module = sys.modules[__name__]
+    observation_space = observation_spaces[0]
     auto_embedding_name = type(observation_space).__name__ + 'Embedding'
     EmbeddingClass = getattr(this_module, auto_embedding_name)
-    return EmbeddingClass(config, observation_space)
+    return EmbeddingClass(config, *observation_spaces)

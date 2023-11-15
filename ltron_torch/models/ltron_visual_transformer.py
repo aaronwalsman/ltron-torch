@@ -53,6 +53,8 @@ class LtronVisualTransformerConfig(
     embedding_dropout = 0.1
     strict_load = True
     
+    overlay_target_image = False
+    
     dense_decoder_mode = 'dpt'
     dpt_blocks = [2,5,8,11]
     dpt_channels = 256
@@ -86,12 +88,21 @@ class LtronVisualTransformer(nn.Module):
         self.action_space = action_space
         
         # build the embeddings
-        self.image_embedding = AutoEmbedding(
-            config, observation_space['image'])
         if 'target_image' in set(observation_space.keys()):
-            self.target_image_embedding = AutoEmbedding(
-                config, observation_space['target_image'])
+            if not self.config.overlay_target_image:
+                self.image_embedding = AutoEmbedding(
+                    config, observation_space['image'])
+                self.target_image_embedding = AutoEmbedding(
+                    config, observation_space['target_image'])
+            else:
+                self.image_embedding = AutoEmbedding(
+                    config,
+                    observation_space['image'],
+                    observation_space['target_image'],
+                )
         else:
+            self.image_embedding = AutoEmbedding(
+                config, observation_space['image'])
             if 'assembly' in set(observation_space.keys()):
                 self.assembly_embedding = AutoEmbedding(
                     config, observation_space['assembly'])
@@ -194,9 +205,14 @@ class LtronVisualTransformer(nn.Module):
             observation['image'], info, done, model_output)
         
         if 'target_image' in observation:
-            kwargs['target_image_kwargs'] = (
-                self.target_image_embedding.observation_to_kwargs(
-                    observation['target_image'], info, done, model_output))
+            if self.config.overlay_target_image:
+                kwargs['target_image_kwargs'] = (
+                    self.image_embedding.observation_to_kwargs(
+                        observation['target_image'], info, done, model_output))
+            else:
+                kwargs['target_image_kwargs'] = (
+                    self.target_image_embedding.observation_to_kwargs(
+                        observation['target_image'], info, done, model_output))
         else:
             if 'assembly' in observation:
                 kwargs['assembly_kwargs'] = (
@@ -283,14 +299,29 @@ class LtronVisualTransformer(nn.Module):
     ):
         
         # use the embedding to compute the tokens
-        x = self.image_embedding(**image_kwargs)
-        h = self.config.image_height // self.config.tile_height
-        w = self.config.image_width // self.config.tile_width
-        hw,b,c = x.shape
         
-        if target_image_kwargs is not None:
-            target_image_x = self.target_image_embedding(**target_image_kwargs)
-            x = torch.cat((x, target_image_x), dim=0)
+        if target_image_kwargs is None:
+            x = self.image_embedding(**image_kwargs)
+            h = self.config.image_height // self.config.tile_height
+            w = self.config.image_width // self.config.tile_width
+            hw,b,c = x.shape
+        else:
+            if self.config.overlay_target_image:
+                x = torch.cat(
+                    (image_kwargs['x'], target_image_kwargs['x']),
+                    dim=-1,
+                )
+                x = self.image_embedding(x)
+                hw,b,c = x.shape
+            else:
+                x = self.image_embedding(**image_kwargs)
+                hw,b,c = x.shape
+                target_image_x = self.target_image_embedding(
+                    **target_image_kwargs)
+                x = torch.cat((x, target_image_x), dim=0)
+            
+            h = self.config.image_height // self.config.tile_height
+            w = self.config.image_width // self.config.tile_width
         
         if assembly_kwargs is not None:
             assembly_x = self.assembly_embedding(**assembly_kwargs)
@@ -913,13 +944,13 @@ class LtronVisualTransformer(nn.Module):
                         else:
                             draw_square(
                                 expert_image, *click_yx, 3, (255,0,0))
-                
+                        
                         expert_click_islands = expert[2]
                         expert_click_image = image.copy()
                         expert_click_image = heatmap_overlay(
                             expert_click_image,
                             expert_click_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [255,0,0],
                             background_scale=0.25,
                             max_normalize=True,
@@ -944,7 +975,7 @@ class LtronVisualTransformer(nn.Module):
                         expert_release_image = heatmap_overlay(
                             expert_release_image,
                             expert_release_islands.astype(float).reshape(
-                                128,128,1),
+                                h,w,1),
                             [0,0,255],
                             background_scale=0.25,
                             max_normalize=True,

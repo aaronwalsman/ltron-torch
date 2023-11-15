@@ -445,25 +445,43 @@ class ScreenDecoder(nn.Module):
         
         c = self.config.channels
         c_out = config.image_attention_channels
-        self.k_head = nn.Sequential(
-            nn.Conv2d(c, c, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(c, c//2, kernel_size=2, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(c//2, c//2, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(c//2, c//4, kernel_size=2, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(c//4, c//4, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(c//4, c//8, kernel_size=2, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(c//8, c//8, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(c//8, c//16, kernel_size=2, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(c//16, c_out, kernel_size=3, padding=1),
-        )
+        if th == 16:
+            self.k_head = nn.Sequential(
+                nn.Conv2d(c, c, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c, c//2, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//2, c//2, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c//2, c//4, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//4, c//4, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c//4, c//8, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//8, c//8, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c//8, c//16, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//16, c_out, kernel_size=3, padding=1),
+            )
+        elif th == 8:
+            self.k_head = nn.Sequential(
+                nn.Conv2d(c, c, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c, c//2, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//2, c//2, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c//2, c//4, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//4, c//4, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.ConvTranspose2d(c//4, c//8, kernel_size=2, stride=2),
+                nn.ReLU(),
+                nn.Conv2d(c//8, c_out, kernel_size=3, padding=1),
+            )
+            
         
         self.q_head = linear_stack(
             self.config.decoder_layers,

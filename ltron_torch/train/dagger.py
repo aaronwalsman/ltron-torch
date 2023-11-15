@@ -60,6 +60,8 @@ class DAggerConfig(Config):
     train_rollout_mode = 'sample'
     test_rollout_mode = 'max'
     
+    test_rollout_mode = 'max'
+    
     shuffle_train = True
 
 # train functions ==============================================================
