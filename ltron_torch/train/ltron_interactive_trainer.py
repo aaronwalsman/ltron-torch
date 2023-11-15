@@ -76,8 +76,8 @@ def eval_ltron_teacher_distill(config=None):
             ModelClass=LtronVisualTransformer,
             train_env_kwargs={'config':config, 'train':True},
             eval_env_kwargs={'config':config, 'train':False},
-            distributed_rank=0,
-            distributed_world_size=1,
+            distributed_rank=None,
+            distributed_world_size=None,
         )
     trainer.evaluate(0,0)
 
