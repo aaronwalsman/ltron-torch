@@ -605,6 +605,7 @@ class LtronVisualTransformer(nn.Module):
         truncated,
         model_output,
         next_image=None,
+        labels=None,
     ):
         # get the images and mode
         images = observation['image']
@@ -958,6 +959,10 @@ class LtronVisualTransformer(nn.Module):
                 result_image,
             ]
             visualization = stack_images_horizontal(image_row)
+            if labels is not None:
+                label = labels[i]
+                visualization = write_text(
+                    visualization, label, size=8, location=(10,h-20))
             
             # append data
             visualizations.append((visualization, step_data))
