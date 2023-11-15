@@ -21,6 +21,8 @@ from ltron.visualization.drawing import (
     stack_images_horizontal,
 )
 from ltron.gym.components import ViewpointActions
+from ltron.evaluation import f1b, f1a, aed, f1e
+from ltron.bricks.brick_scene import make_empty_assembly
 
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
@@ -165,6 +167,23 @@ class LtronVisualTransformer(nn.Module):
             self.apply(init_weights)
         
         self.forward_passes = 0
+    
+    def final_evaluation(self, observation):
+        target_assembly = observation['initial_assembly']
+        if observation['action_primitives']['phase']:
+            current_assembly = observation['assembly']
+        else:
+            current_assembly = make_empty_assembly(0,0)
+        final_f1b = f1b(current_assembly, target_assembly)
+        final_f1a = f1a(current_assembly, target_assembly)
+        final_aed, p_to_gt = aed(current_assembly, target_assembly)
+        final_f1e = f1e(current_assembly, target_assembly, p_to_gt)
+        return {
+            'f1b':final_f1b,
+            'f1a':final_f1a,
+            'aed':final_aed,
+            'f1e':final_f1e,
+        }
     
     def observation_to_kwargs(self, observation, info, done, model_output):
         device = next(iter(self.parameters())).device
