@@ -21,6 +21,8 @@ from ltron.visualization.drawing import (
     stack_images_horizontal,
 )
 from ltron.gym.components import ViewpointActions
+from ltron.evaluation import f1b, f1a, aed, f1e
+from ltron.bricks.brick_scene import make_empty_assembly
 
 from ltron_torch.models.auto_embedding import (
     AutoEmbeddingConfig, AutoEmbedding)
@@ -50,6 +52,8 @@ class LtronVisualTransformerConfig(
 ):
     embedding_dropout = 0.1
     strict_load = True
+    
+    overlay_target_image = False
     
     dense_decoder_mode = 'dpt'
     dpt_blocks = [2,5,8,11]
@@ -84,12 +88,21 @@ class LtronVisualTransformer(nn.Module):
         self.action_space = action_space
         
         # build the embeddings
-        self.image_embedding = AutoEmbedding(
-            config, observation_space['image'])
         if 'target_image' in set(observation_space.keys()):
-            self.target_image_embedding = AutoEmbedding(
-                config, observation_space['target_image'])
+            if not self.config.overlay_target_image:
+                self.image_embedding = AutoEmbedding(
+                    config, observation_space['image'])
+                self.target_image_embedding = AutoEmbedding(
+                    config, observation_space['target_image'])
+            else:
+                self.image_embedding = AutoEmbedding(
+                    config,
+                    observation_space['image'],
+                    observation_space['target_image'],
+                )
         else:
+            self.image_embedding = AutoEmbedding(
+                config, observation_space['image'])
             if 'assembly' in set(observation_space.keys()):
                 self.assembly_embedding = AutoEmbedding(
                     config, observation_space['assembly'])
@@ -166,6 +179,23 @@ class LtronVisualTransformer(nn.Module):
         
         self.forward_passes = 0
     
+    def final_evaluation(self, observation):
+        target_assembly = observation['initial_assembly']
+        if observation['action_primitives']['phase']:
+            current_assembly = observation['assembly']
+        else:
+            current_assembly = make_empty_assembly(0,0)
+        final_f1b = f1b(current_assembly, target_assembly)
+        final_f1a = f1a(current_assembly, target_assembly)
+        final_aed, p_to_gt = aed(current_assembly, target_assembly)
+        final_f1e = f1e(current_assembly, target_assembly, p_to_gt)
+        return {
+            'f1b':final_f1b,
+            'f1a':final_f1a,
+            'aed':final_aed,
+            'f1e':final_f1e,
+        }
+    
     def observation_to_kwargs(self, observation, info, done, model_output):
         device = next(iter(self.parameters())).device
         
@@ -175,9 +205,14 @@ class LtronVisualTransformer(nn.Module):
             observation['image'], info, done, model_output)
         
         if 'target_image' in observation:
-            kwargs['target_image_kwargs'] = (
-                self.target_image_embedding.observation_to_kwargs(
-                    observation['target_image'], info, done, model_output))
+            if self.config.overlay_target_image:
+                kwargs['target_image_kwargs'] = (
+                    self.image_embedding.observation_to_kwargs(
+                        observation['target_image'], info, done, model_output))
+            else:
+                kwargs['target_image_kwargs'] = (
+                    self.target_image_embedding.observation_to_kwargs(
+                        observation['target_image'], info, done, model_output))
         else:
             if 'assembly' in observation:
                 kwargs['assembly_kwargs'] = (
@@ -264,14 +299,29 @@ class LtronVisualTransformer(nn.Module):
     ):
         
         # use the embedding to compute the tokens
-        x = self.image_embedding(**image_kwargs)
-        h = self.config.image_height // self.config.tile_height
-        w = self.config.image_width // self.config.tile_width
-        hw,b,c = x.shape
         
-        if target_image_kwargs is not None:
-            target_image_x = self.target_image_embedding(**target_image_kwargs)
-            x = torch.cat((x, target_image_x), dim=0)
+        if target_image_kwargs is None:
+            x = self.image_embedding(**image_kwargs)
+            h = self.config.image_height // self.config.tile_height
+            w = self.config.image_width // self.config.tile_width
+            hw,b,c = x.shape
+        else:
+            if self.config.overlay_target_image:
+                x = torch.cat(
+                    (image_kwargs['x'], target_image_kwargs['x']),
+                    dim=-1,
+                )
+                x = self.image_embedding(x)
+                hw,b,c = x.shape
+            else:
+                x = self.image_embedding(**image_kwargs)
+                hw,b,c = x.shape
+                target_image_x = self.target_image_embedding(
+                    **target_image_kwargs)
+                x = torch.cat((x, target_image_x), dim=0)
+            
+            h = self.config.image_height // self.config.tile_height
+            w = self.config.image_width // self.config.tile_width
         
         if assembly_kwargs is not None:
             assembly_x = self.assembly_embedding(**assembly_kwargs)
