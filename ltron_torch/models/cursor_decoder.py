@@ -20,6 +20,7 @@ from ltron_torch.models.dense_decoder import DenseDecoder, FILMDenseDecoder
 class CursorDecoder(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.button_decoder = DiscreteDecoder(config, 2)
         if config.dense_decoder_mode == 'dpt':
             self.click_decoder = DPTScreenDecoder(config)
@@ -174,7 +175,8 @@ class DPTFilmScreenDecoder(nn.Module):
         content_x = self.content_linear(
             dense_x[range(b),:,sample_y,sample_x])
 
-        x = x + content_x
+        if self.config.conditional_sampling:
+            x = x + content_x
 
         return sample, log_prob, entropy, x, screen_logits
 
@@ -289,7 +291,7 @@ class DPTScreenDecoder(nn.Module):
         # we used to have separate embeddings for the x,y locations
         #x_pe = self.x_embedding(sample_x)
         #y_pe = self.y_embedding(sample_y)
-        if hasattr(self, 'content_linear'):
+        if hasattr(self, 'content_linear') and self.config.conditional_sampling:
             content_x = self.content_linear(k[range(b),:,sample_y,sample_x])
             
             #x = x + self.norm(content_x + x_pe + y_pe)
@@ -424,7 +426,8 @@ class DPTSumScreenDecoder(nn.Module):
         
         #x = x + self.norm(content_x + x_pe + y_pe)
         #x = self.norm(content_x)
-        x = x + content_x
+        if self.config.conditional_sampling:
+            x = x + content_x
         
         return sample, log_prob, entropy, x, screen_logits
     
@@ -599,7 +602,8 @@ class ScreenDecoder(nn.Module):
         
         #x = x + self.norm(content_x + x_pe + y_pe)
         #x = self.norm(content_x)
-        x = x + content_x
+        if self.config.conditional_sampling:
+            x = x + content_x
         
         return sample, log_prob, entropy, x, screen_logits
     

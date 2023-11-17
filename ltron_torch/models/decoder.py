@@ -15,6 +15,7 @@ class DecoderConfig(Config):
     log_sigmoid_screen_attention = False
     screen_equivalence = True
     old_insert = False
+    conditional_sampling = True
 
 class DiscreteDecoder(nn.Module):
     def __init__(self, config, num_classes): #, sample_offset=0):
@@ -77,7 +78,8 @@ class DiscreteDecoder(nn.Module):
         #print('Discrete Embedding Norm mean: %f'%float(embedding_norm.mean()))
         #print('Discrete Embedding Norm max: %f'%float(embedding_norm.max()))
         #x = x + self.embedding_norm(embedding)
-        x = x + embedding
+        if self.config.conditional_sampling:
+            x = x + embedding
         return sample, log_prob, entropy, x, logits
 
 class CriticDecoder(nn.Module):
@@ -89,7 +91,7 @@ class CriticDecoder(nn.Module):
             out_channels=1,
             nonlinearity=config.nonlinearity,
         )
-
+    
     def forward(self, x):
         return self.stack(x).view(-1)
 
