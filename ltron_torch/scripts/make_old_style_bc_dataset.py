@@ -42,3 +42,6 @@ def make_dataset(n=50000):
         observation, reward, terminal, truncated, info = env.step(action)
         for i, r in enumerate(reward):
             current_episodes[i]['reward'].append(r)
+
+if __name__ == '__main__':
+    make_dataset()
