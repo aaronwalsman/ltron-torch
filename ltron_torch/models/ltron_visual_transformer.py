@@ -71,6 +71,8 @@ class LtronVisualTransformerConfig(
     log_prob_losses = False
     #bce_cursor_losses = False
     cursor_losses = 'equivalence_cross_entropy'
+    
+    visualize_text = True
 
 class LtronVisualTransformer(nn.Module):
     def __init__(self,
@@ -115,6 +117,10 @@ class LtronVisualTransformer(nn.Module):
             if 'phase' in set(observation_space['action_primitives'].keys()):
                 self.phase_embedding = AutoEmbedding(
                     config, observation_space['action_primitives']['phase'])
+        
+        if 'remap_colors' in set(observation_space.keys()):
+            self.remap_color_embedding = AutoEmbedding(
+                config, observation_space['remap_colors'])
         
         #self.pre_encoder_norm = nn.LayerNorm(config.channels)
         
@@ -253,6 +259,13 @@ class LtronVisualTransformer(nn.Module):
                         phase, info, done, model_output)
                 )
         
+        if 'remap_colors' in observation:
+            remap_colors = observation['remap_colors']
+            kwargs['remap_color_kwargs'] = (
+                self.remap_color_embedding.observation_to_kwargs(
+                    remap_colors, info, done, model_output)
+            )
+        
         if ('target_assembly' in observation and 
             'insert' in self.primitive_decoders
         ):
@@ -290,6 +303,7 @@ class LtronVisualTransformer(nn.Module):
         assembly_kwargs=None,
         target_assembly_kwargs=None,
         phase_kwargs=None,
+        remap_color_kwargs=None,
         pos_snap_eq=None,
         neg_snap_eq=None,
         shape_eq=None,
@@ -331,6 +345,17 @@ class LtronVisualTransformer(nn.Module):
             target_assembly_x = self.target_assembly_embedding(
                 **target_assembly_kwargs)
             x = torch.cat((x, target_assembly_x), dim=0)
+        
+        # remap colors tokens
+        if remap_color_kwargs is not None:
+            remap_color_x = self.remap_color_embedding(
+                **remap_color_kwargs)
+            color_to_change, target_color = remap_color_x
+            b,c = color_to_change.shape
+            x = torch.cat(
+                (x, color_to_change.view(1,b,c), target_color.view(1,b,c)),
+                dim=0,
+            )
         
         # phase token
         if phase_kwargs is not None:
@@ -706,7 +731,10 @@ class LtronVisualTransformer(nn.Module):
         labels=None,
     ):
         # get the images and mode
-        images = observation['image']
+        if 'highres_image' in observation:
+            images = observation['highres_image']
+        else:
+            images = observation['image']
         mode = action['action_primitives']['mode']
         
         # get the mode component of the action space
@@ -779,12 +807,19 @@ class LtronVisualTransformer(nn.Module):
             
             # make the current image
             current_image = image.copy()
-            current_image = write_text(current_image, 'Current Image', size=8)
+            if self.config.visualize_text:
+                current_image = write_text(
+                    current_image, 'Current Image', size=8)
             
             # make the target image
             if 'target_image' in observation:
-                target_image = observation['target_image'][i]
-                target_image = write_text(target_image, 'Target Image', size=8)
+                if 'highres_target_image' in observation:
+                    target_image = observation['highres_target_image'][i]
+                else:
+                    target_image = observation['target_image'][i]
+                if self.config.visualize_text:
+                    target_image = write_text(
+                        target_image, 'Target Image', size=8)
             
             # make the action image and update step_data
             action_image = image.copy()
@@ -818,7 +853,8 @@ class LtronVisualTransformer(nn.Module):
             action_str += '\nReward: %.04f'%reward[i]
             action_str += '\nTerminal: %i'%terminal[i]
             action_str += '\nTruncated: %i'%truncated[i]
-            action_image = write_text(action_image, action_str, size=8)
+            if self.config.visualize_text:
+                action_image = write_text(action_image, action_str, size=8)
             
             # make the result image
             if next_image is not None:
@@ -826,11 +862,25 @@ class LtronVisualTransformer(nn.Module):
                     result_image = numpy.zeros_like(next_image[i])
                 else:
                     result_image = next_image[i]
-                result_image = write_text(result_image, 'Result Image', size=8)
+                if self.config.visualize_text:
+                    result_image = write_text(
+                        result_image, 'Result Image', size=8)
             
             # make the click heatmap image
             click_heatmap_background = image.copy()
             click_heatmap = click_heatmaps[i].cpu().numpy()
+            ch, cw, _ = click_heatmap.shape
+            if (click_heatmap_background.shape[0] != ch or
+                click_heatmap_background.shape[1] != cw
+            ):
+                #resize_image(click_heatmap, ch, cw)
+                rh = click_heatmap_background.shape[0] // ch
+                rw = click_heatmap_background.shape[1] // cw
+                click_heatmap = click_heatmap.repeat(
+                    rh, axis=0).repeat(rw, axis=1)
+            else:
+                rh = 1
+                rw = 1
             click_heatmap = heatmap_overlay(
                 click_heatmap_background,
                 click_heatmap,
@@ -842,6 +892,11 @@ class LtronVisualTransformer(nn.Module):
             # make the release heatmap image
             release_heatmap_background = image.copy()
             release_heatmap = release_heatmaps[i].cpu().numpy()
+            if (release_heatmap_background.shape[0] != ch or
+                release_heatmap_background.shape[1] != cw
+            ):
+                release_heatmap = release_heatmap.repeat(
+                    rh, axis=0).repeat(rw, axis=1)
             release_heatmap = heatmap_overlay(
                 release_heatmap_background,
                 release_heatmap,
@@ -882,13 +937,15 @@ class LtronVisualTransformer(nn.Module):
             if mode_name in ('remove', 'pick_and_place', 'rotate', 'translate'):
                 click_polarity = action['cursor']['button'][i]
                 click_yx = action['cursor']['click'][i]
+                click_yx[0] *= rh
+                click_yx[1] *= rw
                 if click_polarity:
-                    draw_crosshairs(action_image, *click_yx, 3, (255,0,0))
-                    draw_crosshairs(click_heatmap, *click_yx, 3, (255,0,0))
+                    draw_crosshairs(action_image, *click_yx, 3*rh, (255,0,0))
+                    draw_crosshairs(click_heatmap, *click_yx, 3*rh, (255,0,0))
                     #draw_crosshairs(click_p_map, *click_yx, 3, (255,0,0))
                 else:
-                    draw_square(action_image, *click_yx, 3, (255,0,0))
-                    draw_square(click_heatmap, *click_yx, 3, (255,0,0))
+                    draw_square(action_image, *click_yx, 3*rh, (255,0,0))
+                    draw_square(click_heatmap, *click_yx, 3*rh, (255,0,0))
                     #draw_square(click_p_map, *click_yx, 3, (255,0,0))
             
             # add the visualized release actions to the action image
@@ -896,13 +953,16 @@ class LtronVisualTransformer(nn.Module):
             if mode_name in ('pick_and_place',):
                 release_polarity = not bool(click_polarity)
                 release_yx = action['cursor']['release'][i]
+                release_yx[0] *= rh
+                release_yx[1] *= rw
                 if release_polarity:
-                    draw_crosshairs(action_image, *release_yx, 3, (0,0,255))
-                    draw_crosshairs(release_heatmap, *release_yx, 3, (0,0,255))
+                    draw_crosshairs(action_image, *release_yx, 3*rh, (0,0,255))
+                    draw_crosshairs(
+                        release_heatmap, *release_yx, 3*rh, (0,0,255))
                     #draw_crosshairs(release_p_map, *release_yx, 3, (0,0,255))
                 else:
-                    draw_square(action_image, *release_yx, 3, (0,0,255))
-                    draw_square(release_heatmap, *release_yx, 3, (0,0,255))
+                    draw_square(action_image, *release_yx, 3*rh, (0,0,255))
+                    draw_square(release_heatmap, *release_yx, 3*rh, (0,0,255))
                     #draw_square(release_p_map, *release_yx, 3, (0,0,255))
                 draw_line(action_image, *click_yx, *release_yx, (255,0,255))
             
@@ -939,19 +999,24 @@ class LtronVisualTransformer(nn.Module):
                     ):
                         click_polarity = expert_action['cursor']['button']
                         click_yx = expert_action['cursor']['click']
+                        click_yx[0] *= rh
+                        click_yx[1] *= rw
                         if click_polarity:
                             draw_crosshairs(
-                                expert_image, *click_yx, 3, (255,0,0))
+                                expert_image, *click_yx, 3*rh, (255,0,0))
                         else:
                             draw_square(
-                                expert_image, *click_yx, 3, (255,0,0))
+                                expert_image, *click_yx, 3*rh, (255,0,0))
                         
                         expert_click_islands = expert[2]
+                        if rh != 1 or rw != 1:
+                            expert_click_islands = expert_click_islands.repeat(
+                                rh, axis=0).repeat(rw, axis=1)
                         expert_click_image = image.copy()
                         expert_click_image = heatmap_overlay(
                             expert_click_image,
                             expert_click_islands.astype(float).reshape(
-                                h,w,1),
+                                h*rh,w*rw,1),
                             [255,0,0],
                             background_scale=0.25,
                             max_normalize=True,
@@ -962,21 +1027,28 @@ class LtronVisualTransformer(nn.Module):
                     if expert_mode_name in ('pick_and_place',):
                         release_polarity = not bool(click_polarity)
                         release_yx = expert_action['cursor']['release']
+                        release_yx[0] *= rh
+                        release_yx[1] *= rw
                         if release_polarity:
                             draw_crosshairs(
-                                expert_image, *release_yx, 3, (0,0,255))
+                                expert_image, *release_yx, 3*rh, (0,0,255))
                         else:
                             draw_square(
-                                expert_image, *release_yx, 3, (0,0,255))
+                                expert_image, *release_yx, 3*rh, (0,0,255))
                         draw_line(
                             expert_image, *click_yx, *release_yx, (255,0,255))
                         
                         expert_release_islands = expert[3]
+                        if rh != 1 or rw != 1:
+                            expert_release_islands = (
+                                expert_release_islands.repeat(
+                                    rh, axis=0).repeat(
+                                    rw, axis=1))
                         expert_release_image = image.copy()
                         expert_release_image = heatmap_overlay(
                             expert_release_image,
                             expert_release_islands.astype(float).reshape(
-                                h,w,1),
+                                h*rh,w*rw,1),
                             [0,0,255],
                             background_scale=0.25,
                             max_normalize=True,
@@ -1034,14 +1106,17 @@ class LtronVisualTransformer(nn.Module):
                 expert_click_image = numpy.zeros_like(expert_image)
                 expert_release_image = numpy.zeros_like(expert_image)
             expert_str = 'Expert Actions:\n' + '\n'.join(expert_mode_lines)
-            expert_image = write_text(expert_image, expert_str, size=8)
+            if self.config.visualize_text:
+                expert_image = write_text(expert_image, expert_str, size=8)
             
             if next_image is not None:
                 if truncated[i] or terminal[i]:
                     result_image = numpy.zeros_like(next_image[i])
                 else:
                     result_image = next_image[i]
-                result_image = write_text(result_image, 'Result Image', size=8)
+                if self.config.visualize_text:
+                    result_image = write_text(
+                        result_image, 'Result Image', size=8)
             # stitch images together
             image_row = [
                 current_image,
@@ -1059,8 +1134,9 @@ class LtronVisualTransformer(nn.Module):
             visualization = stack_images_horizontal(image_row)
             if labels is not None:
                 label = labels[i]
-                visualization = write_text(
-                    visualization, label, size=8, location=(10,h-20))
+                if self.config.visualize_text:
+                    visualization = write_text(
+                        visualization, label, size=8, location=(10,h-20))
             
             # append data
             visualizations.append((visualization, step_data))
