@@ -24,7 +24,7 @@ def train_make():
     if config.algorithm == 'ppo':
         trainer = MakePPOTrainer(config, ModelClass=LtronVisualTransformer)
         trainer.train()
-    elif config.algorithm == 'teacher_distill':
+    elif config.algorithm == 'teacher_distill' or config.algorithm == 'episodic_teacher_distill':
         train_ltron_teacher_distill(config)
 
 def eval_make():

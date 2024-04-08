@@ -12,6 +12,10 @@ from avarice.simple_trainers.teacher_distill import (
     TeacherDistillConfig,
     TeacherDistillTrainer,
 )
+from avarice.simple_trainers.episodic_teacher_distill import (
+    EpisodicTeacherDistillConfig,
+    EpisodicTeacherDistillTrainer,
+)
 
 from ltron.gym.envs.break_env import BreakEnvConfig
 from ltron.gym.envs.make_env import MakeEnvConfig
@@ -29,6 +33,7 @@ class LtronInteractiveTrainerConfig(
     MakeEnvConfig,
     LtronVisualTransformerConfig,
     TeacherDistillConfig,
+    EpisodicTeacherDistillConfig,
 ):
     algorithm = 'teacher_distill'
     
@@ -40,6 +45,15 @@ class LtronInteractiveTrainerConfig(
 def distributed_train(rank, world_size, config):
     if config.algorithm == 'teacher_distill':
         trainer = TeacherDistillTrainer(
+            config=config,
+            ModelClass=LtronVisualTransformer,
+            train_env_kwargs={'config':config, 'train':True},
+            eval_env_kwargs={'config':config, 'train':False},
+            distributed_rank=rank,
+            distributed_world_size=world_size,
+        )
+    elif config.algorithm == 'episodic_teacher_distill':
+        trainer = EpisodicTeacherDistillTrainer(
             config=config,
             ModelClass=LtronVisualTransformer,
             train_env_kwargs={'config':config, 'train':True},
